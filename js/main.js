@@ -148,7 +148,7 @@ function update(dt) {
     const firing = input.down('fireGun');
     weapons.playerGun(player, dt, firing && player.alive, enemies.enemies);
     if (input.pressed('fireMissile')) weapons.playerMissile(player, true);
-    if (input.pressed('flares')) weapons.deployFlares(player, 2);
+    if (input.pressed('flares')) weapons.deployFlares(player, 3);
     weapons.updateLock(dt, player, enemies.enemies);
 
     // world

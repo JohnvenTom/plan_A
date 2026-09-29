@@ -25,7 +25,7 @@ class Enemy {
 
     this.hp = Math.min(130, 100 + wave * 5);   // one missile (60) leaves it smoking
     this.pilotHit = false;
-    this.flareCount = 6;
+    this.flareCount = 18;
     this.flareT = 0;
     this.jinkPhase = Math.random() * Math.PI * 2;
     this.jinkFreq = 1.6 + Math.random() * 1.6;

@@ -58,7 +58,7 @@ export class Weapons {
     this.ammoRegen = 0;
     this.gunHeat = 0;
     this.lockState = { target: null, progress: 0, locked: false };
-    this.flares = 12;          // regenerating countermeasure stock
+    this.flares = 90;          // regenerating countermeasure stock
     this.flareRegenT = 0;
     this.flareList = [];       // live flare entities (physics + decoy)
 
@@ -89,7 +89,7 @@ export class Weapons {
     this.ammo = this.ammoMax;
     this.gunHeat = 0;
     this.lockState = { target: null, progress: 0, locked: false };
-    this.flares = 12;
+    this.flares = 90;
     this.flareRegenT = 0;
     this.flareList.length = 0;
     for (const r of this.rounds) this.freeTracer(r.mesh);
@@ -154,8 +154,10 @@ export class Weapons {
   }
 
   // ---- countermeasures: drop n flares from owner, roll decoy per flare ----
-  // Aspect rule: missile in the target's FRONT hemisphere 80%, side 40%,
-  // rear 10%. Each flare is one independent roll vs each inbound missile.
+  // Aspect rule (per single roll): missile in the target's FRONT hemisphere
+  // 90%, side 50%, rear 20%. Flares roll once on release AND keep re-rolling
+  // every 0.55 s while burning (max 2 re-rolls each) — a dense, long-burning
+  // cloud keeps seducing the seeker. Decoyed missiles fly blind for 1.8 s.
   deployFlares(owner, n) {
     const isPlayer = owner === this.playerRef;
     if (isPlayer) {
@@ -171,22 +173,26 @@ export class Weapons {
       vel.x += (Math.random() - 0.5) * 14;
       vel.y -= 6 + Math.random() * 6;
       vel.z += (Math.random() - 0.5) * 14;
-      this.flareList.push({ pos, vel, life: 0, ttl: 2.4 });
+      this.flareList.push({ pos, vel, life: 0, ttl: 2.4, owner, rollT: 0.55, rolls: 0 });
       if (this.effects) this.effects.flare(pos, vel);
     }
     if (this.audio && isPlayer) this.audio.flare();
+    return this._rollDecoys(owner, n);
+  }
 
-    // decoy rolls against missiles currently homing on the owner
+  // n independent decoy rolls against every missile homing on the owner
+  _rollDecoys(owner, n) {
     let decoyed = 0;
+    const fwd = owner.forward(_v3);
     for (const ms of this.missiles) {
       if (ms.target !== owner || ms.blind > 0) continue;
       if (ms.pos.distanceTo(owner.position) > 1800) continue;
-      const aspect = _v.copy(ms.pos).sub(owner.position).normalize().dot(fwd);
-      const p = aspect > 0.5 ? 0.8 : aspect < -0.5 ? 0.1 : 0.4;
+      const aspect = _v2.copy(ms.pos).sub(owner.position).normalize().dot(fwd);
+      const p = aspect > 0.5 ? 0.9 : aspect < -0.5 ? 0.2 : 0.5;
       for (let i = 0; i < n; i++) {
         if (Math.random() < p) {
           ms.target = null;
-          ms.blind = 1.0;
+          ms.blind = 1.8;
           decoyed++;
           break;
         }
@@ -368,10 +374,10 @@ export class Weapons {
       }
     }
 
-    // --- countermeasure stock regen + flare physics ---
-    if (this.flares < 12) {
+    // --- countermeasure stock regen (1 per 5 s) + flare physics/burn rolls ---
+    if (this.flares < 90) {
       this.flareRegenT += dt;
-      if (this.flareRegenT > 8) { this.flareRegenT = 0; this.flares++; }
+      if (this.flareRegenT > 5) { this.flareRegenT = 0; this.flares++; }
     }
     for (let i = this.flareList.length - 1; i >= 0; i--) {
       const fl = this.flareList[i];
@@ -380,6 +386,13 @@ export class Weapons {
       fl.vel.y -= 25 * dt;
       fl.vel.multiplyScalar(Math.pow(0.995, dt * 60));
       fl.pos.addScaledVector(fl.vel, dt);
+      // burning cloud keeps seducing: re-roll while it burns
+      fl.rollT -= dt;
+      if (fl.rollT <= 0 && fl.rolls < 2) {
+        fl.rollT = 0.55;
+        fl.rolls++;
+        this._rollDecoys(fl.owner, 1);
+      }
     }
 
     // --- missiles ---
