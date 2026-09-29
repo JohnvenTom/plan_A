@@ -84,7 +84,7 @@ function resetAll() {
 }
 
 function startGame() {
-  audio.init(); audio.resume();
+  audio.init(); audio.resume(); audio.setRunning(true);
   resetAll();
   G.state = 'playing';
   titleEl.classList.add('hidden');
@@ -95,11 +95,13 @@ function startGame() {
 function setPaused(v) {
   if (G.paused === v) return;
   G.paused = v;
+  audio.setRunning(!v);
   if (v) { hud.msgQueue.length = 0; hud.announce('已暂停', '按 P 或 点击 继续', 999); }
 }
 
 function gameOver() {
   G.state = 'gameover';
+  audio.setRunning(false);
   if (document.pointerLockElement) document.exitPointerLock();
   hud.msgQueue.length = 0;
   document.getElementById('go-score').textContent = String(G.kills);
@@ -122,6 +124,7 @@ function update(dt) {
       if (G.deathTimer === 0) {
         effects.explosion(player.position, 2.2);
         audio.explosion(1);
+        audio.setRunning(false, 1.6);   // engine fades under the death boom
         player.model.group.visible = false;
       }
       G.deathTimer += dt;
@@ -302,6 +305,11 @@ function frame() {
         missiles: weapons.missiles.map(m => ({ fromPlayer: m.fromPlayer, age: Math.round(m.life * 10) / 10 })),
         lock: weapons.lockState.locked, ammo: weapons.ammo,
         gunRounds: weapons.rounds.length, gunHeat: Math.round(weapons.gunHeat * 100) / 100,
+        audio: audio.ctx ? {
+          state: audio.ctx.state,
+          duck: Math.round(audio.duck.gain.value * 1000) / 1000,
+          eng: Math.round(audio.engGain.gain.value * 1000) / 1000,
+        } : null,
         surf: player.model.group.children
           .filter(o => o.name && o.name.startsWith('surf_'))
           .map(o => o.name.slice(5) + ':' + (Math.round(o.rotation.x * 100) / 100)),

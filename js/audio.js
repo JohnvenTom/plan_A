@@ -14,8 +14,13 @@ export class GameAudio {
     const ctx = this.ctx = new AC();
     this.master = ctx.createGain();
     this.master.gain.value = 0.5;
+    // final gate: continuous engine/wind layers must fall silent on pause and
+    // death even though their gains are only refreshed while playing
+    this.duck = ctx.createGain();
+    this.duck.gain.value = 1;
     const comp = ctx.createDynamicsCompressor();
-    this.master.connect(comp).connect(ctx.destination);
+    this.master.connect(this.duck);
+    this.duck.connect(comp).connect(ctx.destination);
 
     // engine: two detuned saws through a lowpass
     this.engGain = ctx.createGain(); this.engGain.gain.value = 0;
@@ -42,6 +47,17 @@ export class GameAudio {
   }
 
   resume() { if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume(); }
+
+  // master gate for pause / death / restart; fade lets one-shots (e.g. the
+  // death explosion) ring out when a slower fade is requested
+  setRunning(on, fade = 0.15) {
+    if (!this.ctx || !this.duck) return;
+    const t = this.ctx.currentTime;
+    const g = this.duck.gain;
+    g.cancelScheduledValues(t);
+    g.setValueAtTime(Math.max(g.value, 0.0001), t);
+    g.exponentialRampToValueAtTime(on ? 1 : 0.0001, t + fade);
+  }
 
   _noise(dur, filterType, freq0, freq1, gain, Q = 1) {
     const ctx = this.ctx;
