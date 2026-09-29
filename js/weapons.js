@@ -186,7 +186,9 @@ export class Weapons {
       if (this.effects) { this.effects.flare(pos, vel); this.effects.chaff(pos, cvel); }
     }
     if (this.audio && isPlayer) this.audio.flare();
-    return this._rollDecoys(owner, n, 'ir') + this._rollDecoys(owner, n, 'radar');
+    // chaff does NOT decoy the radar seeker directly — it widens the notch
+    // window (see the radar guidance block below). Only flares roll here.
+    return this._rollDecoys(owner, n, 'ir');
   }
 
   // n independent decoy rolls against missiles of the given KIND homing on
@@ -442,12 +444,13 @@ export class Weapons {
         fl.vel.y -= (kind === 'ir' ? 25 : 8) * dt;
         fl.vel.multiplyScalar(Math.pow(0.995, dt * 60));
         fl.pos.addScaledVector(fl.vel, dt);
-        // the cloud keeps seducing: re-roll while it burns
+        // burning flares keep seducing IR seekers; chaff clouds only persist
+        // (their effect is the widened notch window, not a roll)
         fl.rollT -= dt;
-        if (fl.rollT <= 0 && fl.rolls > 0) {
+        if (kind === 'ir' && fl.rollT <= 0 && fl.rolls > 0) {
           fl.rollT = 0.55;
           fl.rolls--;
-          this._rollDecoys(fl.owner, 1, kind);
+          this._rollDecoys(fl.owner, 1, 'ir');
         }
       }
     };
@@ -466,8 +469,11 @@ export class Weapons {
         // got notched or terrain-masked stays dumb permanently (blind = 1e9)
         if (ms.blind <= 0 && ms.kind === 'ir') this.reacquire(ms, player, enemies);
       }
-      // radar guidance environment: 39-notch (target beams the seeker) and
-      // terrain masking break the lock after ~0.9 s sustained
+      // radar guidance environment: the 三九 notch and terrain masking.
+      // WITHOUT chaff the beam must be near-perfect (±17°); WITH a chaff
+      // cloud from the target near the engagement, the window relaxes to a
+      // lazy ±33° beam ("48 机动") and locks faster — chaff enables the
+      // maneuver, it never decoys the seeker by itself.
       if (ms.kind === 'radar' && ms.target && !ms.target.dying && ms.target.alive !== false) {
         _v.copy(ms.target.pos ?? ms.target.position).sub(ms.pos);
         const losLen = _v.length() || 1;
@@ -484,8 +490,14 @@ export class Weapons {
             if (terrainHeightAt(px, pz) > py + 15) { masked = true; break; }
           }
         }
-        if (beam < 0.3 || masked) ms.notchT += dt; else ms.notchT = 0;
-        if (ms.notchT > 0.9) {
+        let chaffNear = false;
+        for (const ch of this.chaffList) {
+          if (ch.owner === ms.target && ch.pos.distanceTo(ms.pos) < 1500) { chaffNear = true; break; }
+        }
+        const beamLimit = chaffNear ? 0.6 : 0.3;
+        const needTime = chaffNear ? 0.7 : 0.9;
+        if (beam < beamLimit || masked) ms.notchT += dt; else ms.notchT = 0;
+        if (ms.notchT > needTime) {
           ms.target = null;
           ms.blind = 1e9;    // permanent lock loss
         }

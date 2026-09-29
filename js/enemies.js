@@ -250,7 +250,7 @@ export class EnemyManager {
 
   spawnWave(player) {
     this.wave++;
-    const count = Math.min(3 + Math.floor(this.wave * 0.8), 7);
+    const count = Math.min(this.wave, 7);   // wave 1: a lone contact, then +1 per wave
     for (let i = 0; i < count; i++) {
       const a = Math.random() * Math.PI * 2;
       const r = 2600 + Math.random() * 2200;

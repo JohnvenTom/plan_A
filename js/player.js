@@ -185,7 +185,9 @@ export class Player {
     this.camDir.lerp(this.aimDir, 1 - Math.exp(-6 * dt)).normalize();
 
     this.upVec(this._v2);
-    const upBlend = Math.abs(this.camDir.y) > 0.95 ? 1 : 0.3;
+    // camera never rolls with the plane (level horizon); the jet's up is only
+    // used as a fallback when the view points near straight up/down
+    const upBlend = Math.abs(this.camDir.y) > 0.95 ? 1 : 0;
     const up = new THREE.Vector3(0, 1, 0).lerp(this._v2, upBlend).normalize();
 
     if (this.camShake > 0) {
