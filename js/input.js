@@ -16,7 +16,9 @@ export const DEFAULT_BINDINGS = {
   flares: 'Mouse1',        // 干扰弹(热诱弹/箔条自动识别)默认鼠标中键
   cycleMissile: 'KeyR',    // 切换红外弹/雷达弹
   cycleTarget: 'KeyX',     // 切换锁定目标
-  camera: 'KeyC',
+  freeLook: 'KeyC',        // 长按自由视角(鼠标环视)
+  camera: 'KeyV',          // 切换视角档位
+  zoom: 'KeyZ',            // 放大
   pause: 'KeyP',
 };
 
@@ -27,7 +29,8 @@ export const ACTION_LABELS = {
   throttleUp: '油门+', throttleDown: '油门-',
   fireGun: '机炮', fireMissile: '导弹', flares: '干扰弹(诱弹/箔条)',
   cycleMissile: '切换弹种(红外/雷达)', cycleTarget: '切换锁定目标',
-  camera: '切换视角', pause: '暂停',
+  freeLook: '自由视角(长按)', camera: '切换视角档位', zoom: '放大',
+  pause: '暂停',
 };
 
 const STORE_KEY = 'skybaro_bindings';

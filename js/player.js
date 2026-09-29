@@ -43,6 +43,9 @@ export class Player {
     this.camPos = new THREE.Vector3();
     this.camLook = new THREE.Vector3();
     this.camDir = new THREE.Vector3(0, 0, -1);
+    this.lookYaw = 0;        // free-look offsets (C held)
+    this.lookPitch = 0;
+    this.zoomed = false;     // Z toggles magnification
     this._camInit = false;
     this._camDirInit = false;
   }
@@ -90,6 +93,9 @@ export class Player {
   // ---- mouse rotates the world-anchored aim direction (camera frame) ----
   rotateAim(dx, dy) {
     if (dx === 0 && dy === 0) return;
+    // zoomed-in aiming scales down with the FOV so the sight stays steady
+    const sens = AIM_SENS * clamp(this.camera.fov / 66, 0.25, 1.2);
+    dx = dx * (sens / AIM_SENS); dy = dy * (sens / AIM_SENS);
     this.camera.updateMatrixWorld();
     this._camRight.setFromMatrixColumn(this.camera.matrixWorld, 0).normalize();
     this._camUp.setFromMatrixColumn(this.camera.matrixWorld, 1).normalize();
@@ -113,8 +119,18 @@ export class Player {
     this.boosting = burnerFrac > 0.1;
     if (input.pressed('camera')) this.viewMode = (this.viewMode + 1) % 3;
 
-    // ---- controls: mouse aim instructor, or direct keyboard stick ----
-    this.rotateAim(input.aimDX, input.aimDY);
+    // ---- mouse: free look (C held) orbits the camera without touching the
+    //      world-anchored aim; otherwise the mouse steers the aim ----
+    this._freeLook = input.down('freeLook');
+    if (input.pressed('zoom')) this.zoomed = !this.zoomed;
+    if (this._freeLook) {
+      const sens = AIM_SENS * clamp(this.camera.fov / 66, 0.25, 1.2);
+      this.lookYaw -= input.aimDX * sens;
+      this.lookPitch = clamp(this.lookPitch - input.aimDY * sens, -1.1, 1.1);
+    } else {
+      this.rotateAim(input.aimDX, input.aimDY);
+    }
+
     this._keyOverride = (input.down('rollLeft') ? 1 : 0) - (input.down('rollRight') ? 1 : 0);
     this._keyYaw = (input.down('rudderLeft') ? 1 : 0) - (input.down('rudderRight') ? 1 : 0);
     this._keyPitch = (input.down('pitchPull') ? 1 : 0) - (input.down('pitchPush') ? 1 : 0);
@@ -167,12 +183,36 @@ export class Player {
   }
 
   updateCamera(dt) {
-    // view anchors to the AIM direction; camera rides the aim axis behind
+    // view anchors to the AIM direction; camera rides the aim axis behind.
+    // Free-look (C held) adds yaw/pitch offsets on top and orbits the camera
+    // around the jet; releasing springs the offsets back to zero.
     const dist = [9.5, 14.5, 26][this.viewMode];
     const hOff = [2.4, 3.8, 7.5][this.viewMode];
-    const lag = [7, 5.5, 4.5][this.viewMode];
+    const lag = this._freeLook ? 12 : [7, 5.5, 4.5][this.viewMode];
 
-    const desired = this._vTmp.copy(this.aimDir).multiplyScalar(-dist).add(this.body.pos);
+    if (!this._freeLook) {
+      this.lookYaw = damp(this.lookYaw, 0, 10, dt);
+      this.lookPitch = damp(this.lookPitch, 0, 10, dt);
+    }
+
+    if (!this._camDirInit) { this.camDir.copy(this.aimDir); this._camDirInit = true; }
+    this.camDir.lerp(this.aimDir, 1 - Math.exp(-6 * dt)).normalize();
+
+    // view direction = followed aim rotated by the free-look offsets
+    const viewDir = this._vTmp.copy(this.camDir);
+    if (this.lookYaw !== 0) {
+      this._qTmp.setFromAxisAngle(this._v2.set(0, 1, 0), this.lookYaw);
+      viewDir.applyQuaternion(this._qTmp).normalize();
+    }
+    if (this.lookPitch !== 0) {
+      this._v2.crossVectors(viewDir, new THREE.Vector3(0, 1, 0)).normalize().negate(); // camera right
+      this._qTmp.setFromAxisAngle(this._v2, this.lookPitch);
+      viewDir.applyQuaternion(this._qTmp).normalize();
+    }
+
+    // NOTE: viewDir lives in _vTmp — use _v2 for the desired position so the
+    // view direction is not mutated before lookAt uses it
+    const desired = this._v2.copy(viewDir).multiplyScalar(-dist).add(this.body.pos);
     desired.y += hOff;
     if (!this._camInit) { this.camPos.copy(desired); this._camInit = true; }
     this.camPos.x = damp(this.camPos.x, desired.x, lag, dt);
@@ -181,13 +221,10 @@ export class Player {
     const ground = Math.max(terrainHeightAt(this.camPos.x, this.camPos.z), SEA_LEVEL);
     if (this.camPos.y < ground + 4) this.camPos.y = ground + 4;
 
-    if (!this._camDirInit) { this.camDir.copy(this.aimDir); this._camDirInit = true; }
-    this.camDir.lerp(this.aimDir, 1 - Math.exp(-6 * dt)).normalize();
-
     this.upVec(this._v2);
     // camera never rolls with the plane (level horizon); the jet's up is only
     // used as a fallback when the view points near straight up/down
-    const upBlend = Math.abs(this.camDir.y) > 0.95 ? 1 : 0;
+    const upBlend = Math.abs(viewDir.y) > 0.95 ? 1 : 0;
     const up = new THREE.Vector3(0, 1, 0).lerp(this._v2, upBlend).normalize();
 
     if (this.camShake > 0) {
@@ -198,11 +235,11 @@ export class Player {
     }
     this.camera.position.copy(this.camPos);
     this.camera.up.copy(up);
-    this.camLook.copy(this.camPos).addScaledVector(this.camDir, 100);
+    this.camLook.copy(this.camPos).addScaledVector(viewDir, 100);
     this.camera.lookAt(this.camLook);
     const fovBase = [62, 66, 70][this.viewMode];
-    const targetFov = fovBase + clamp((this.body.airspeed - 240) / 480, 0, 1) * 14;
-    this.camera.fov = damp(this.camera.fov, targetFov, 3, dt);
+    const targetFov = this.zoomed ? 22 : fovBase + clamp((this.body.airspeed - 240) / 480, 0, 1) * 14;
+    this.camera.fov = damp(this.camera.fov, targetFov, 6, dt);
     this.camera.updateProjectionMatrix();
   }
 
