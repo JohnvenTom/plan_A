@@ -201,6 +201,7 @@ export class Weapons {
     let best = null, bestDot = 0.87;   // ~29 deg seeker cone
     const consider = (t) => {
       if (!t || t.dying || t.alive === false) return;
+      if (t === ms.owner) return;                 // seeker ignores the launcher
       if (ms.fromPlayer && t === player) return;   // no self-hits
       _v2.copy(t.position).sub(ms.pos);
       const d = _v2.length();
@@ -245,7 +246,7 @@ export class Weapons {
   }
 
   // ---------- missiles ----------
-  launchMissile(origin, quat, fromPlayer, target) {
+  launchMissile(origin, quat, fromPlayer, target, owner) {
     const mesh = this.missilePool.find(m => !m.visible);
     if (!mesh) return;
     mesh.visible = true;
@@ -262,6 +263,8 @@ export class Weapons {
       mesh,
       smokeT: 0,
       blind: 0,            // >0: decoyed, flying straight, may re-acquire after
+      owner: owner || null,          // launcher: immune to its own missile
+      armT: 0.35,                    // fuse arming time (s) after launch
     });
     // only the PLAYER'S own launches are audible in first person
     if (this.audio && fromPlayer) this.audio.missileLaunch();
@@ -275,7 +278,7 @@ export class Weapons {
     const origin = player.position.clone()
       .addScaledVector(player.forward(new THREE.Vector3()), 2)
       .add(new THREE.Vector3(side ? 3.4 : -3.4, -1.1, 1.5).applyQuaternion(player.quaternion));
-    this.launchMissile(origin, player.quaternion, true, ls.locked ? ls.target : null);
+    this.launchMissile(origin, player.quaternion, true, ls.locked ? ls.target : null, player);
     this.ammo--;
     if (ls.locked) ls.progress = 0.35;   // re-lock quickly for the next shot
     return true;
@@ -284,7 +287,7 @@ export class Weapons {
   enemyMissile(enemy, player) {
     const origin = enemy.position.clone().addScaledVector(
       new THREE.Vector3(0, 0, -1).applyQuaternion(enemy.quaternion), 2);
-    this.launchMissile(origin, enemy.quaternion, false, player);
+    this.launchMissile(origin, enemy.quaternion, false, player, enemy);
   }
 
   steerMissile(ms, dt) {
@@ -402,11 +405,15 @@ export class Weapons {
       }
 
       // proximity fuse against EVERY aircraft (decoyed/blind missiles can
-      // hit anyone — friendly fire included)
+      // hit anyone — friendly fire included), but only after arming and
+      // never against the launcher itself
       let boom = false, boomPos = ms.pos.clone();
+      const armed = ms.life > ms.armT;
       const fuseHit = (t) => {
         if (!t || t.dying || t.alive === false) return;
-        if (ms.fromPlayer && t === player) return;   // no self-hits
+        if (t === ms.owner) return;               // launcher immunity
+        if (ms.fromPlayer && t === player) return;
+        if (!armed) return;
         if (ms.pos.distanceToSquared(t.position) < MISSILE_FUSE_R * MISSILE_FUSE_R) {
           boom = true;
           if (t === player) {
