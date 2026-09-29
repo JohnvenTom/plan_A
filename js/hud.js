@@ -151,19 +151,23 @@ export class HUD {
       this.line(s.x, s.y + 9, s.x, s.y + 17, CYAN, 2);
     }
 
-    // aim director circle (директриса) at the mouse position
-    const ax = (S.aimX * 0.5 + 0.5) * this.w;
-    const ay = (-S.aimY * 0.5 + 0.5) * this.h;
-    const R = 26;
-    this.circle(ax, ay, R, CYAN, 2);
-    c.fillStyle = CYAN; c.shadowColor = CYAN; c.shadowBlur = 8;
-    c.beginPath(); c.arc(ax, ay, 2.4, 0, Math.PI * 2); c.fill();
-    c.shadowBlur = 0;
-    for (let i = 0; i < 4; i++) {
-      const a = i * Math.PI / 2;
-      const x0 = ax + Math.cos(a) * (R + 3), y0 = ay + Math.sin(a) * (R + 3);
-      const x1 = ax + Math.cos(a) * (R + 11), y1 = ay + Math.sin(a) * (R + 11);
-      this.line(x0, y0, x1, y1, CYAN, 2);
+    // aim director circle at the WORLD-ANCHORED aim direction: it stays pinned
+    // to the world spot while the nose chases it (WT behavior — the circle and
+    // the flight path marker converge as the plane aligns)
+    const ap = this.proj(S.player.aimPoint, S.camera);
+    if (!ap.behind) {
+      const ax = ap.x, ay = ap.y;
+      const R = 26;
+      this.circle(ax, ay, R, CYAN, 2);
+      c.fillStyle = CYAN; c.shadowColor = CYAN; c.shadowBlur = 8;
+      c.beginPath(); c.arc(ax, ay, 2.4, 0, Math.PI * 2); c.fill();
+      c.shadowBlur = 0;
+      for (let i = 0; i < 4; i++) {
+        const a = i * Math.PI / 2;
+        const x0 = ax + Math.cos(a) * (R + 3), y0 = ay + Math.sin(a) * (R + 3);
+        const x1 = ax + Math.cos(a) * (R + 11), y1 = ay + Math.sin(a) * (R + 11);
+        this.line(x0, y0, x1, y1, CYAN, 2);
+      }
     }
 
     // lock-on ring rides the flight path marker (the nose chases the circle)

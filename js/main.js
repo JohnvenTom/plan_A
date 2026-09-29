@@ -89,12 +89,19 @@ function startGame() {
   G.state = 'playing';
   titleEl.classList.add('hidden');
   goEl.classList.add('hidden');
-  document.body.style.cursor = 'none';   // WT style: custom director circle replaces the cursor
+  try { canvas.requestPointerLock?.(); } catch (_) { /* fallback: delta mode */ }
+}
+
+function setPaused(v) {
+  if (G.paused === v) return;
+  G.paused = v;
+  if (v) { hud.msgQueue.length = 0; hud.announce('已暂停', '按 P 或 点击 继续', 999); }
 }
 
 function gameOver() {
   G.state = 'gameover';
-  document.body.style.cursor = '';
+  if (document.pointerLockElement) document.exitPointerLock();
+  hud.msgQueue.length = 0;
   document.getElementById('go-score').textContent = String(G.kills);
   const win = false;
   document.getElementById('go-title').textContent = 'MISSION FAILED';
@@ -188,7 +195,6 @@ function renderHUD() {
     weapons,
     kills: G.kills, score: G.score, wave: enemies.wave,
     time: G.time,
-    aimX: input.aimX, aimY: input.aimY,
   });
 }
 
@@ -196,7 +202,6 @@ function renderHUD() {
 function freezeFrame() {
   titleEl.classList.add('hidden');
   goEl.classList.add('hidden');
-  document.body.style.cursor = 'none';
   G.state = 'playing';
   resetAll();
   const dt = 1 / 60;
@@ -223,7 +228,12 @@ function freezeFrame() {
       roll: Math.round(player.ctl.roll * 100) / 100,
       yaw: Math.round(player.ctl.yaw * 100) / 100,
     },
-    aim: [input.aimX, input.aimY],
+    aimOff: Math.round(Math.acos(clamp(player.forward(_v).dot(player.aimDir), -1, 1)) * 1800 / Math.PI) / 10,
+    aimScreen: (() => {
+      const p = player.aimPoint.project(camera);
+      return [Math.round((p.x * 0.5 + 0.5) * 1000) / 1000, Math.round((-p.y * 0.5 + 0.5) * 1000) / 1000];
+    })(),
+    aimLocal: player.aimLocal || null,
     enemies: enemies.enemies.map(e => ({
       hp: Math.round(e.hp), dying: e.dying, state: e.state,
       dist: Math.round(e.position.distanceTo(player.position)),
@@ -262,10 +272,7 @@ function frame() {
     hud.draw(dt, { state: 'title' });
   } else {
     if (G.state === 'gameover' && input.pressed('Enter')) { startGame(); }
-    else if (G.state === 'playing' && input.pressed('KeyP')) G.paused = !G.paused;
-    if (G.paused) {
-      hud.announce('PAUSED', '按 P 继续', 999);
-    }
+    else if (G.state === 'playing' && input.pressed('KeyP')) setPaused(!G.paused);
     update(dt);
     renderer.render(scene, camera);
     renderHUD();
@@ -280,7 +287,12 @@ function frame() {
           roll: Math.round(player.ctl.roll * 100) / 100,
           yaw: Math.round(player.ctl.yaw * 100) / 100,
         },
-        aim: [input.aimX, input.aimY],
+        aimOff: Math.round(Math.acos(clamp(player.forward(_v).dot(player.aimDir), -1, 1)) * 1800 / Math.PI) / 10,
+    aimScreen: (() => {
+      const p = player.aimPoint.project(camera);
+      return [Math.round((p.x * 0.5 + 0.5) * 1000) / 1000, Math.round((-p.y * 0.5 + 0.5) * 1000) / 1000];
+    })(),
+    aimLocal: player.aimLocal || null,
         enemies: enemies.enemies.map(e => ({
           hp: Math.round(e.hp), dying: e.dying, state: e.state,
           dist: Math.round(e.position.distanceTo(player.position)),
@@ -297,6 +309,17 @@ function frame() {
   input.endFrame();
   requestAnimationFrame(frame);
 }
+
+// pointer lock lost (ESC) while flying -> auto-pause; click resumes + relocks
+document.addEventListener('pointerlockchange', () => {
+  if (!document.pointerLockElement && G.state === 'playing') setPaused(true);
+});
+canvas.addEventListener('click', () => {
+  if (G.state === 'playing' && G.paused) {
+    setPaused(false);
+    try { canvas.requestPointerLock?.(); } catch (_) {}
+  }
+});
 
 addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);

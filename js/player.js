@@ -3,13 +3,15 @@
 // ray; an instructor steers pitch/roll/yaw to chase it, banking into turns and
 // leveling the wings when the cursor recenters. A/D/Q/E remain manual overrides.
 import * as THREE from 'three';
-import { clamp, damp, lerp } from './utils.js';
+import { clamp, damp, lerp, smoothstep } from './utils.js';
 import { buildJet } from './jet.js';
 import { terrainHeightAt, SEA_LEVEL } from './terrain.js';
 
 const MIN_SPEED = 110, MAX_SPEED = 560, BOOST_SPEED = 680;
 const COMBAT_RADIUS = 14000;   // meters from world center
-const AIM_DIST = 4000;
+const AIM_DIST = 4000;         // draw/projection distance for the aim point
+const AIM_SENS = 0.0013;       // rad per mouse px
+const AIM_MAX_OFF = 70 * Math.PI / 180;   // aim clamped to 70 deg of camera boresight
 
 export class Player {
   constructor(scene, camera) {
@@ -28,6 +30,9 @@ export class Player {
     this.hitFlash = 0;
     this.camShake = 0;
     this.ctl = { pitch: 0, roll: 0, yaw: 0 };   // last instructor outputs (-1..1)
+    this.aimDir = new THREE.Vector3(0, 0, -1);  // WORLD-ANCHORED aim direction
+    this._keyOverride = 0;   // manual roll override (-1..1, while A/D held)
+    this._keyYaw = 0;        // manual rudder (-1..1, while Q/E held)
 
     this._qTmp = new THREE.Quaternion();
     this._qInv = new THREE.Quaternion();
@@ -55,6 +60,7 @@ export class Player {
     this.obj.position.set(0, 2600, 9000);
     this.obj.quaternion.identity();
     this.obj.rotateY(Math.PI);          // face -Z (toward the island chain)
+    this.forward(this.aimDir);          // aim starts aligned with the nose
     this.model.group.visible = true;
     this._camInit = false;
   }
@@ -74,55 +80,69 @@ export class Player {
     if (this.hp <= 0) { this.hp = 0; this.alive = false; }
   }
 
-  // world-space aim point, War Thunder style RATE control: the plane's own
-  // forward is the neutral axis (cursor centered = hold attitude), and the
-  // cursor offset from screen center adds a proportional steering direction in
-  // the camera's right/up frame -> displaced cursor = sustained turn rate.
-  computeAimPoint(input) {
-    const fwd = this.forward(this._fwdTmp);
-    this.camera.updateMatrixWorld();
-    this._camRight.setFromMatrixColumn(this.camera.matrixWorld, 0);
-    this._camUp.setFromMatrixColumn(this.camera.matrixWorld, 1);
-    const S = 1.35;   // steering authority at the screen edge (~53 deg)
-    this._aim.copy(fwd)
-      .addScaledVector(this._camRight, input.aimX * S)
-      .addScaledVector(this._camUp, input.aimY * S)
-      .normalize();
-    return this._aim.add(this.obj.position);
+  // world-space aim point (for HUD projection / debug)
+  get aimPoint() {
+    return this._aim.copy(this.aimDir).multiplyScalar(AIM_DIST).add(this.obj.position);
   }
 
-  // ---- the virtual instructor: turn control-surface commands toward the aim ----
-  instructor(dt, input) {
-    const aim = this.computeAimPoint(input);
-    this._vTmp.copy(aim).sub(this.obj.position).normalize();
+  // ---- War Thunder mouse-aim: the aim direction is ANCHORED IN WORLD SPACE.
+  // Mouse deltas rotate it in the camera frame; a stationary mouse leaves it
+  // pinned to the world, so the nose CONVERGES onto it and then flies straight.
+  rotateAim(dx, dy) {
+    if (dx === 0 && dy === 0) return;
+    this.camera.updateMatrixWorld();
+    this._camRight.setFromMatrixColumn(this.camera.matrixWorld, 0).normalize();
+    this._camUp.setFromMatrixColumn(this.camera.matrixWorld, 1).normalize();
+    // mouse right -> aim right on screen; mouse up -> aim up
+    this._qTmp.setFromAxisAngle(this._camUp, -dx * AIM_SENS);
+    this.aimDir.applyQuaternion(this._qTmp);
+    this._qTmp.setFromAxisAngle(this._camRight, -dy * AIM_SENS);
+    this.aimDir.applyQuaternion(this._qTmp).normalize();
+
+    // clamp within AIM_MAX_OFF of the camera boresight (keeps the reticle on screen)
+    this._vTmp.set(0, 0, -1).applyQuaternion(this.camera.quaternion); // camera fwd
+    const d = this.aimDir.dot(this._vTmp);
+    const minD = Math.cos(AIM_MAX_OFF);
+    if (d < minD) this.aimDir.lerp(this._vTmp, (minD - d) / (1 - d)).normalize();
+  }
+
+  // ---- the virtual instructor: steer the nose toward the world-anchored aim ----
+  instructor(dt) {
+    this._vTmp.copy(this.aimDir);
     this._qInv.copy(this.obj.quaternion).invert();
     this._vTmp.applyQuaternion(this._qInv);                    // aim dir in plane space
 
     const offH = this._vTmp.x;      // + : aim to the right of the nose
     const offV = this._vTmp.y;      // + : aim above the nose
+    const mag = Math.hypot(offH, offV);
     const bankErr = this.rightWingY();  // + : banked left
 
     let rollIn, pitchIn, yawIn = 0;
-    if (Math.hypot(offH, offV) < 0.055) {
-      // cursor centered: level the wings, hold attitude
-      rollIn = clamp(-bankErr * 2.2, -0.65, 0.65);
+    if (this._vTmp.z > 0.25 && mag < 0.35) {
+      // aim nearly behind the tail: roll hard and pull through the vertical
+      rollIn = 1;
+      pitchIn = 0.55;
+    } else if (mag < 0.06) {
+      // converged: level the wings; gentle rudder/pitch trims out the last deg
+      rollIn = clamp(-bankErr * 2.0, -0.5, 0.5);
       pitchIn = clamp(offV * 2.0, -0.25, 0.25);
+      yawIn = clamp(-offH * 0.9, -0.22, 0.22);
     } else {
-      // bank into the turn, then pull
-      rollIn = clamp(-offH * 3.0 - Math.sign(offH) * 0.12, -1, 1);
-      pitchIn = clamp(offV * 2.4 + Math.abs(rollIn) * 0.38, -1, 1);
-      yawIn = clamp(-offH * 0.55, -0.4, 0.4);
+      // bank toward the aim; the turn bias fades out near alignment so the
+      // nose settles instead of limit-cycling around the aim direction
+      const bias = Math.sign(offH) * 0.14 * smoothstep(0.06, 0.25, Math.abs(offH));
+      rollIn = clamp(-offH * 2.2 - bias, -1, 1);
+      pitchIn = clamp(offV * 2.2 + Math.abs(offH) * 0.8, -0.6, 1);
+      yawIn = clamp(-offH * 0.4, -0.3, 0.3);
     }
 
     // manual overrides (keyboard authority while held)
-    if (input.down('KeyA') || input.down('ArrowLeft')) rollIn = 1;
-    if (input.down('KeyD') || input.down('ArrowRight')) rollIn = -1;
-    if (input.down('KeyQ')) yawIn += 1;
-    if (input.down('KeyE')) yawIn -= 1;
-
+    if (this._keyOverride !== 0) rollIn = this._keyOverride;
+    yawIn = clamp(yawIn + this._keyYaw, -1, 1);
     this.ctl.pitch = pitchIn;
     this.ctl.roll = rollIn;
     this.ctl.yaw = yawIn;
+    this.aimLocal = { x: Math.round(offH * 1000) / 1000, y: Math.round(offV * 1000) / 1000, z: Math.round(this._vTmp.z * 1000) / 1000 };
 
     // apply with the same rate authority as manual flight
     const spdFac = clamp((this.speed - 85) / 240, 0.3, 1);
@@ -144,8 +164,15 @@ export class Player {
     this.throttle = clamp(this.throttle + thr * dt * 0.55 + input.wheelDelta * 0.07, 0, 1);
     if (input.pressed('KeyC')) this.viewMode = (this.viewMode + 1) % 3;
 
-    // ---- attitude: mouse-aim instructor ----
-    this.instructor(dt, input);
+    // ---- attitude: world-anchored mouse aim + keyboard overrides ----
+    this.rotateAim(input.aimDX, input.aimDY);
+    this._keyOverride = 0;
+    if (input.down('KeyA') || input.down('ArrowLeft')) this._keyOverride = 1;
+    if (input.down('KeyD') || input.down('ArrowRight')) this._keyOverride = -1;
+    this._keyYaw = 0;
+    if (input.down('KeyQ')) this._keyYaw = 1;
+    if (input.down('KeyE')) this._keyYaw = -1;
+    this.instructor(dt);
 
     // ---- speed dynamics: thrust vs drag + gravity exchange ----
     const boosting = this.throttle > 0.82;
