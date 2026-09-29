@@ -36,6 +36,7 @@ class Enemy {
     this.fireCooldown = 1.5 + Math.random() * 2;
     this.missileCooldown = 5 + Math.random() * 6;
     this.gunBurst = 0;
+    this.lockT = 0;            // missile lock hold time (same 1.15 s rule as the player)
     this.dying = false;
     this.dead = false;
     this.deadTime = 0;
@@ -75,6 +76,8 @@ class Enemy {
     const b = this.body;
     b.forward(_fwd);
     const dist = _tmp.copy(player.position).sub(b.pos).length();
+    // how well our nose points at the player (used by jink gating and weapons)
+    const aimDot = b.forward(_fwd).dot(_tmp.copy(player.position).sub(b.pos).normalize());
 
     if (this.dying) {
       this.deadTime += dt;
@@ -156,8 +159,9 @@ class Enemy {
       // lead pursuit using the player's true velocity vector
       const tLead = clamp(dist / 800, 0, 2.0);
       _aim.copy(player.position).addScaledVector(player.vel, tLead).sub(b.pos).normalize();
-      // jink on the way in: weave, don't charge in a straight line
-      if (dist > 700 && dist < 2600) {
+      // jink on the way in: weave, don't charge in a straight line — but
+      // stop weaving when lined up, or the pilot breaks their own lock
+      if (dist > 700 && dist < 2600 && aimDot < 0.93) {
         b.rightVec(_fwd);
         b.upVec(_tmp);
         const w = Math.sin(this.stateTime * this.jinkFreq + this.jinkPhase);
@@ -185,7 +189,6 @@ class Enemy {
     this.fireCooldown -= dt;
     this.missileCooldown -= dt;
     if (!player.alive) return this.syncModel();
-    const aimDot = b.forward(_fwd).dot(_tmp.copy(player.position).sub(b.pos).normalize());
     if (this.state === 'pursue' && dist < 1100 && aimDot > 0.988 && this.fireCooldown <= 0) {
       this.gunBurst = 0.5;
       this.fireCooldown = 1.6 + Math.random() * 2.2;
@@ -194,8 +197,13 @@ class Enemy {
       this.gunBurst -= dt;
       ctx.enemyGun(this, player);
     }
-    if (this.missileCooldown <= 0 && dist < 2600 && aimDot > 0.90 && this.state !== 'patrol') {
+    // --- enemy missile lock: SAME rule as the player's — hold the target in
+    //     the nose cone for 1.15 s before launch (fairness parity) ---
+    const canTrack = this.state !== 'patrol' && dist < 2600 && aimDot > 0.90;
+    this.lockT = canTrack ? this.lockT + dt : 0;
+    if (this.missileCooldown <= 0 && this.lockT >= 1.15) {
       this.missileCooldown = 7 + Math.random() * 7;
+      this.lockT = 0;
       if (ctx && ctx.enemyMissile) ctx.enemyMissile(this, player);
     }
     this.syncModel();

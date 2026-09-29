@@ -218,6 +218,7 @@ function renderHUD() {
     weapons,
     kills: G.kills, score: G.score, wave: enemies.wave,
     time: G.time,
+    enemyLock: enemies.enemies.reduce((m, e) => Math.max(m, e.lockT || 0), 0),
   });
 }
 
@@ -333,7 +334,8 @@ function frame() {
           v: Math.round(e.speed), thr: Math.round(e.body.throttle * 100) / 100,
         })),
         missiles: weapons.missiles.map(m => ({ fromPlayer: m.fromPlayer, age: Math.round(m.life * 10) / 10 })),
-        lock: weapons.lockState.locked, lockProg: Math.round(weapons.lockState.progress * 100) / 100, ammo: weapons.ammo,
+        lock: weapons.lockState.locked, lockProg: Math.round(weapons.lockState.progress * 100) / 100,
+        enemyLocks: enemies.enemies.map(e => Math.round((e.lockT || 0) * 100) / 100), ammo: weapons.ammo,
         enemyScreens: enemies.enemies.slice(0, 5).map(e => {
           _v2.copy(e.position).project(camera);
           return [Math.round((_v2.x * 0.5 + 0.5) * 1000) / 1000, Math.round((-_v2.y * 0.5 + 0.5) * 1000) / 1000, _v2.z < 1];

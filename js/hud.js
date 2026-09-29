@@ -321,6 +321,10 @@ export class HUD {
     if (S.weapons.inboundWarning && blink) {
       this.text('⚠ MISSILE ⚠', cx, this.h / 2 - 150, 26, RED, 'center', 14);
     }
+    // enemy building a lock on us (RWR-style warning before the launch)
+    if (S.enemyLock > 0.25 && !S.weapons.inboundWarning && blink) {
+      this.text('⚠ 敌方锁定中 ⚠', cx, this.h / 2 - 150, 20, AMBER, 'center', 10);
+    }
     // low hp
     if (S.player.hp <= 30 && blink) {
       this.text('DAMAGE CRITICAL', cx, this.h / 2 + 180, 18, RED, 'center');
