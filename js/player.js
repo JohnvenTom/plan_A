@@ -33,6 +33,7 @@ export class Player {
     this.aimDir = new THREE.Vector3(0, 0, -1);  // WORLD-ANCHORED aim direction
     this._keyOverride = 0;   // manual roll override (-1..1, while A/D held)
     this._keyYaw = 0;        // manual rudder (-1..1, while Q/E held)
+    this._keyPitch = 0;      // manual elevator (-1 push/dive, +1 pull/climb, W/S)
 
     this._qTmp = new THREE.Quaternion();
     this._qInv = new THREE.Quaternion();
@@ -135,6 +136,7 @@ export class Player {
 
     // manual overrides (keyboard authority while held)
     if (this._keyOverride !== 0) rollIn = this._keyOverride;
+    if (this._keyPitch !== 0) pitchIn = this._keyPitch;
     yawIn = clamp(yawIn + this._keyYaw, -1, 1);
     this.ctl.pitch = pitchIn;
     this.ctl.roll = rollIn;
@@ -154,10 +156,10 @@ export class Player {
   update(dt, input, params) {
     if (!this.alive) return;
 
-    // ---- throttle: W/S (+ Shift/Ctrl muscle memory) + mouse wheel ----
+    // ---- throttle: Shift/Ctrl (+ mouse wheel); W/S are the stick ----
     let thr = 0;
-    if (input.down('KeyW') || input.down('ShiftLeft') || input.down('ShiftRight')) thr += 1;
-    if (input.down('KeyS') || input.down('ControlLeft') || input.down('ControlRight')) thr -= 1;
+    if (input.down('ShiftLeft') || input.down('ShiftRight')) thr += 1;
+    if (input.down('ControlLeft') || input.down('ControlRight')) thr -= 1;
     this.throttle = clamp(this.throttle + thr * dt * 0.55 + input.wheelDelta * 0.07, 0, 1);
     if (input.pressed('KeyC')) this.viewMode = (this.viewMode + 1) % 3;
 
@@ -169,6 +171,9 @@ export class Player {
     this._keyYaw = 0;
     if (input.down('KeyQ')) this._keyYaw = 1;
     if (input.down('KeyE')) this._keyYaw = -1;
+    this._keyPitch = 0;                       // W = push (dive), S = pull (climb)
+    if (input.down('KeyW') || input.down('ArrowUp')) this._keyPitch = -1;
+    if (input.down('KeyS') || input.down('ArrowDown')) this._keyPitch = 1;
     this.instructor(dt);
 
     // ---- speed dynamics: thrust vs drag + gravity exchange ----

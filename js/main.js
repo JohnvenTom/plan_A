@@ -280,6 +280,8 @@ function frame() {
       window.__game = {
         time: G.time, state: G.state, kills: G.kills, alive: player.alive,
         hp: Math.round(player.hp), speed: Math.round(player.speed),
+        alt: Math.round(player.position.y),
+        ctlPitch: player.ctl.pitch, thr: Math.round(player.throttle * 100) / 100,
         heading: Math.round(player.headingDeg * 10) / 10,
         bank: Math.round(player.bankDeg * 10) / 10,
         ctl: {
