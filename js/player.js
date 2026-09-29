@@ -174,24 +174,27 @@ export class Player {
     this.ctl.roll = rollIn;
     this.ctl.yaw = yawIn;
     this.aimLocal = { x: Math.round(offH * 1000) / 1000, y: Math.round(offV * 1000) / 1000, z: Math.round(this._vTmp.z * 1000) / 1000 };
-
-    // apply with speed-dependent authority:
-    //  - pitch is G-limited (fast planes turn wide) and mushy when slow
-    //  - roll is fast, tapering only near stall
-    //  - a deep stall pushes the nose down gently
-    const mush = clamp((this.speed - 90) / 130, 0.3, 1);
-    const maxPitch = Math.min(1.35 * mush, G_CAP * 9.81 / Math.max(this.speed, 120));
-    const maxRoll = ROLL_RATE * clamp(this.speed / 160, 0.55, 1);
-    const maxYaw = 0.5 * mush;
-    let stallDrop = 0;
-    if (this.speed < 125) stallDrop = (125 - this.speed) * 0.012;
-    const e = this._eTmp.set(
-      pitchIn * maxPitch * dt - stallDrop * dt,
-      yawIn * maxYaw * dt,
-      rollIn * maxRoll * dt, 'XYZ');
-    this._qTmp.setFromEuler(e);
-    this.obj.quaternion.multiply(this._qTmp).normalize();
+    this.applyRates(dt);
   }
+
+  // apply control commands with speed-dependent authority:
+  //  - pitch is G-limited (fast planes turn wide) and mushy when slow
+  //  - roll is fast, tapering only near stall
+  //  - a deep stall pushes the nose down gently
+  applyRates(dt) {
+      const mush = clamp((this.speed - 90) / 130, 0.3, 1);
+      const maxPitch = Math.min(1.35 * mush, G_CAP * 9.81 / Math.max(this.speed, 120));
+      const maxRoll = ROLL_RATE * clamp(this.speed / 160, 0.55, 1);
+      const maxYaw = 0.5 * mush;
+      let stallDrop = 0;
+      if (this.speed < 125) stallDrop = (125 - this.speed) * 0.012;
+      const e = this._eTmp.set(
+        this.ctl.pitch * maxPitch * dt - stallDrop * dt,
+        this.ctl.yaw * maxYaw * dt,
+        this.ctl.roll * maxRoll * dt, 'XYZ');
+      this._qTmp.setFromEuler(e);
+      this.obj.quaternion.multiply(this._qTmp).normalize();
+    }
 
   update(dt, input, params) {
     if (!this.alive) return;
@@ -211,10 +214,22 @@ export class Player {
     this._keyYaw = 0;
     if (input.down('KeyQ')) this._keyYaw = 1;
     if (input.down('KeyE')) this._keyYaw = -1;
-    this._keyPitch = 0;                       // W = push (dive), S = pull (climb)
+    this._keyPitch = 0;                      // W = push (dive), S = pull (climb)
     if (input.down('KeyW') || input.down('ArrowUp')) this._keyPitch = -1;
     if (input.down('KeyS') || input.down('ArrowDown')) this._keyPitch = 1;
-    this.instructor(dt);
+    // While ANY maneuver key is held, the view/aim system lets go of the plane:
+    // instructor output is fully replaced by the keyboard stick (Q/E rudder
+    // still adds). On release the instructor resumes chasing the world aim.
+    const kbActive = this._keyOverride !== 0 || this._keyPitch !== 0;
+    if (kbActive) {
+      this.ctl.pitch = this._keyPitch;
+      this.ctl.roll = this._keyOverride;
+      this.ctl.yaw = clamp(this._keyYaw, -1, 1);
+      this.aimLocal = null;
+      this.applyRates(dt);
+    } else {
+      this.instructor(dt);
+    }
 
     // ---- speed dynamics: energy model ----
     // thrust falls with air density; parasite drag grows with v^2; induced
@@ -284,13 +299,13 @@ export class Player {
     // screen center while it chases; the horizon stays mostly level and the
     // jet banks on screen. Orientation is damped so the reticle leads the
     // swing slightly instead of being glued to screen center.
-    const dist = [17, 34, 8.5][this.viewMode];
-    const hOff = [4.2, 9, 2.1][this.viewMode];
+    const dist = [9.5, 14.5, 26][this.viewMode];      // near / mid / far
+    const hOff = [2.4, 3.8, 7.5][this.viewMode];
+    const lag = [7, 5.5, 4.5][this.viewMode];
 
     const desired = this._vTmp.copy(this.aimDir).multiplyScalar(-dist).add(this.obj.position);
     desired.y += hOff;                       // world-up offset, horizon stays readable
     if (!this._camInit) { this.camPos.copy(desired); this._camInit = true; }
-    const lag = this.viewMode === 2 ? 10 : 5.5;
     this.camPos.x = damp(this.camPos.x, desired.x, lag, dt);
     this.camPos.y = damp(this.camPos.y, desired.y, lag, dt);
     this.camPos.z = damp(this.camPos.z, desired.z, lag, dt);
@@ -317,7 +332,7 @@ export class Player {
     this.camera.up.copy(up);
     this.camLook.copy(this.camPos).addScaledVector(this.camDir, 100);
     this.camera.lookAt(this.camLook);
-    const fovBase = this.viewMode === 2 ? 74 : 66;
+    const fovBase = [62, 66, 70][this.viewMode];
     const targetFov = fovBase + clamp((this.speed - 240) / 480, 0, 1) * 14;
     this.camera.fov = damp(this.camera.fov, targetFov, 3, dt);
     this.camera.updateProjectionMatrix();

@@ -28,7 +28,16 @@ export class HUD {
     this.canvas.style.height = this.h + 'px';
   }
 
-  announce(text, sub = '', dur = 3.2) { this.msgQueue.push({ text, sub, t: 0, dur }); }
+  announce(text, sub = '', dur = 3.2, style = 'info', sticky = false) {
+    this.msgQueue.push({ text, sub, t: 0, dur, style, sticky, y: null, dead: false, fade: 0 });
+    // hard cap: force the oldest non-sticky message out
+    const live = this.msgQueue.filter(m => !m.dead);
+    if (live.length > 4) live[0].t = Math.max(live[0].t, live[0].dur);
+  }
+
+  clearSticky() {
+    this.msgQueue = this.msgQueue.filter(m => !m.sticky);
+  }
 
   // world position -> screen px; returns {x, y, behind}
   proj(pos, camera) {
@@ -315,16 +324,49 @@ export class HUD {
       if (blink) this.text('脱离战区 — 返回作战空域', cx, 120, 20, AMBER, 'center', 10);
       this.text(`WARNING ${left.toFixed(0)}`, cx, 148, 16, RED, 'center', 8);
     }
-    // announcements (wave / kill)
-    for (let i = this.msgQueue.length - 1; i >= 0; i--) {
-      const m = this.msgQueue[i];
-      m.t += dt;
-      if (m.t > m.dur) { this.msgQueue.splice(i, 1); continue; }
-      const a = Math.min(1, m.t * 4) * Math.min(1, (m.dur - m.t) * 2);
-      const c = this.ctx;
-      c.globalAlpha = a;
-      this.text(m.text, cx, this.h * 0.30, 30, AMBER, 'center', 14);
-      if (m.sub) this.text(m.sub, cx, this.h * 0.30 + 34, 15, CYAN, 'center', 8);
+    // animated message stack: spring-in, sequential slots, fade-out — never overlaps
+    const baseY = this.h * 0.24, slotH = 66;
+    let slot = 0;
+    const live = [];
+    for (const m of this.msgQueue) {
+      if (m.dead) continue;
+      if (!m.sticky) m.t += dt;
+      m.dying = !m.sticky && m.t > m.dur;
+      if (m.dying) {
+        m.fade += dt / 0.24;
+        if (m.fade >= 1) { m.dead = true; continue; }
+      } else {
+        m.fade = Math.min(1, m.fade + dt / 0.06);
+      }
+      m.slot = slot++;
+      live.push(m);
+    }
+    this.msgQueue = this.msgQueue.filter(m => !m.dead);
+    const c = this.ctx;
+    for (const m of live) {
+      const targetY = baseY + m.slot * slotH;
+      if (m.y === null) m.y = targetY - 46;      // slide up into place
+      m.y += (targetY - m.y) * Math.min(1, dt * 14);
+      // entry: easeOutBack overshoot on scale
+      const k = Math.min(1, m.t / 0.3);
+      const c1 = 1.70158, c3 = c1 + 1;
+      const eob = 1 + c3 * Math.pow(k - 1, 3) + c1 * Math.pow(k - 1, 2);
+      const scale = 0.55 + 0.45 * (k < 1 ? eob : 1);
+      const alpha = Math.min(1, m.t / 0.12) * (m.dying ? 1 - m.fade : 1);
+      const drift = m.dying ? -m.fade * 34 : 0;
+      const style = {
+        info: { col: CYAN, size: 26, sub: CYAN },
+        wave: { col: AMBER, size: 30, sub: CYAN },
+        kill: { col: AMBER, size: 30, sub: CYAN },
+        crit: { col: RED, size: 34, sub: RED },
+      }[m.style] || { col: CYAN, size: 26, sub: CYAN };
+      c.save();
+      c.translate(cx, m.y + drift);
+      c.scale(scale, scale);
+      c.globalAlpha = alpha;
+      this.text(m.text, 0, 0, style.size, style.col, 'center', m.style === 'crit' ? 18 : 14);
+      if (m.sub) this.text(m.sub, 0, 30, 14, style.sub, 'center', 8);
+      c.restore();
       c.globalAlpha = 1;
     }
   }

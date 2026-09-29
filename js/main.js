@@ -36,6 +36,7 @@ const player = new Player(scene, camera);
 const weapons = new Weapons(scene, effects);
 const enemies = new EnemyManager(scene);
 const hud = new HUD(document.getElementById('hud'));
+window.__hud = hud;   // debug hook
 const audio = new GameAudio();
 const input = new Input();
 weapons.playerRef = player;
@@ -57,7 +58,7 @@ const killCtx = {
   effects,
   onKill(enemy, crashed) {
     G.kills++; G.score += 250 + enemies.wave * 25;
-    hud.announce('击坠确认', `TARGET DESTROYED  +${250 + enemies.wave * 25}`, 2.4);
+    hud.announce('摧毁目标', `TARGET DESTROYED  +${250 + enemies.wave * 25}`, 2.2, 'kill');
     audio.kill();
     flashKill();
   },
@@ -80,7 +81,7 @@ function resetAll() {
   enemies.reset();
   weapons.reset();
   hud.msgQueue.length = 0;
-  hud.announce('任务开始', 'OPERATION GOLDEN HOUR', 3.0);
+  hud.announce('任务开始', 'OPERATION GOLDEN HOUR', 3.0, 'info');
 }
 
 function startGame() {
@@ -96,7 +97,12 @@ function setPaused(v) {
   if (G.paused === v) return;
   G.paused = v;
   audio.setRunning(!v);
-  if (v) { hud.msgQueue.length = 0; hud.announce('已暂停', '按 P 或 点击 继续', 999); }
+  if (v) {
+    hud.msgQueue.length = 0;
+    hud.announce('已暂停', '按 P / ESC 或 点击 继续', 9999, 'info', true);
+  } else {
+    hud.clearSticky();
+  }
 }
 
 function gameOver() {
@@ -145,10 +151,19 @@ function update(dt) {
     enemies.update(dt, player, player.alive ? killCtx : { effects });
     weapons.update(dt, player, enemies.enemies, effects);
 
+    // weapon feedback events (crit hits) -> animated HUD stack
+    for (const ev of weapons.events) {
+      if (ev.type === 'crit') {
+        hud.announce('致命攻击', 'CRITICAL HIT — 目标冒烟', 1.5, 'crit');
+        audio.crit();
+      }
+    }
+    weapons.events.length = 0;
+
     // drain enemy-manager events into HUD announcements
     for (const ev of enemies.events) {
-      if (ev.type === 'wave') hud.announce(`WAVE ${ev.wave}`, `敌机接近 — ${ev.count} 机`, 3.0);
-      else if (ev.type === 'waveClear') hud.announce('WAVE CLEAR', '敌机全灭 — 下一波接近中', 2.6);
+      if (ev.type === 'wave') hud.announce(`WAVE ${ev.wave}`, `敌机接近 — ${ev.count} 机`, 3.0, 'wave');
+      else if (ev.type === 'waveClear') hud.announce('WAVE CLEAR', '敌机全灭 — 下一波接近中', 2.6, 'info');
     }
     enemies.events.length = 0;
 
@@ -168,7 +183,7 @@ function update(dt) {
       effects.damageSmoke(_v, _v2.set(0, 0, 0), player.hp < 25);
     }
     for (const e of enemies.enemies) {
-      if (e.hp < 22 && !e.dying && Math.random() < 0.5) {
+      if ((e.hp < 25 || e.pilotHit) && !e.dying && Math.random() < 0.5) {
         e.model.anchors.tail.getWorldPosition(_v);
         effects.damageSmoke(_v, _v2.set(0, 0, 0), true);
       }
@@ -191,8 +206,9 @@ function update(dt) {
 }
 
 function renderHUD() {
-  hud.draw(1 / 60, {
+  hud.draw(G.paused ? 0 : 1 / 60, {
     state: G.state,
+    paused: G.paused,
     player, camera,
     enemies: enemies.enemies,
     weapons,
@@ -275,7 +291,7 @@ function frame() {
     hud.draw(dt, { state: 'title' });
   } else {
     if (G.state === 'gameover' && input.pressed('Enter')) { startGame(); }
-    else if (G.state === 'playing' && input.pressed('KeyP')) setPaused(!G.paused);
+    else if (G.state === 'playing' && (input.pressed('KeyP') || input.pressed('Escape'))) setPaused(!G.paused);
     update(dt);
     renderer.render(scene, camera);
     renderHUD();
@@ -312,6 +328,7 @@ function frame() {
           duck: Math.round(audio.duck.gain.value * 1000) / 1000,
           eng: Math.round(audio.engGain.gain.value * 1000) / 1000,
         } : null,
+        msgs: hud.msgQueue.map(m => ({ t: m.text, y: Math.round(m.y || 0), slot: m.slot })),
         surf: player.model.group.children
           .filter(o => o.name && o.name.startsWith('surf_'))
           .map(o => o.name.slice(5) + ':' + (Math.round(o.rotation.x * 100) / 100)),

@@ -107,6 +107,10 @@ export class GameAudio {
   lock() { this._tone('square', 1250, 1250, 0.09, 0.12); }
   lockTick() { this._tone('square', 780, 780, 0.05, 0.08); }
   missileAlert() { this._tone('square', 950, 690, 0.16, 0.10); }
+  crit() {
+    this._tone('square', 1500, 1500, 0.07, 0.16);
+    setTimeout(() => this._tone('square', 1150, 1150, 0.09, 0.14), 85);
+  }
   hitTaken() { this._noise(0.25, 'lowpass', 500, 100, 0.4); }
   kill() { this._tone('triangle', 520, 780, 0.28, 0.2); }
 

@@ -20,7 +20,8 @@ class Enemy {
     this.obj.rotation.y = heading;
     this.speed = 190 + Math.random() * 60;
     this.agility = clamp(0.75 + wave * 0.08, 0.75, 1.35);
-    this.hp = 42;
+    this.hp = Math.min(130, 100 + wave * 5);   // one missile (60) leaves it smoking
+    this.pilotHit = false;
     this.state = 'pursue';
     this.stateTime = 0;
     this.evadeDir = new THREE.Vector3();

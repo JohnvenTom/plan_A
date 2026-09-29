@@ -61,6 +61,7 @@ export class Weapons {
 
     this.rounds = [];                // tracers (both sides)
     this.missiles = [];
+    this.events = [];                // {type:'crit'} drained by main -> HUD popup
     this.inboundWarning = false;
     this.inboundDir = new THREE.Vector3();
 
@@ -89,6 +90,7 @@ export class Weapons {
     for (const ms of this.missiles) this.freeMissile(ms);
     this.rounds.length = 0;
     this.missiles.length = 0;
+    this.events.length = 0;
   }
 
   freeTracer(mesh) { mesh.visible = false; }
@@ -317,7 +319,14 @@ export class Weapons {
           boom = true;
           if (ms.fromPlayer) {
             const killed = ms.target.applyDamage(60);
-            if (killed && !ms.target.dying) effects.explosion(ms.target.position, 1.2);
+            if (killed && !ms.target.dying) {
+              effects.explosion(ms.target.position, 1.2);
+            } else if (!ms.target.dying) {
+              // missile struck the cockpit area but did not destroy it:
+              // pilot hit — the plane starts smoking immediately
+              ms.target.pilotHit = true;
+              this.events.push({ type: 'crit' });
+            }
           } else {
             player.applyDamage(38);
           }
