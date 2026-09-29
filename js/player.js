@@ -45,7 +45,9 @@ export class Player {
     this._fwdTmp = new THREE.Vector3();
     this.camPos = new THREE.Vector3();
     this.camLook = new THREE.Vector3();
+    this.camDir = new THREE.Vector3(0, 0, -1);   // damped view direction (chases aimDir)
     this._camInit = false;
+    this._camDirInit = false;
   }
 
   reset() {
@@ -63,6 +65,7 @@ export class Player {
     this.forward(this.aimDir);          // aim starts aligned with the nose
     this.model.group.visible = true;
     this._camInit = false;
+    this._camDirInit = false;
   }
 
   get position() { return this.obj.position; }
@@ -98,12 +101,6 @@ export class Player {
     this.aimDir.applyQuaternion(this._qTmp);
     this._qTmp.setFromAxisAngle(this._camRight, -dy * AIM_SENS);
     this.aimDir.applyQuaternion(this._qTmp).normalize();
-
-    // clamp within AIM_MAX_OFF of the camera boresight (keeps the reticle on screen)
-    this._vTmp.set(0, 0, -1).applyQuaternion(this.camera.quaternion); // camera fwd
-    const d = this.aimDir.dot(this._vTmp);
-    const minD = Math.cos(AIM_MAX_OFF);
-    if (d < minD) this.aimDir.lerp(this._vTmp, (minD - d) / (1 - d)).normalize();
   }
 
   // ---- the virtual instructor: steer the nose toward the world-anchored aim ----
@@ -225,33 +222,34 @@ export class Player {
   }
 
   updateCamera(dt) {
-    const offs = [
-      new THREE.Vector3(0, 4.2, 17),    // chase
-      new THREE.Vector3(0, 9, 34),      // far
-      new THREE.Vector3(0, 2.1, 8.5),   // close
-    ][this.viewMode];
-    const desired = this._vTmp.copy(offs).applyQuaternion(this.obj.quaternion).add(this.obj.position);
+    // WT third-person: the view anchors to the AIM (mouse) direction, not the
+    // nose. The camera sits back along the aim axis so the jet stays near
+    // screen center while it chases; the horizon stays mostly level and the
+    // jet banks on screen. Orientation is damped so the reticle leads the
+    // swing slightly instead of being glued to screen center.
+    const dist = [17, 34, 8.5][this.viewMode];
+    const hOff = [4.2, 9, 2.1][this.viewMode];
 
+    const desired = this._vTmp.copy(this.aimDir).multiplyScalar(-dist).add(this.obj.position);
+    desired.y += hOff;                       // world-up offset, horizon stays readable
     if (!this._camInit) { this.camPos.copy(desired); this._camInit = true; }
-    const lag = this.viewMode === 2 ? 10 : 4.6;
+    const lag = this.viewMode === 2 ? 10 : 5.5;
     this.camPos.x = damp(this.camPos.x, desired.x, lag, dt);
     this.camPos.y = damp(this.camPos.y, desired.y, lag, dt);
     this.camPos.z = damp(this.camPos.z, desired.z, lag, dt);
+    // keep the camera out of the ground / ocean
+    const ground = Math.max(terrainHeightAt(this.camPos.x, this.camPos.z), SEA_LEVEL);
+    if (this.camPos.y < ground + 4) this.camPos.y = ground + 4;
 
-    const look = this._v2.set(0, 1.6, -42).applyQuaternion(this.obj.quaternion).add(this.obj.position);
-    if (!this._camInit) this.camLook.copy(look);
-    else {
-      this.camLook.x = damp(this.camLook.x, look.x, 12, dt);
-      this.camLook.y = damp(this.camLook.y, look.y, 12, dt);
-      this.camLook.z = damp(this.camLook.z, look.z, 12, dt);
-    }
+    if (!this._camDirInit) { this.camDir.copy(this.aimDir); this._camDirInit = true; }
+    this.camDir.lerp(this.aimDir, 1 - Math.exp(-6 * dt)).normalize();
 
-    // camera up: blend world up with jet up so banks read on screen
-    this.upVec(this._vTmp);
-    const upBlend = this.viewMode === 2 ? 0.85 : 0.5;
-    const up = new THREE.Vector3(0, 1, 0).lerp(this._vTmp, upBlend).normalize();
+    // up: mostly world up with a hint of jet roll (full jet-up only if aiming
+    // straight up/down, where world up degenerates)
+    this.upVec(this._v2);
+    const upBlend = Math.abs(this.camDir.y) > 0.95 ? 1 : 0.3;
+    const up = new THREE.Vector3(0, 1, 0).lerp(this._v2, upBlend).normalize();
 
-    // shake
     if (this.camShake > 0) {
       this.camShake = Math.max(0, this.camShake - dt * 2.2);
       const s = this.camShake * this.camShake * 0.9;
@@ -260,6 +258,7 @@ export class Player {
     }
     this.camera.position.copy(this.camPos);
     this.camera.up.copy(up);
+    this.camLook.copy(this.camPos).addScaledVector(this.camDir, 100);
     this.camera.lookAt(this.camLook);
     const fovBase = this.viewMode === 2 ? 74 : 66;
     const targetFov = fovBase + clamp((this.speed - 240) / 480, 0, 1) * 14;
