@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SKY BARONESS — 皇牌空战</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+  #gl, #hud {
+    position: fixed; inset: 0; width: 100%; height: 100%; display: block;
+  }
+  #hud { pointer-events: none; }
+  .overlay {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; pointer-events: none;
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    color: #e8f2ff; text-shadow: 0 0 18px rgba(120, 200, 255, .55);
+    background: radial-gradient(ellipse at 50% 60%, rgba(8, 18, 38, .18), rgba(2, 6, 16, .78));
+    transition: opacity .5s ease; z-index: 10;
+  }
+  .overlay.hidden { opacity: 0; visibility: hidden; }
+  .title-en {
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: clamp(40px, 7vw, 88px); letter-spacing: .35em; font-weight: 700;
+    color: #ffe9c4; text-shadow: 0 0 28px rgba(255, 178, 66, .5), 0 2px 0 #7a4a12;
+  }
+  .title-zh {
+    font-size: clamp(18px, 2.6vw, 30px); letter-spacing: 1.6em; margin: 10px 0 0 1.6em;
+    color: #9fd0ff; font-weight: 300;
+  }
+  .mission { margin-top: 34px; font-size: 15px; letter-spacing: .5em; color: #ffd27a; }
+  .controls {
+    margin-top: 30px; display: grid; grid-template-columns: auto auto; gap: 7px 26px;
+    font-size: 14px; color: #cfe3ff; background: rgba(10, 22, 44, .55);
+    border: 1px solid rgba(120, 180, 255, .25); padding: 20px 34px; border-radius: 6px;
+  }
+  .controls b { color: #ffe9c4; font-family: Consolas, monospace; font-weight: 600; }
+  .start-hint {
+    margin-top: 34px; font-size: 17px; letter-spacing: .4em; color: #fff;
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse { 50% { opacity: .25; } }
+  .big-stat { font-family: Consolas, monospace; font-size: clamp(30px, 5vw, 54px); color: #ffe9c4; }
+  .sub-stat { margin-top: 14px; font-size: 16px; letter-spacing: .4em; color: #9fd0ff; }
+  #gameover .title-en { color: #ff9d7a; text-shadow: 0 0 28px rgba(255, 90, 40, .55), 0 2px 0 #6e1e0c; }
+  .screen-flash {
+    position: fixed; inset: 0; pointer-events: none; z-index: 5; opacity: 0;
+    background: radial-gradient(ellipse at center, transparent 40%, rgba(255, 30, 10, .45));
+  }
+</style>
+<script type="importmap">
+  { "imports": { "three": "./vendor/three.module.js" } }
+</script>
+</head>
+<body>
+  <canvas id="gl"></canvas>
+  <canvas id="hud"></canvas>
+  <div class="screen-flash" id="flash"></div>
+
+  <div class="overlay" id="title">
+    <div class="title-en">SKY BARONESS</div>
+    <div class="title-zh">皇 牌 空 战</div>
+    <div class="mission">OPERATION GOLDEN HOUR — 拦截入侵机群</div>
+    <div class="controls">
+      <span><b>W / S</b> 俯仰</span><span><b>A / D</b> 滚转(压杆转弯)</span>
+      <span><b>Q / E</b> 方向舵</span><span><b>Shift / Ctrl</b> 加速 / 减速</span>
+      <span><b>空格</b> 机炮</span><span><b>F</b> 发射导弹</span>
+      <span><b>C</b> 切换视角</span><span><b>P</b> 暂停</span>
+    </div>
+    <div class="start-hint">— 按 回车 或 点击 开始任务 —</div>
+  </div>
+
+  <div class="overlay hidden" id="gameover">
+    <div class="title-en" id="go-title">MISSION FAILED</div>
+    <div class="sub-stat" id="go-sub">机体损毁</div>
+    <div class="big-stat" id="go-score">0</div>
+    <div class="sub-stat">击落数</div>
+    <div class="start-hint">— 按 回车 重新出击 —</div>
+  </div>
+
+<script type="module" src="./js/main.js"></script>
+</body>
+</html>
