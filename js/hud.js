@@ -86,6 +86,33 @@ export class HUD {
     c.shadowBlur = 0;
   }
 
+  // ---- RWR: radar threat bearing ring, bottom-center ----
+  drawRWR(S) {
+    const threats = S.radarThreats || [];
+    if (!threats.length) return;
+    const cx = this.w / 2, cy = this.h - 96, R = 64;
+    const c = this.ctx;
+    this.circle(cx, cy, R, 'rgba(255,90,74,0.55)', 1.5);
+    this.circle(cx, cy, R * 0.5, 'rgba(255,90,74,0.2)', 1);
+    // own marker
+    c.fillStyle = CYAN; c.shadowColor = CYAN; c.shadowBlur = 6;
+    c.beginPath(); c.moveTo(cx, cy - 6); c.lineTo(cx - 4, cy + 4); c.lineTo(cx + 4, cy + 4); c.closePath(); c.fill();
+    c.shadowBlur = 0;
+    // threats plotted by bearing-from-heading, radius by distance (12 km = edge)
+    const hdg = S.player.headingDeg * Math.PI / 180;
+    for (const t of threats) {
+      let rel = (t.brg - hdg) % (Math.PI * 2);
+      const rr = R * clamp(t.dist / 12000, 0.2, 1);
+      const px = cx - Math.sin(rel) * rr;   // screen-x: bearing right of nose plots right
+      const py = cy - Math.cos(rel) * rr * 0.9;
+      c.fillStyle = RED; c.shadowColor = RED; c.shadowBlur = 8;
+      c.beginPath(); c.arc(px, py, 4, 0, Math.PI * 2); c.fill();
+      c.shadowBlur = 0;
+      this.line(px, py, px + Math.sin(rel) * 8, py - Math.cos(rel) * 0 + Math.cos(rel) * 8, RED, 1);
+    }
+    this.text('RWR', cx, cy + R + 14, 11, RED, 'center', 4);
+  }
+
   draw(dt, S) {
     const c = this.ctx;
     c.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
@@ -97,6 +124,7 @@ export class HUD {
     this.drawReticle(S);
     this.drawTargets(S);
     this.drawRadar(S);
+    this.drawRWR(S);
     this.drawStatus(S);
     this.drawAlerts(dt, S);
     this.vignette(S);
@@ -299,8 +327,10 @@ export class HUD {
       }
     }
     this.text(`${w.ammo}/${w.ammoMax}`, x + w.ammoMax * 16 + 12, y + 61, 13, AMBER);
-    // countermeasure stock
-    this.text(`FLR ${Math.floor(w.flares)}`, x, y + 106, 12, w.flares >= 4 ? CYAN_DIM : AMBER);
+    // selected missile type + countermeasure stock
+    this.text(w.mslKind === 'radar' ? 'MSL:RADAR' : 'MSL:IR', x + w.ammoMax * 16 + 12, y + 44, 12,
+      w.mslKind === 'radar' ? RED : CYAN_DIM, 'left', 4);
+    this.text(`CM ${Math.floor(w.flares)}`, x, y + 106, 12, w.flares >= 10 ? CYAN_DIM : AMBER);
     // gun heat
     this.text('GUN', x, y + 88, 12, CYAN_DIM);
     this.strokeRect(x + 36, y + 82, 120, 10, CYAN_DIM, 1);
@@ -320,6 +350,10 @@ export class HUD {
     // inbound missile
     if (S.weapons.inboundWarning && blink) {
       this.text('⚠ MISSILE ⚠', cx, this.h / 2 - 150, 26, RED, 'center', 14);
+    }
+    // radar missile inbound: RWR ring + distinct alert
+    if (S.weapons.radarInbound && blink) {
+      this.text('⚠ RADAR ⚠ 39机动/箔条!', cx, this.h / 2 - 150, 22, RED, 'center', 12);
     }
     // enemy building a lock on us (RWR-style warning before the launch)
     if (S.enemyLock > 0.25 && !S.weapons.inboundWarning && blink) {

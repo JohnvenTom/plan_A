@@ -100,6 +100,12 @@ export class GameAudio {
     this._noise(0.9, 'lowpass', 3000, 300, 0.5);
     this._tone('square', 180, 60, 0.5, 0.06);
   }
+  radarLaunch() {
+    // bigger boost, deeper roar for the semi-active shooter
+    this._noise(1.3, 'lowpass', 2200, 180, 0.55);
+    this._tone('square', 130, 45, 0.8, 0.07);
+  }
+  radarAlert() { this._tone('sawtooth', 620, 480, 0.22, 0.09); }
   explosion(far = 1) {
     this._noise(1.4, 'lowpass', 900, 60, 0.65 * far, 0.8);
     this._tone('sine', 110, 28, 1.1, 0.5 * far);
@@ -138,9 +144,13 @@ export class GameAudio {
         this._lockBeepT -= dt;
         if (this._lockBeepT <= 0) { this.lockTick(); this._lockBeepT = 0.18; }
       }
-      if (weapons.inboundWarning) {
+      if (weapons.inboundWarning || weapons.radarInbound) {
         this._alertT -= dt;
-        if (this._alertT <= 0) { this.missileAlert(); this._alertT = 0.42; }
+        if (this._alertT <= 0) {
+          if (weapons.radarInbound && !weapons.inboundWarning) this.radarAlert();
+          else this.missileAlert();
+          this._alertT = weapons.radarInbound && !weapons.inboundWarning ? 0.5 : 0.42;
+        }
       }
     }
   }

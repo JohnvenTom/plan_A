@@ -58,9 +58,12 @@ export class Weapons {
     this.ammoRegen = 0;
     this.gunHeat = 0;
     this.lockState = { target: null, progress: 0, locked: false };
+    this.mslKind = 'ir';       // selected missile type: 'ir' | 'radar' (R key)
+    this.manualTarget = null;  // X-key cycled lock target
     this.flares = 90;          // regenerating countermeasure stock
     this.flareRegenT = 0;
-    this.flareList = [];       // live flare entities (physics + decoy)
+    this.flareList = [];       // live flare entities (decoy IR seekers)
+    this.chaffList = [];       // live chaff clouds  (decoy radar seekers)
 
     this.rounds = [];                // tracers (both sides)
     this.missiles = [];
@@ -92,6 +95,9 @@ export class Weapons {
     this.flares = 90;
     this.flareRegenT = 0;
     this.flareList.length = 0;
+    this.chaffList.length = 0;
+    this.mslKind = 'ir';
+    this.manualTarget = null;
     for (const r of this.rounds) this.freeTracer(r.mesh);
     for (const ms of this.missiles) this.freeMissile(ms);
     this.rounds.length = 0;
@@ -154,10 +160,9 @@ export class Weapons {
   }
 
   // ---- countermeasures: drop n flares from owner, roll decoy per flare ----
-  // Aspect rule (per single roll): missile in the target's FRONT hemisphere
-  // 90%, side 50%, rear 20%. Flares roll once on release AND keep re-rolling
-  // every 0.55 s while burning (max 2 re-rolls each) — a dense, long-burning
-  // cloud keeps seducing the seeker. Decoyed missiles fly blind for 1.8 s.
+  // ---- countermeasures: one press, auto-matched payload. Spawns n flares
+  // (IR seduction) AND n chaff clouds (radar seduction) from the shared
+  // stock — whichever seeker is inbound meets its matching decoy. ----
   deployFlares(owner, n) {
     const isPlayer = owner === this.playerRef;
     if (isPlayer) {
@@ -173,18 +178,24 @@ export class Weapons {
       vel.x += (Math.random() - 0.5) * 14;
       vel.y -= 6 + Math.random() * 6;
       vel.z += (Math.random() - 0.5) * 14;
-      this.flareList.push({ pos, vel, life: 0, ttl: 2.4, owner, rollT: 0.55, rolls: 0 });
-      if (this.effects) this.effects.flare(pos, vel);
+      this.flareList.push({ pos: pos.clone(), vel: vel.clone(), life: 0, ttl: 2.4, owner, rollT: 0.55, rolls: 2, kind: 'ir' });
+      // chaff blooms wider and hangs slower than flares
+      const cvel = vel.clone().multiplyScalar(0.6);
+      cvel.y *= 0.4;
+      this.chaffList.push({ pos, vel: cvel, life: 0, ttl: 3.0, owner, rollT: 0.55, rolls: 2, kind: 'radar' });
+      if (this.effects) { this.effects.flare(pos, vel); this.effects.chaff(pos, cvel); }
     }
     if (this.audio && isPlayer) this.audio.flare();
-    return this._rollDecoys(owner, n);
+    return this._rollDecoys(owner, n, 'ir') + this._rollDecoys(owner, n, 'radar');
   }
 
-  // n independent decoy rolls against every missile homing on the owner
-  _rollDecoys(owner, n) {
+  // n independent decoy rolls against missiles of the given KIND homing on
+  // the owner — flares seduce IR seekers, chaff seduces radar seekers
+  _rollDecoys(owner, n, kind) {
     let decoyed = 0;
     const fwd = owner.forward(_v3);
     for (const ms of this.missiles) {
+      if (ms.kind !== kind) continue;
       if (ms.target !== owner || ms.blind > 0) continue;
       if (ms.pos.distanceTo(owner.position) > 1800) continue;
       const aspect = _v2.copy(ms.pos).sub(owner.position).normalize().dot(fwd);
@@ -199,6 +210,27 @@ export class Weapons {
       }
     }
     return decoyed;
+  }
+
+  // X key: cycle the lock target through valid enemies (sorted by nose angle)
+  cycleTarget(player, enemies) {
+    const range = this.mslKind === 'radar' ? 10000 : 5200;
+    const fwd = player.forward(new THREE.Vector3());
+    const cands = [];
+    for (const e of enemies) {
+      if (e.dying) continue;
+      _v.copy(e.position).sub(player.position);
+      const dist = _v.length();
+      if (dist > range || dist < 90) continue;
+      const dot = _v.divideScalar(dist).dot(fwd);
+      if (dot > 0.7) cands.push({ e, dot });   // wider cone for manual cycling
+    }
+    if (!cands.length) return;
+    cands.sort((a, b) => b.dot - a.dot);
+    const cur = this.manualTarget || this.lockState.target;
+    const idx = cands.findIndex(c => c.e === cur);
+    this.manualTarget = cands[(idx + 1) % cands.length].e;
+    if (this.audio) this.audio.lockTick();
   }
 
   // after a decoy blind period, the missile may re-acquire ANY aircraft
@@ -224,15 +256,26 @@ export class Weapons {
   updateLock(dt, player, enemies) {
     const ls = this.lockState;
     const fwd = player.forward(new THREE.Vector3());
-    let best = null, bestDot = 0.905;   // ~25 deg cone
-    for (const e of enemies) {
-      if (e.dying) continue;
-      _v.copy(e.position).sub(player.position);
-      const dist = _v.length();
-      if (dist > 5200 || dist < 90) continue;
-      _v.divideScalar(dist);
-      const dot = _v.dot(fwd);
-      if (dot > bestDot) { bestDot = dot; best = e; }
+    const range = this.mslKind === 'radar' ? 10000 : 5200;
+    // manual target (X key) overrides auto-pick while it stays valid
+    if (this.manualTarget) {
+      const t = this.manualTarget;
+      const valid = !t.dying && t.alive !== false &&
+        t.position.distanceTo(player.position) < range &&
+        _v.copy(t.position).sub(player.position).normalize().dot(fwd) > 0.8;
+      if (!valid) this.manualTarget = null;
+    }
+    let best = this.manualTarget, bestDot = 0.905;   // ~25 deg cone
+    if (!best) {
+      for (const e of enemies) {
+        if (e.dying) continue;
+        _v.copy(e.position).sub(player.position);
+        const dist = _v.length();
+        if (dist > range || dist < 90) continue;
+        _v.divideScalar(dist);
+        const dot = _v.dot(fwd);
+        if (dot > bestDot) { bestDot = dot; best = e; }
+      }
     }
     if (best !== ls.target) {
       ls.target = best;
@@ -252,39 +295,51 @@ export class Weapons {
   }
 
   // ---------- missiles ----------
-  launchMissile(origin, quat, fromPlayer, target, owner) {
+  launchMissile(origin, quat, fromPlayer, target, owner, kind = 'ir') {
     const mesh = this.missilePool.find(m => !m.visible);
     if (!mesh) return;
     mesh.visible = true;
     const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(quat);
+    // per-kind bodies: radar missiles are slower, heavier, longer-legged,
+    // wider-locking (10 km) and turn more lazily than IR missiles
+    const body = kind === 'radar'
+      ? { maxSpeed: fromPlayer ? 780 : 650, turn: fromPlayer ? 2.5 : 2.2, dmg: fromPlayer ? 80 : 55, ttl: 16, lockRange: 10000 }
+      : { maxSpeed: fromPlayer ? 880 : 700, turn: fromPlayer ? 3.4 : 2.55, dmg: fromPlayer ? 60 : 38, ttl: 8.5, lockRange: 5200 };
     this.missiles.push({
       pos: origin.clone(),
       quat: quat.clone(),
       vel: fwd.clone().multiplyScalar(200),
       speed: 200,
       life: 0,
-      ttl: 8.5,
+      ttl: body.ttl,
       fromPlayer,
+      kind,
+      maxSpeed: body.maxSpeed,
+      turnRate: body.turn,
+      dmg: body.dmg,
       target,
       mesh,
       smokeT: 0,
-      blind: 0,            // >0: decoyed, flying straight, may re-acquire after
+      blind: 0,            // >0: decoyed/notched, flying straight
+      notchT: 0,           // sustained beam/terrain time (radar only)
       owner: owner || null,          // launcher: immune to its own missile
       armT: 0.35,                    // fuse arming time (s) after launch
     });
     // only the PLAYER'S own launches are audible in first person
-    if (this.audio && fromPlayer) this.audio.missileLaunch();
+    if (this.audio && fromPlayer) {
+      if (kind === 'radar') this.audio.radarLaunch(); else this.audio.missileLaunch();
+    }
   }
 
   playerMissile(player, wantFire) {
     if (!wantFire || !player.alive || this.ammo <= 0) return false;
     const ls = this.lockState;
     // spawn under the wing, pointed forward
-    const side = (this._side = !(this._side)); 
+    const side = (this._side = !(this._side));
     const origin = player.position.clone()
       .addScaledVector(player.forward(new THREE.Vector3()), 2)
       .add(new THREE.Vector3(side ? 3.4 : -3.4, -1.1, 1.5).applyQuaternion(player.quaternion));
-    this.launchMissile(origin, player.quaternion, true, ls.locked ? ls.target : null, player);
+    this.launchMissile(origin, player.quaternion, true, ls.locked ? ls.target : null, player, this.mslKind);
     this.ammo--;
     if (ls.locked) ls.progress = 0.35;   // re-lock quickly for the next shot
     return true;
@@ -293,12 +348,12 @@ export class Weapons {
   enemyMissile(enemy, player) {
     const origin = enemy.position.clone().addScaledVector(
       new THREE.Vector3(0, 0, -1).applyQuaternion(enemy.quaternion), 2);
-    this.launchMissile(origin, enemy.quaternion, false, player, enemy);
+    this.launchMissile(origin, enemy.quaternion, false, player, enemy, enemy.mslKind || 'ir');
   }
 
   steerMissile(ms, dt) {
     // accelerate, then steer toward a lead point with a turn-rate clamp
-    ms.speed = Math.min(ms.speed + 620 * dt, ms.fromPlayer ? 880 : 700);
+    ms.speed = Math.min(ms.speed + 620 * dt, ms.maxSpeed);
     if (ms.blind > 0) {
       // decoyed: seeker confused, motor runs, flies straight
       ms.vel.copy(_v.set(0, 0, -1).applyQuaternion(ms.quat)).multiplyScalar(ms.speed);
@@ -313,7 +368,7 @@ export class Weapons {
       _v.copy(ms.target.position).addScaledVector(ms.target.vel, tLead).sub(ms.pos).normalize();
       _m.lookAt(ms.pos, _v2.copy(ms.pos).add(_v), UP);   // -Z of the matrix faces the aim point
       _q.setFromRotationMatrix(_m);
-      const maxTurn = (ms.fromPlayer ? 3.4 : 2.55) * (ms.life > 0.35 ? 1 : 0.25);
+      const maxTurn = ms.turnRate * (ms.life > 0.35 ? 1 : 0.25);
       ms.quat.rotateTowards(_q, maxTurn * dt);
     }
     ms.vel.copy(_v.set(0, 0, -1).applyQuaternion(ms.quat)).multiplyScalar(ms.speed);
@@ -374,35 +429,66 @@ export class Weapons {
       }
     }
 
-    // --- countermeasure stock regen (1 per 5 s) + flare physics/burn rolls ---
+    // --- countermeasure stock regen (1 per 5 s) + flare/chaff burn rolls ---
     if (this.flares < 90) {
       this.flareRegenT += dt;
       if (this.flareRegenT > 5) { this.flareRegenT = 0; this.flares++; }
     }
-    for (let i = this.flareList.length - 1; i >= 0; i--) {
-      const fl = this.flareList[i];
-      fl.life += dt;
-      if (fl.life > fl.ttl) { this.flareList.splice(i, 1); continue; }
-      fl.vel.y -= 25 * dt;
-      fl.vel.multiplyScalar(Math.pow(0.995, dt * 60));
-      fl.pos.addScaledVector(fl.vel, dt);
-      // burning cloud keeps seducing: re-roll while it burns
-      fl.rollT -= dt;
-      if (fl.rollT <= 0 && fl.rolls < 2) {
-        fl.rollT = 0.55;
-        fl.rolls++;
-        this._rollDecoys(fl.owner, 1);
+    const burnCloud = (list, kind) => {
+      for (let i = list.length - 1; i >= 0; i--) {
+        const fl = list[i];
+        fl.life += dt;
+        if (fl.life > fl.ttl) { list.splice(i, 1); continue; }
+        fl.vel.y -= (kind === 'ir' ? 25 : 8) * dt;
+        fl.vel.multiplyScalar(Math.pow(0.995, dt * 60));
+        fl.pos.addScaledVector(fl.vel, dt);
+        // the cloud keeps seducing: re-roll while it burns
+        fl.rollT -= dt;
+        if (fl.rollT <= 0 && fl.rolls > 0) {
+          fl.rollT = 0.55;
+          fl.rolls--;
+          this._rollDecoys(fl.owner, 1, kind);
+        }
       }
-    }
+    };
+    burnCloud(this.flareList, 'ir');
+    burnCloud(this.chaffList, 'radar');
 
     // --- missiles ---
     this.inboundWarning = false;
+    this.radarInbound = false;
     for (let i = this.missiles.length - 1; i >= 0; i--) {
       const ms = this.missiles[i];
       ms.life += dt;
       if (ms.blind > 0) {
         ms.blind -= dt;
-        if (ms.blind <= 0) this.reacquire(ms, player, enemies);
+        // IR seekers re-acquire after the blind period; a radar missile that
+        // got notched or terrain-masked stays dumb permanently (blind = 1e9)
+        if (ms.blind <= 0 && ms.kind === 'ir') this.reacquire(ms, player, enemies);
+      }
+      // radar guidance environment: 39-notch (target beams the seeker) and
+      // terrain masking break the lock after ~0.9 s sustained
+      if (ms.kind === 'radar' && ms.target && !ms.target.dying && ms.target.alive !== false) {
+        _v.copy(ms.target.pos ?? ms.target.position).sub(ms.pos);
+        const losLen = _v.length() || 1;
+        _v.divideScalar(losLen);
+        _v2.copy(ms.target.vel);
+        const vLen = _v2.length() || 1;
+        const beam = Math.abs(_v2.divideScalar(vLen).dot(_v));
+        let masked = false;
+        if (losLen > 900) {
+          for (let t = 0.2; t <= 0.7; t += 0.25) {
+            const px = ms.pos.x + (ms.target.position.x - ms.pos.x) * t;
+            const py = ms.pos.y + (ms.target.position.y - ms.pos.y) * t;
+            const pz = ms.pos.z + (ms.target.position.z - ms.pos.z) * t;
+            if (terrainHeightAt(px, pz) > py + 15) { masked = true; break; }
+          }
+        }
+        if (beam < 0.3 || masked) ms.notchT += dt; else ms.notchT = 0;
+        if (ms.notchT > 0.9) {
+          ms.target = null;
+          ms.blind = 1e9;    // permanent lock loss
+        }
       }
       this.steerMissile(ms, dt);
       ms.mesh.position.copy(ms.pos);
@@ -412,8 +498,9 @@ export class Weapons {
         ms.smokeT = 0;
         effects.missileTrail(ms.pos, ms.vel.clone().multiplyScalar(-0.02));
       }
-      if (!ms.fromPlayer && player.alive && (ms.target === player || ms.blind > 0)) {
-        this.inboundWarning = true;
+      if (!ms.fromPlayer && player.alive && (ms.target === player || (ms.blind > 0 && ms.blind < 5))) {
+        if (ms.kind === 'radar') this.radarInbound = true;
+        else this.inboundWarning = true;
         this.inboundDir.copy(ms.pos).sub(player.position).normalize();
       }
 
@@ -430,9 +517,9 @@ export class Weapons {
         if (ms.pos.distanceToSquared(t.position) < MISSILE_FUSE_R * MISSILE_FUSE_R) {
           boom = true;
           if (t === player) {
-            player.applyDamage(38);
+            player.applyDamage(ms.dmg);
           } else if (ms.fromPlayer) {
-            const killed = t.applyDamage(60);
+            const killed = t.applyDamage(ms.dmg);
             if (killed && !t.dying) {
               effects.explosion(t.position, 1.2);
             } else if (!t.dying) {
@@ -442,7 +529,7 @@ export class Weapons {
               this.events.push({ type: 'crit' });
             }
           } else {
-            t.applyDamage(60);   // enemy missile hits an enemy: friendly fire
+            t.applyDamage(ms.dmg);   // enemy missile hits an enemy: friendly fire
           }
         }
       };

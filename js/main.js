@@ -149,6 +149,13 @@ function update(dt) {
     weapons.playerGun(player, dt, firing && player.alive, enemies.enemies);
     if (input.pressed('fireMissile')) weapons.playerMissile(player, true);
     if (input.pressed('flares')) weapons.deployFlares(player, 3);
+    if (input.pressed('cycleMissile')) {
+      weapons.mslKind = weapons.mslKind === 'ir' ? 'radar' : 'ir';
+      weapons.manualTarget = null;
+      hud.announce(weapons.mslKind === 'radar' ? '雷达弹' : '红外弹',
+        weapons.mslKind === 'radar' ? 'RADAR — 10km 锁定 · 39/箔条可避' : 'IR — 5.2km 锁定 · 热诱弹可避', 1.2, 'info');
+    }
+    if (input.pressed('cycleTarget')) weapons.cycleTarget(player, enemies.enemies);
     weapons.updateLock(dt, player, enemies.enemies);
 
     // world
@@ -219,6 +226,12 @@ function renderHUD() {
     kills: G.kills, score: G.score, wave: enemies.wave,
     time: G.time,
     enemyLock: enemies.enemies.reduce((m, e) => Math.max(m, e.lockT || 0), 0),
+    radarThreats: weapons.missiles
+      .filter(m => !m.fromPlayer && m.kind === 'radar' && m.blind < 5)
+      .map(m => {
+        const dx = m.pos.x - player.position.x, dz = m.pos.z - player.position.z;
+        return { brg: Math.atan2(dx, -dz), dist: Math.hypot(dx, dz) };
+      }),
   });
 }
 
@@ -332,6 +345,7 @@ function frame() {
           hp: Math.round(e.hp), dying: e.dying, state: e.state,
           dist: Math.round(e.position.distanceTo(player.position)),
           v: Math.round(e.speed), thr: Math.round(e.body.throttle * 100) / 100,
+          k: e.mslKind,
         })),
         missiles: weapons.missiles.map(m => ({ fromPlayer: m.fromPlayer, age: Math.round(m.life * 10) / 10 })),
         lock: weapons.lockState.locked, lockProg: Math.round(weapons.lockState.progress * 100) / 100,

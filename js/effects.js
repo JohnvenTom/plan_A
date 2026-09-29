@@ -191,6 +191,21 @@ export class Effects {
     });
   }
 
+  chaff(pos, vel) {
+    // chaff bundle: silver strips blooming into a slow-hanging wide cloud
+    this.spawn(this.add, {
+      pos, vel, life: 0.25, drag: 0.9, gravity: 0,
+      c0: [2.2, 2.2, 2.4], c1: [0.8, 0.8, 0.9], s0: 3, s1: 6,
+    });
+    for (let i = 0; i < 5; i++) {
+      this.spawn(this.smoke, {
+        pos, vel, life: 2.6 + this.rng() * 0.5, drag: 0.93, gravity: 3, turb: 3,
+        c0: [0.78, 0.8, 0.85], c1: [0.6, 0.62, 0.66], a0: 0.55, a1: 0,
+        s0: 2.5, s1: 20,
+      });
+    }
+  }
+
   flare(pos, vel) {
     // bright burning countermeasure: hot white-orange core that fades
     this.spawn(this.add, {

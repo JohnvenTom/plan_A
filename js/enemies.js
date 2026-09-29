@@ -37,6 +37,8 @@ class Enemy {
     this.missileCooldown = 5 + Math.random() * 6;
     this.gunBurst = 0;
     this.lockT = 0;            // missile lock hold time (same 1.15 s rule as the player)
+    // wave 2+: about half the flight carries 10 km radar missiles
+    this.mslKind = (wave >= 2 && Math.random() < 0.5) ? 'radar' : 'ir';
     this.dying = false;
     this.dead = false;
     this.deadTime = 0;
@@ -97,10 +99,11 @@ class Enemy {
       return;
     }
 
-    // --- state selection: incoming missiles outrank everything ---
+    // --- state selection: incoming missiles outrank everything (radar
+    //     threats are "seen" much earlier — the AI has its own RWR) ---
     const inbound = ctx && ctx.weapons
       ? ctx.weapons.missiles.find(m => m.target === this && m.blind <= 0
-          && m.pos.distanceTo(b.pos) < 2300)
+          && m.pos.distanceTo(b.pos) < (m.kind === 'radar' ? 5200 : 2300))
       : null;
     const playerAimingAtMe = player.alive &&
       player.forward(_tmp).dot(_aim.copy(b.pos).sub(player.position).normalize()) > 0.94 && dist < 1300;
@@ -198,8 +201,10 @@ class Enemy {
       ctx.enemyGun(this, player);
     }
     // --- enemy missile lock: SAME rule as the player's — hold the target in
-    //     the nose cone for 1.15 s before launch (fairness parity) ---
-    const canTrack = this.state !== 'patrol' && dist < 2600 && aimDot > 0.90;
+    //     the nose cone for 1.15 s before launch (fairness parity). Radar
+    //     shooters lock from 10 km, IR shooters from 2.6 km. ---
+    const lockRange = this.mslKind === 'radar' ? 10000 : 2600;
+    const canTrack = (this.state !== 'patrol' || this.mslKind === 'radar') && dist < lockRange && aimDot > 0.90;
     this.lockT = canTrack ? this.lockT + dt : 0;
     if (this.missileCooldown <= 0 && this.lockT >= 1.15) {
       this.missileCooldown = 7 + Math.random() * 7;

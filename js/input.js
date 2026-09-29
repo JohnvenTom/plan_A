@@ -13,7 +13,9 @@ export const DEFAULT_BINDINGS = {
   throttleDown: 'ControlLeft',
   fireGun: 'Mouse0',
   fireMissile: 'Mouse2',
-  flares: 'Mouse1',        // 热诱弹默认鼠标中键
+  flares: 'Mouse1',        // 干扰弹(热诱弹/箔条自动识别)默认鼠标中键
+  cycleMissile: 'KeyR',    // 切换红外弹/雷达弹
+  cycleTarget: 'KeyX',     // 切换锁定目标
   camera: 'KeyC',
   pause: 'KeyP',
 };
@@ -23,7 +25,8 @@ export const ACTION_LABELS = {
   rollLeft: '左滚转', rollRight: '右滚转',
   rudderLeft: '左方向舵', rudderRight: '右方向舵',
   throttleUp: '油门+', throttleDown: '油门-',
-  fireGun: '机炮', fireMissile: '导弹', flares: '热诱弹',
+  fireGun: '机炮', fireMissile: '导弹', flares: '干扰弹(诱弹/箔条)',
+  cycleMissile: '切换弹种(红外/雷达)', cycleTarget: '切换锁定目标',
   camera: '切换视角', pause: '暂停',
 };
 
