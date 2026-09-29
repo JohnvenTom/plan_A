@@ -342,6 +342,8 @@ export class HUD {
     this.text(`KILLS ${S.kills}`, this.w - 46, 40, 16, CYAN, 'right');
     this.text(`WAVE ${S.wave}`, this.w - 46, 64, 13, CYAN_DIM, 'right');
     this.text(`SCORE ${S.score}`, this.w - 46, 88, 13, CYAN_DIM, 'right');
+    // mission clock + weather
+    if (S.clock) this.text(`${S.clock} · ${S.weatherName || ''}`, this.w - 46, 112, 13, CYAN_DIM, 'right');
   }
 
   drawAlerts(dt, S) {

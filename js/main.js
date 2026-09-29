@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { Input, DEFAULT_BINDINGS, ACTION_LABELS, codeLabel } from './input.js';
 import { Sky } from './sky.js';
+import { Weather } from './weather.js';
 import { buildTerrain, buildOcean } from './terrain.js';
 import { Player } from './player.js';
 import { EnemyManager } from './enemies.js';
@@ -9,7 +10,7 @@ import { Weapons } from './weapons.js';
 import { Effects } from './effects.js';
 import { HUD } from './hud.js';
 import { GameAudio } from './audio.js';
-import { clamp } from './utils.js';
+import { clamp, smoothstep } from './utils.js';
 
 const q = new URLSearchParams(location.search);
 const FREEZE_T = q.has('t') ? Math.max(0, parseFloat(q.get('t')) || 0) : null;
@@ -26,9 +27,10 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.18;
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(66, innerWidth / innerHeight, 0.6, 72000);
+const camera = new THREE.PerspectiveCamera(66, innerWidth / innerHeight, 2.5, 72000);
 
 const sky = new Sky(scene);
+const weather = new Weather(scene, sky, renderer);
 buildTerrain(scene);
 const ocean = buildOcean(scene);
 const effects = new Effects(scene);
@@ -39,6 +41,7 @@ const hud = new HUD(document.getElementById('hud'));
 window.__hud = hud;   // debug hook
 window.__weapons = weapons;   // debug hook
 window.__player = player;     // debug hook
+window.__weather = weather;   // debug hook
 const audio = new GameAudio();
 const input = new Input();
 weapons.playerRef = player;
@@ -119,6 +122,19 @@ function gameOver() {
   document.getElementById('go-title').textContent = 'MISSION FAILED';
   document.getElementById('go-sub').textContent = player.crashed ? '机体触地坠毁' : '机体损毁';
   goEl.classList.remove('hidden');
+}
+
+
+// ---------- environment: 8-minute day/night cycle + dynamic weather ----------
+const DAY_LEN = 480;                       // seconds for a full day
+function updateEnvironment(dt) {
+  weather.update(dt, camera);
+  const day01 = (G.time / DAY_LEN + 0.46) % 1;   // missions start at golden hour
+  const elevSin = Math.sin(day01 * Math.PI * 2);
+  const night01 = 1 - smoothstep(-0.14, 0.09, elevSin);
+  sky.setCycle(day01, night01, sky.weatherParams);
+  ocean.mat.uniforms.uNight.value = night01;
+  G.day01 = day01; G.night01 = night01;
 }
 
 // ---------- per-frame simulation ----------
@@ -205,6 +221,7 @@ function update(dt) {
 
   effects.update(dt);
   sky.update(dt, camera.position);
+  updateEnvironment(dt);
 
   // ocean follows the camera; uniforms stay in sync with the one atmosphere model
   ocean.mesh.position.x = camera.position.x;
@@ -217,6 +234,8 @@ function update(dt) {
 }
 
 function renderHUD() {
+  const mins = Math.floor(((G.day01 ?? 0.46) * 24 + 6) % 24 * 60);
+  const clock = `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
   hud.draw(G.paused ? 0 : 1 / 60, {
     state: G.state,
     paused: G.paused,
@@ -225,6 +244,7 @@ function renderHUD() {
     weapons,
     kills: G.kills, score: G.score, wave: enemies.wave,
     time: G.time,
+    clock, weatherName: weather.name,
     enemyLock: enemies.enemies.reduce((m, e) => Math.max(m, e.lockT || 0), 0),
     radarThreats: weapons.missiles
       .filter(m => !m.fromPlayer && m.kind === 'radar' && m.blind < 5)
@@ -258,6 +278,9 @@ function freezeFrame() {
   window.__ready = true;
   window.__game = {
     time: G.time, state: G.state, kills: G.kills,
+    clock: Math.round(((G.day01 ?? 0.46) * 24 + 6) % 24 * 60),
+    night: Math.round((G.night01 ?? 0) * 100) / 100,
+    weather: weather.name, rain: Math.round(weather.cur.rain * 100) / 100,
     heading: Math.round(player.headingDeg * 10) / 10,
     bank: Math.round(player.bankDeg * 10) / 10,
     ctl: {
@@ -304,6 +327,7 @@ function frame() {
     camera.up.set(0, 1, 0);
     camera.lookAt(0, 900, 0);
     sky.update(dt, camera.position);
+    updateEnvironment(dt);
     ocean.mesh.position.x = camera.position.x;
     ocean.mesh.position.z = camera.position.z;
     ocean.mat.uniforms.uCamPos.value.copy(camera.position);
@@ -323,6 +347,8 @@ function frame() {
         hp: Math.round(player.hp), speed: Math.round(player.speed),
         alt: Math.round(player.position.y),
         g: Math.round((player.gLoad || 1) * 10) / 10,
+        clock: Math.round(((G.day01 ?? 0.46) * 24 + 6) % 24 * 60), night: Math.round((G.night01 ?? 0) * 100) / 100,
+        weather: weather.name, rain: Math.round(weather.cur.rain * 100) / 100,
         alphaDeg: Math.round((player.alpha || 0) * 573) / 10,
         noseDeg: (() => { player.forward(_v2); return Math.round(Math.asin(clamp(_v2.y, -1, 1)) * 573) / 10; })(),
         omegaX: Math.round(player.body.omega.x * 100) / 100,

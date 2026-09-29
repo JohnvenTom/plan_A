@@ -119,7 +119,7 @@ export class Player {
     this._keyYaw = (input.down('rudderLeft') ? 1 : 0) - (input.down('rudderRight') ? 1 : 0);
     this._keyPitch = (input.down('pitchPull') ? 1 : 0) - (input.down('pitchPush') ? 1 : 0);
 
-    const kbActive = this._keyOverride !== 0 || this._keyPitch !== 0;
+    const kbActive = this._keyOverride !== 0 || this._keyPitch !== 0 || this._keyYaw !== 0;
     if (kbActive) {
       // view/aim lets go of the plane while the stick is worked manually
       b.ctl.pitch = this._keyPitch;

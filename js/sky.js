@@ -4,6 +4,10 @@
 // - ONE sun direction shared by dome shader, directional light, hemisphere light
 // - Output stays scene-linear HDR; renderer.toneMapping (ACES) is the single output owner
 import * as THREE from 'three';
+import { clamp } from './utils.js';
+
+const _nc = new THREE.Color();
+const _gc = new THREE.Color();
 
 const SKY_VERT = /* glsl */`
 varying vec3 vDir;
@@ -18,6 +22,9 @@ precision highp float;
 varying vec3 vDir;
 uniform vec3 uSunDir;
 uniform float uSunElev; // sin(elevation), used to warm the horizon as the sun lowers
+uniform float uNight;   // 0 day .. 1 full night
+
+float hash21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 
 void main() {
   vec3 d = normalize(vDir);
@@ -49,6 +56,18 @@ void main() {
   // below-horizon fade into sea haze so the dome meets the ocean cleanly
   col = mix(col, vec3(0.36, 0.40, 0.47), smoothstep(0.0, -0.14, h));
 
+  // night blend: dark blue gradient with a faint horizon airglow, then stars
+  vec3 nightCol = mix(vec3(0.015, 0.025, 0.06), vec3(0.05, 0.07, 0.12), hz);
+  col = mix(col, nightCol, uNight);
+  if (uNight > 0.02 && h > 0.02) {
+    vec3 sd = normalize(vDir);
+    vec2 sp = vec2(atan(sd.z, sd.x), asin(sd.y)) * 80.0;
+    vec2 cell = floor(sp);
+    float h1 = hash21(cell);
+    float star = step(0.992, h1) * smoothstep(0.0, 0.12, sd.y) * uNight;
+    col += vec3(0.72, 0.78, 0.95) * star * 1.5;
+  }
+
   gl_FragColor = vec4(col, 1.0);
 }`;
 
@@ -68,6 +87,8 @@ uniform vec3 uColorShade;
 uniform float uScale;
 uniform float uThreshold;
 uniform float uDrift;
+uniform float uNight;   // 0 day .. 1 night: clouds go moonlit-dark
+uniform float uAlpha;   // overall deck presence (weather)
 
 float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float noise(vec2 p){
@@ -91,11 +112,13 @@ void main() {
   vec2 c = vUv - 0.5;
   float border = smoothstep(0.5, 0.32, max(abs(c.x), abs(c.y)));
   vec3 col = mix(uColorShade, uColorLit, clamp(0.35 + n2 * 0.9, 0.0, 1.0));
-  gl_FragColor = vec4(col, a * border * 0.85);
+  col *= 1.0 - uNight * 0.78;
+  gl_FragColor = vec4(col, a * border * uAlpha);
 }`;
 
 export class Sky {
   constructor(scene) {
+    this.scene = scene;
     // ONE sun direction: elevation ~13 deg, azimuth +28 deg from -Z (ahead-right of player start)
     const el = 13 * Math.PI / 180, az = 28 * Math.PI / 180;
     this.sunDir = new THREE.Vector3(
@@ -113,6 +136,7 @@ export class Sky {
       uniforms: {
         uSunDir: { value: this.sunDir },
         uSunElev: { value: this.sunElevSin },
+        uNight: { value: 0 },
       },
     });
     this.dome = new THREE.Mesh(new THREE.SphereGeometry(30000, 48, 24), this.domeMat);
@@ -135,7 +159,8 @@ export class Sky {
           uDrift: { value: drift },
           uColorLit: { value: new THREE.Color(...lit) },
           uColorShade: { value: new THREE.Color(...shade) },
-          uOpacityMul: { value: opacityMul },
+          uNight: { value: 0 },
+          uAlpha: { value: 0.85 * opacityMul },
         },
       });
       const mesh = new THREE.Mesh(new THREE.PlaneGeometry(44000, 44000), mat);
@@ -160,6 +185,46 @@ export class Sky {
     // --- distance haze (FogExp2), color = horizon band average ---
     scene.fog = new THREE.FogExp2(new THREE.Color(0.70, 0.56, 0.42), 0.000034);
     this.cloudTime = 0;
+  }
+
+  // ---- day/night cycle: day01 in 0..1 (0 sunrise, .25 noon, .5 sunset,
+  //      .75 midnight). Rotates the shared sun direction, swaps to blue
+  //      moonlight at night, dims clouds, and drives fog color/density
+  //      together with the weather parameters. ----
+  setCycle(day01, night01, weather) {
+    const ang = day01 * Math.PI * 2;
+    const elevSin = Math.sin(ang);
+    const elev = Math.asin(clamp(elevSin, -1, 1) * 0.999);
+    const az = (day01 * 360 + 200) * Math.PI / 180;
+    this.sunDir.set(Math.sin(az) * Math.cos(elev), Math.sin(elev), -Math.cos(az) * Math.cos(elev)).normalize();
+    this.sunElevSin = Math.max(-0.15, elevSin);
+    this.domeMat.uniforms.uSunDir.value.copy(this.sunDir);
+    this.domeMat.uniforms.uSunElev.value = this.sunElevSin;
+    this.domeMat.uniforms.uNight.value = night01;
+
+    const dim = weather ? weather.dim : 1;
+    const dayF = clamp(elevSin * 4, 0, 1);
+    if (dayF > 0.02) {
+      this.sun.color.setRGB(1.0, 0.85 - night01 * 0.3, 0.66 - night01 * 0.4);
+      this.sun.intensity = 2.9 * Math.pow(dayF, 0.6) * dim;
+      this.sun.position.copy(this.sunDir).multiplyScalar(10000);
+    } else {
+      // moonlight: fixed blueish direction, faint
+      this.sun.color.setHex(0x8fa8d8);
+      this.sun.intensity = 0.4 * night01 * dim;
+      this.sun.position.set(-3000, 6000, 2000);
+    }
+    this.hemi.intensity = (1.3 * dayF + 0.42 * night01) * dim;
+    for (const m of this.cloudMats) m.uniforms.uNight.value = night01;
+
+    // fog follows the sun height, the night, and the weather graying
+    const fc = this.scene.fog.color;
+    fc.setRGB(0.70, 0.56, 0.42).lerp(_nc.setRGB(0.045, 0.06, 0.1), night01);
+    if (weather) {
+      fc.lerp(_gc.setRGB(0.42, 0.44, 0.47).multiplyScalar(1 - night01 * 0.85), weather.gray);
+      fc.multiplyScalar(dim);
+    }
+    this.scene.fog.density = 0.000034 * (weather ? weather.fogMul : 1);
   }
 
   update(dt, cameraPos) {
