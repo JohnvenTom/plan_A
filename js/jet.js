@@ -3,6 +3,7 @@
 // Convention: nose points toward -Z (three.js "forward"), consistent with the
 // quaternion flight model in player.js.
 import * as THREE from 'three';
+import { clamp } from './utils.js';
 
 // Planform polygon in (x = spanwise, y = longitudinal(world z)), extruded flat.
 function extrudedPart(points, thickness, mat) {
@@ -81,6 +82,50 @@ export function buildJet(opts = {}) {
     g.add(c);
   }
 
+  // --- articulated control surfaces (sculptor Action branch: hinge pivots) ---
+  // Each surface: an Object3D pivot at the hinge line, mesh child offset aft,
+  // yaw-aligned to the local trailing edge. setControlSurfaces() drives them.
+  const surfaces = {};
+  const hinge = (name, x, y, z, yaw, len, chord, mat) => {
+    const pivot = new THREE.Object3D();
+    pivot.name = 'surf_' + name;
+    pivot.position.set(x, y, z);
+    pivot.rotation.y = yaw;
+    const m = new THREE.Mesh(new THREE.BoxGeometry(len, 0.085, chord), mat);
+    m.position.set(0, 0, chord / 2 + 0.03);
+    pivot.add(m);
+    g.add(pivot);
+    surfaces[name] = { pivot, angle: 0 };
+  };
+  for (const side of [1, -1]) {
+    const S = side > 0 ? 'R' : 'L';   // +X is the right wing (nose = -Z)
+    // ailerons on the outer wing trailing edge (swept ~42 deg)
+    hinge('ail' + S, side * 4.9, -0.1, -0.37, side > 0 ? 0.74 : Math.PI - 0.74, 2.0, 0.62, darkMat);
+    // all-moving stabilator trailing edge
+    hinge('elev' + S, side * 1.7, 0.06, 4.05, side > 0 ? 0.04 : Math.PI - 0.04, 1.9, 0.5, bodyMat);
+    // canard flaps
+    hinge('can' + S, side * 1.9, 0.1, -6.25, side > 0 ? 0.29 : Math.PI - 0.29, 1.8, 0.42, bodyMat);
+  }
+
+  // hydraulic-feel deflection toward commanded angles (called by player each frame)
+  let surfState = { roll: 0, pitch: 0 };
+  const setControlSurfaces = (ctl) => {
+    surfState.roll += (clamp(ctl.roll, -1, 1) - surfState.roll) * 0.28;
+    surfState.pitch += (clamp(ctl.pitch, -1, 1) - surfState.pitch) * 0.28;
+    const r = surfState.roll, p = surfState.pitch;
+    const set = (name, target) => {
+      const s = surfaces[name];
+      s.angle += (target - s.angle) * 0.35;
+      s.pivot.rotation.x = s.angle;
+    };
+    set('ailL', -0.5 * r);   // roll left: left aileron up, right down
+    set('ailR', 0.5 * r);
+    set('elevL', -0.38 * p); // pitch up: elevators TE up
+    set('elevR', -0.38 * p);
+    set('canL', 0.45 * p);   // canards deflect opposite
+    set('canR', 0.45 * p);
+  };
+
   // --- horizontal stabilizers ---
   for (const side of [1, -1]) {
     const st = extrudedPart([[0.6, 0.5], [3.1, -1.2], [3.1, -1.8], [0.6, -1.6]], 0.24, bodyMat);
@@ -144,5 +189,5 @@ export function buildJet(opts = {}) {
   };
 
   g.traverse(o => { o.frustumCulled = false; });
-  return { group: g, anchors, afterburners };
+  return { group: g, anchors, afterburners, setControlSurfaces };
 }

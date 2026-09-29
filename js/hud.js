@@ -136,36 +136,42 @@ export class HUD {
     this.line(cx, y + 22, cx + 6, y + 30, CYAN, 2);
   }
 
-  // ---- center reticle + flight path marker + lock circle ----
+  // ---- War Thunder style: aim director circle at the mouse + flight path marker ----
   drawReticle(S) {
-    const cx = this.w / 2, cy = this.h / 2;
     const c = this.ctx;
-    // boresight cross
-    this.line(cx - 14, cy, cx - 4, cy, CYAN, 2);
-    this.line(cx + 4, cy, cx + 14, cy, CYAN, 2);
-    this.line(cx, cy - 14, cx, cy - 4, CYAN, 2);
-    this.line(cx, cy + 4, cx, cy + 14, CYAN, 2);
-    // gun funnel-ish dots
-    for (let i = 1; i <= 5; i++) {
-      const dy = i * 26;
-      this.line(cx - 2 - i * 3, cy + 18 + dy, cx + 2 + i * 3, cy + 18 + dy, CYAN_DIM, 1);
-    }
-    // flight path marker (velocity vector): where the nose actually points
-    const fp = S.player.position.clone().addScaledVector(S.player.forward(new THREE.Vector3()), 2600);
+    // flight path marker: where the nose actually points (chases the circle)
+    const fp = S.player.position.clone().addScaledVector(S.player.forward(this._v), 2600);
     const s = this.proj(fp, S.camera);
-    if (!s.behind && s.x > 40 && s.x < this.w - 40 && s.y > 40 && s.y < this.h - 40) {
+    const fpOn = !s.behind && s.x > 20 && s.x < this.w - 20 && s.y > 20 && s.y < this.h - 20;
+    if (fpOn) {
       this.circle(s.x, s.y, 9, CYAN, 2);
-      this.line(s.x - 16, s.y, s.x - 9, s.y, CYAN, 2);
-      this.line(s.x + 9, s.y, s.x + 16, s.y, CYAN, 2);
-      this.line(s.x, s.y - 16, s.x, s.y - 9, CYAN, 2);
+      this.line(s.x - 17, s.y, s.x - 9, s.y, CYAN, 2);
+      this.line(s.x + 9, s.y, s.x + 17, s.y, CYAN, 2);
+      this.line(s.x, s.y - 17, s.x, s.y - 9, CYAN, 2);
+      this.line(s.x, s.y + 9, s.x, s.y + 17, CYAN, 2);
     }
-    // lock-on circle
+
+    // aim director circle (директриса) at the mouse position
+    const ax = (S.aimX * 0.5 + 0.5) * this.w;
+    const ay = (-S.aimY * 0.5 + 0.5) * this.h;
+    const R = 26;
+    this.circle(ax, ay, R, CYAN, 2);
+    c.fillStyle = CYAN; c.shadowColor = CYAN; c.shadowBlur = 8;
+    c.beginPath(); c.arc(ax, ay, 2.4, 0, Math.PI * 2); c.fill();
+    c.shadowBlur = 0;
+    for (let i = 0; i < 4; i++) {
+      const a = i * Math.PI / 2;
+      const x0 = ax + Math.cos(a) * (R + 3), y0 = ay + Math.sin(a) * (R + 3);
+      const x1 = ax + Math.cos(a) * (R + 11), y1 = ay + Math.sin(a) * (R + 11);
+      this.line(x0, y0, x1, y1, CYAN, 2);
+    }
+
+    // lock-on ring rides the flight path marker (the nose chases the circle)
     const ls = S.weapons.lockState;
-    if (ls.target) {
+    if (ls.target && fpOn) {
       const r = 46 - ls.progress * 30;
-      this.circle(cx, cy, Math.max(10, r), ls.locked ? RED : AMBER, ls.locked ? 2.5 : 2);
-      if (ls.locked) this.text('LOCK', cx, cy + 62, 14, RED, 'center');
-      else this.text('...', cx, cy + 62, 14, AMBER, 'center');
+      this.circle(s.x, s.y, Math.max(10, r), ls.locked ? RED : AMBER, ls.locked ? 2.5 : 2);
+      this.text(ls.locked ? 'LOCK' : '...', s.x, s.y + 62, 14, ls.locked ? RED : AMBER, 'center');
     }
   }
 

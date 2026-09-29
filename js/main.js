@@ -89,10 +89,12 @@ function startGame() {
   G.state = 'playing';
   titleEl.classList.add('hidden');
   goEl.classList.add('hidden');
+  document.body.style.cursor = 'none';   // WT style: custom director circle replaces the cursor
 }
 
 function gameOver() {
   G.state = 'gameover';
+  document.body.style.cursor = '';
   document.getElementById('go-score').textContent = String(G.kills);
   const win = false;
   document.getElementById('go-title').textContent = 'MISSION FAILED';
@@ -142,7 +144,7 @@ function update(dt) {
 
     // player contrails + damage smoke
     G.contrailT += dt;
-    const turning = input.down('KeyA') || input.down('KeyD') || input.down('ArrowLeft') || input.down('ArrowRight');
+    const turning = Math.abs(player.ctl.roll) > 0.25 || Math.abs(player.ctl.pitch) > 0.3;
     if (G.contrailT > 0.03 && (player.speed > 360 || turning) && player.position.y > 1600) {
       G.contrailT = 0;
       player.model.anchors.wingL.getWorldPosition(_v);
@@ -186,6 +188,7 @@ function renderHUD() {
     weapons,
     kills: G.kills, score: G.score, wave: enemies.wave,
     time: G.time,
+    aimX: input.aimX, aimY: input.aimY,
   });
 }
 
@@ -193,6 +196,7 @@ function renderHUD() {
 function freezeFrame() {
   titleEl.classList.add('hidden');
   goEl.classList.add('hidden');
+  document.body.style.cursor = 'none';
   G.state = 'playing';
   resetAll();
   const dt = 1 / 60;
@@ -212,6 +216,14 @@ function freezeFrame() {
   window.__ready = true;
   window.__game = {
     time: G.time, state: G.state, kills: G.kills,
+    heading: Math.round(player.headingDeg * 10) / 10,
+    bank: Math.round(player.bankDeg * 10) / 10,
+    ctl: {
+      pitch: Math.round(player.ctl.pitch * 100) / 100,
+      roll: Math.round(player.ctl.roll * 100) / 100,
+      yaw: Math.round(player.ctl.yaw * 100) / 100,
+    },
+    aim: [input.aimX, input.aimY],
     enemies: enemies.enemies.map(e => ({
       hp: Math.round(e.hp), dying: e.dying, state: e.state,
       dist: Math.round(e.position.distanceTo(player.position)),
@@ -261,12 +273,24 @@ function frame() {
       window.__game = {
         time: G.time, state: G.state, kills: G.kills, alive: player.alive,
         hp: Math.round(player.hp), speed: Math.round(player.speed),
+        heading: Math.round(player.headingDeg * 10) / 10,
+        bank: Math.round(player.bankDeg * 10) / 10,
+        ctl: {
+          pitch: Math.round(player.ctl.pitch * 100) / 100,
+          roll: Math.round(player.ctl.roll * 100) / 100,
+          yaw: Math.round(player.ctl.yaw * 100) / 100,
+        },
+        aim: [input.aimX, input.aimY],
         enemies: enemies.enemies.map(e => ({
           hp: Math.round(e.hp), dying: e.dying, state: e.state,
           dist: Math.round(e.position.distanceTo(player.position)),
         })),
         missiles: weapons.missiles.map(m => ({ fromPlayer: m.fromPlayer, age: Math.round(m.life * 10) / 10 })),
         lock: weapons.lockState.locked, ammo: weapons.ammo,
+        gunRounds: weapons.rounds.length, gunHeat: Math.round(weapons.gunHeat * 100) / 100,
+        surf: player.model.group.children
+          .filter(o => o.name && o.name.startsWith('surf_'))
+          .map(o => o.name.slice(5) + ':' + (Math.round(o.rotation.x * 100) / 100)),
       };
     }
   }
