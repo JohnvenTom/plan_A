@@ -107,7 +107,10 @@ export class HUD {
     const tbx = sx - 16;
     this.line(tbx, cy + boxH / 2, tbx, cy - boxH / 2, CYAN_DIM, 1);
     const ty = cy + boxH / 2 - p.throttle * boxH;
-    this.line(tbx - 4, ty, tbx + 4, ty, p.throttle > 0.82 ? AMBER : CYAN, 3);
+    this.line(tbx - 4, ty, tbx + 4, ty, p.boosting ? AMBER : CYAN, 3);
+    // G readout (warmed by the energy model: hard pulls bleed speed)
+    this.text(`G ${p.gLoad.toFixed(1)}`, sx + 2, cy + boxH / 2 + 16, 13,
+      p.gLoad > 12 ? RED : p.gLoad > 7 ? AMBER : CYAN_DIM);
     // altitude (right)
     const ax = cx + 250 - boxW / 2;
     this.strokeRect(ax, cy - boxH / 2, boxW, boxH, CYAN);

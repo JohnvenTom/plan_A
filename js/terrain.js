@@ -4,10 +4,11 @@ import * as THREE from 'three';
 import { makeNoise2D, makeFbm2D, clamp, smoothstep } from './utils.js';
 
 const WORLD_SIZE = 24000;      // meters, centered at origin
-const SEGMENTS = 168;          // grid cells per side (~143 m per cell)
+const SEGMENTS = 232;          // grid cells per side (~103 m per cell)
 export const SEA_LEVEL = 0;
 
-// --- one height model: ridged fbm islands, radial mask sinks the edges ---
+// --- one height model: ridged fbm islands + fine detail, radial mask sinks
+// the edges. Sampled identically for geometry AND gameplay collision. ---
 const noise2D = makeNoise2D(20260929);
 const fbm = makeFbm2D(noise2D, 5);
 
@@ -16,16 +17,19 @@ export function terrainHeightAt(x, z) {
   let nx = x * s, nz = z * s;
   // ridged: 1-|n| gives sharp crests
   let ridge = 0, amp = 0.55, freq = 1;
-  for (let o = 0; o < 4; o++) {
+  for (let o = 0; o < 5; o++) {
     ridge += amp * (1 - Math.abs(noise2D(nx * freq + 7.3, nz * freq - 4.1)));
     amp *= 0.5; freq *= 2.1;
   }
   const base = fbm(nx * 0.7 + 3.7, nz * 0.7 - 9.2) * 0.5 + 0.5; // continental shelf shape
+  // fine-scale relief (~330 m features) so close flight reads rough
+  const detail = fbm(x / 330 + 11.2, z / 330 - 5.8) * 95;
   // island-chain mask: several lobes instead of one blob
   const r = Math.hypot(x, z) / (WORLD_SIZE * 0.5);
   const chain = 0.5 + 0.5 * Math.sin(Math.atan2(z, x) * 3 + fbm(nx * 0.4, nz * 0.4) * 2.2);
   const mask = clamp(1.25 - r * (1.55 - 0.5 * chain), 0, 1);
-  const h = (ridge * 1750 + base * 700 - 320) * smoothstep(0.02, 0.45, mask);
+  const m = smoothstep(0.02, 0.45, mask);
+  const h = (ridge * 1750 + base * 700 - 320 + detail * 0.6) * m;
   return h;
 }
 

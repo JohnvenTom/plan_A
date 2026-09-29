@@ -23,6 +23,11 @@ export const damp = (a, b, lambda, dt) => lerp(a, b, 1 - Math.exp(-lambda * dt))
 export const deg = Math.PI / 180;
 export const TAU = Math.PI * 2;
 
+// --- one set of collision volumes, shared by every system ---
+export const AIRCRAFT_HIT_R = 12;     // gun segment-sphere radius (both sides)
+export const MISSILE_FUSE_R = 28;     // proximity fuse radius (both sides)
+export const GROUND_CLEAR_AGL = 8;    // belly clearance for ground impact
+
 // wrap angle to [-PI, PI]
 export function wrapAngle(a) {
   a = (a + Math.PI) % TAU;

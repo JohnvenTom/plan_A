@@ -1,6 +1,7 @@
 // enemies.js — enemy fighters: patrol/pursue/evade state machine + wave spawner
 import * as THREE from 'three';
 import { clamp, wrapAngle } from './utils.js';
+import { GROUND_CLEAR_AGL } from './utils.js';
 import { buildJet } from './jet.js';
 import { terrainHeightAt, SEA_LEVEL } from './terrain.js';
 
@@ -93,7 +94,7 @@ class Enemy {
         ctx.effects.damageSmoke(this.obj.position, _fwd.clone().multiplyScalar(-0.3), true);
       }
       const ground = Math.max(terrainHeightAt(this.obj.position.x, this.obj.position.z), SEA_LEVEL);
-      if (this.obj.position.y < ground + 15 || this.deadTime > 7) {
+      if (this.obj.position.y < ground + GROUND_CLEAR_AGL || this.deadTime > 7) {
         this.dead = true;
         if (ctx && ctx.effects) ctx.effects.explosion(this.obj.position, 1.4);
         if (ctx && ctx.onKill) ctx.onKill(this, true);

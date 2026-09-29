@@ -3,15 +3,24 @@
 // ray; an instructor steers pitch/roll/yaw to chase it, banking into turns and
 // leveling the wings when the cursor recenters. A/D/Q/E remain manual overrides.
 import * as THREE from 'three';
-import { clamp, damp, lerp } from './utils.js';
+import { clamp, damp } from './utils.js';
+import { GROUND_CLEAR_AGL } from './utils.js';
 import { buildJet } from './jet.js';
 import { terrainHeightAt, SEA_LEVEL } from './terrain.js';
 
-const MIN_SPEED = 110, MAX_SPEED = 560, BOOST_SPEED = 680;
 const COMBAT_RADIUS = 14000;   // meters from world center
 const AIM_DIST = 4000;         // draw/projection distance for the aim point
 const AIM_SENS = 0.0013;       // rad per mouse px
-const AIM_MAX_OFF = 70 * Math.PI / 180;   // aim clamped to 70 deg of camera boresight
+
+// --- energy flight model (arcade but with real trade-offs) ---
+const THRUST_MAX = 9.0;        // m/s^2 full dry throttle at sea level
+const BURNER_EXTRA = 8.0;      // afterburner adds this much
+const K_PARASITE = 2.96e-5;    // parasite drag: a = k * rho * v^2
+const K_INDUCED = 2.2e4;       // induced drag:  a = k * G^2 / v^2 (capped)
+const INDUCED_CAP = 25;        // m/s^2 cap so deep stalls stay recoverable
+const G_CAP = 16;              // instructor G limit (arcade-high)
+const ROLL_RATE = 4.5;         // rad/s at adequate speed (~258 deg/s)
+const MIN_SPEED = 85, MAX_SPEED = 720;
 
 export class Player {
   constructor(scene, camera) {
@@ -29,6 +38,10 @@ export class Player {
     this.outOfAreaTime = 0;          // seconds spent beyond COMBAT_RADIUS
     this.hitFlash = 0;
     this.camShake = 0;
+    this.gLoad = 1;                  // smoothed G (HUD + induced drag)
+    this.boosting = false;
+    this._lastFwd = new THREE.Vector3(0, 0, -1);
+    this._lastFwdSet = false;
     this.ctl = { pitch: 0, roll: 0, yaw: 0 };   // last instructor outputs (-1..1)
     this.aimDir = new THREE.Vector3(0, 0, -1);  // WORLD-ANCHORED aim direction
     this._keyOverride = 0;   // manual roll override (-1..1, while A/D held)
@@ -60,6 +73,8 @@ export class Player {
     this.hitFlash = 0;
     this.speed = 240;
     this.throttle = 0.65;
+    this.gLoad = 1;
+    this._lastFwdSet = false;
     this.ctl = { pitch: 0, roll: 0, yaw: 0 };
     this.obj.position.set(0, 2600, 9000);
     this.obj.quaternion.identity();
@@ -160,12 +175,20 @@ export class Player {
     this.ctl.yaw = yawIn;
     this.aimLocal = { x: Math.round(offH * 1000) / 1000, y: Math.round(offV * 1000) / 1000, z: Math.round(this._vTmp.z * 1000) / 1000 };
 
-    // apply with the same rate authority as manual flight
-    const spdFac = clamp((this.speed - 85) / 240, 0.3, 1);
+    // apply with speed-dependent authority:
+    //  - pitch is G-limited (fast planes turn wide) and mushy when slow
+    //  - roll is fast, tapering only near stall
+    //  - a deep stall pushes the nose down gently
+    const mush = clamp((this.speed - 90) / 130, 0.3, 1);
+    const maxPitch = Math.min(1.35 * mush, G_CAP * 9.81 / Math.max(this.speed, 120));
+    const maxRoll = ROLL_RATE * clamp(this.speed / 160, 0.55, 1);
+    const maxYaw = 0.5 * mush;
+    let stallDrop = 0;
+    if (this.speed < 125) stallDrop = (125 - this.speed) * 0.012;
     const e = this._eTmp.set(
-      pitchIn * 1.3 * spdFac * dt,
-      yawIn * 0.5 * dt,
-      rollIn * 3.0 * dt, 'XYZ');
+      pitchIn * maxPitch * dt - stallDrop * dt,
+      yawIn * maxYaw * dt,
+      rollIn * maxRoll * dt, 'XYZ');
     this._qTmp.setFromEuler(e);
     this.obj.quaternion.multiply(this._qTmp).normalize();
   }
@@ -193,20 +216,32 @@ export class Player {
     if (input.down('KeyS') || input.down('ArrowDown')) this._keyPitch = 1;
     this.instructor(dt);
 
-    // ---- speed dynamics: thrust vs drag + gravity exchange ----
-    const boosting = this.throttle > 0.82;
-    const targetSpeed = lerp(MIN_SPEED, boosting ? BOOST_SPEED : MAX_SPEED, this.throttle);
-    this.speed = damp(this.speed, targetSpeed, boosting ? 0.55 : 0.85, dt);
+    // ---- speed dynamics: energy model ----
+    // thrust falls with air density; parasite drag grows with v^2; induced
+    // drag grows with G^2/v^2 (hard pulls BLEED speed); gravity trades with
+    // climb/dive. Boost flag drives the afterburner visuals.
+    const density = 1 - clamp(this.obj.position.y / 15000, 0, 1) * 0.6;
+    const burnerFrac = this.throttle > 0.82 ? (this.throttle - 0.82) / 0.18 : 0;
+    this.boosting = burnerFrac > 0.1;
+    const thrust = (this.throttle * this.throttle * THRUST_MAX + burnerFrac * BURNER_EXTRA) * density;
     this.forward(this._vTmp);
-    this.speed -= this._vTmp.y * 9.8 * dt * 1.35;      // dive faster, climb slower
-    this.speed = clamp(this.speed, 85, 720);
+    // G-load from the actual nose rotation this frame (1 G baseline)
+    const angVel = this._lastFwdSet ? this._lastFwd.angleTo(this._vTmp) / Math.max(dt, 1e-4) : 0;
+    this.gLoad = damp(this.gLoad, 1 + angVel * this.speed / 9.81, 6, dt);
+    this._lastFwd.copy(this._vTmp);
+    this._lastFwdSet = true;
+    const v2 = Math.max(10000, this.speed * this.speed);
+    const induced = Math.min(K_INDUCED * this.gLoad * this.gLoad / v2, INDUCED_CAP);
+    const drag = K_PARASITE * density * this.speed * this.speed + induced;
+    this.speed += (thrust - drag - 9.81 * this._vTmp.y) * dt;
+    this.speed = clamp(this.speed, MIN_SPEED, MAX_SPEED);
 
     // ---- integrate ----
     this.obj.position.addScaledVector(this._vTmp, this.speed * dt);
 
     // ---- terrain & limits ----
     const ground = Math.max(terrainHeightAt(this.obj.position.x, this.obj.position.z), SEA_LEVEL);
-    if (this.obj.position.y < ground + 7) {
+    if (this.obj.position.y < ground + GROUND_CLEAR_AGL) {
       this.applyDamage(999);   // crash
       this.crashed = true;
     }
@@ -230,7 +265,7 @@ export class Player {
     }
 
     // afterburner visual
-    const abVis = boosting && this.speed > 260;
+    const abVis = this.boosting && this.speed > 260;
     for (const ab of this.model.afterburners) {
       ab.visible = abVis;
       if (abVis) {

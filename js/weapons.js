@@ -1,6 +1,7 @@
 // weapons.js — guns (tracer pool + segment collision) and lock-on homing missiles
 import * as THREE from 'three';
 import { clamp } from './utils.js';
+import { AIRCRAFT_HIT_R, MISSILE_FUSE_R } from './utils.js';
 import { terrainHeightAt, SEA_LEVEL } from './terrain.js';
 
 const _v = new THREE.Vector3();
@@ -267,7 +268,7 @@ export class Weapons {
         _v.copy(r.pos).sub(r.prev).divideScalar(segLen);
         const tProj = clamp(_v2.dot(_v), 0, segLen);
         const closest = _v2.copy(r.prev).addScaledVector(_v, tProj).sub(t.position);
-        if (closest.lengthSq() < 12 * 12) {
+        if (closest.lengthSq() < AIRCRAFT_HIT_R * AIRCRAFT_HIT_R) {
           hit = true;
           if (r.fromPlayer) {
             const killed = t.applyDamage(r.dmg);
@@ -312,8 +313,7 @@ export class Weapons {
       // proximity fuse
       let boom = false, boomPos = ms.pos.clone();
       if (ms.target && !ms.target.dying && ms.target.alive !== false) {
-        const fuse = ms.target === player ? 30 : 26;
-        if (ms.pos.distanceToSquared(ms.target.position) < fuse * fuse) {
+        if (ms.pos.distanceToSquared(ms.target.position) < MISSILE_FUSE_R * MISSILE_FUSE_R) {
           boom = true;
           if (ms.fromPlayer) {
             const killed = ms.target.applyDamage(60);
