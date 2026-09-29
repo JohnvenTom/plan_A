@@ -127,8 +127,8 @@ export function buildOcean(scene) {
       uSunDir: { value: new THREE.Vector3(0, 0.3, -1) },
       uCamPos: { value: new THREE.Vector3() },
       uTime: { value: 0 },
-      uFogColor: { value: new THREE.Color(0.72, 0.60, 0.47) },
-      uFogDensity: { value: 0.000042 },
+      uFogColor: { value: new THREE.Color(0.70, 0.56, 0.42) },
+      uFogDensity: { value: 0.000034 },
     },
   });
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(46000, 46000), mat);

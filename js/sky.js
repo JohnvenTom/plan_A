@@ -26,10 +26,10 @@ void main() {
   float sunAmt = clamp(dot(d, s), 0.0, 1.0);
 
   // --- authored gradient (all values scene-linear) ---
-  vec3 zenith   = vec3(0.075, 0.19, 0.48);
-  vec3 mid      = vec3(0.28, 0.46, 0.78);
+  vec3 zenith   = vec3(0.045, 0.13, 0.40);
+  vec3 mid      = vec3(0.22, 0.38, 0.70);
   // horizon gets warmer the lower the sun
-  vec3 horizon  = mix(vec3(0.82, 0.80, 0.72), vec3(1.10, 0.66, 0.36), uSunElev);
+  vec3 horizon  = mix(vec3(0.82, 0.80, 0.72), vec3(1.30, 0.68, 0.32), uSunElev);
 
   float upness = clamp(h, 0.0, 1.0);
   vec3 col = mix(mid, zenith, pow(upness, 0.9));
@@ -41,9 +41,9 @@ void main() {
   col += vec3(1.15, 0.62, 0.30) * pow(sunAmt, 7.0)  * 0.42;
   col += vec3(1.30, 0.86, 0.55) * pow(sunAmt, 48.0) * 1.10;
 
-  // --- sun disc, ~0.4 deg with soft limb (HDR value -> ACES rolls it off) ---
+  // --- sun disc, ~0.8 deg with soft limb (HDR value -> ACES rolls it off) ---
   float cosA = dot(d, s);
-  float disc = smoothstep(0.999972, 0.999991, cosA);
+  float disc = smoothstep(0.99988, 0.99994, cosA);
   col += vec3(46.0, 33.0, 20.0) * disc;
 
   // below-horizon fade into sea haze so the dome meets the ocean cleanly
@@ -151,14 +151,14 @@ export class Sky {
     this.cloudHigh = deck(4200, 4.2, 0.58, 0.0021, [1.45, 1.32, 1.20], [0.62, 0.62, 0.70], 0.7);
 
     // --- lighting: sun + sky hemisphere, one shared direction ---
-    this.sun = new THREE.DirectionalLight(0xffd9a8, 2.6);
+    this.sun = new THREE.DirectionalLight(0xffd9a8, 2.9);
     this.sun.position.copy(this.sunDir).multiplyScalar(10000);
     scene.add(this.sun);
-    this.hemi = new THREE.HemisphereLight(0x9db8e8, 0x8a6f52, 0.9);
+    this.hemi = new THREE.HemisphereLight(0x9db8e8, 0x9a7350, 1.3);
     scene.add(this.hemi);
 
     // --- distance haze (FogExp2), color = horizon band average ---
-    scene.fog = new THREE.FogExp2(new THREE.Color(0.72, 0.60, 0.47), 0.000042);
+    scene.fog = new THREE.FogExp2(new THREE.Color(0.70, 0.56, 0.42), 0.000034);
     this.cloudTime = 0;
   }
 

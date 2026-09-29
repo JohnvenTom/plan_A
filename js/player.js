@@ -155,6 +155,11 @@ export class Player {
 
     const look = this._v2.set(0, 1.6, -42).applyQuaternion(this.obj.quaternion).add(this.obj.position);
     if (!this._camInit) this.camLook.copy(look);
+    else {
+      this.camLook.x = damp(this.camLook.x, look.x, 12, dt);
+      this.camLook.y = damp(this.camLook.y, look.y, 12, dt);
+      this.camLook.z = damp(this.camLook.z, look.z, 12, dt);
+    }
 
     // camera up: blend world up with jet up so banks read on screen
     this.upVec(this._vTmp);

@@ -148,12 +148,12 @@ export class Effects {
 
   missileTrail(pos, vel) {
     this.spawn(this.smoke, {
-      pos, vel, life: 1.5 + this.rng() * 0.4, drag: 0.92, gravity: -1.5, turb: 1.4,
-      c0: [0.82, 0.80, 0.78], c1: [0.55, 0.54, 0.53], a0: 0.5, a1: 0,
-      s0: 2.0, s1: 13,
+      pos, vel, life: 1.9 + this.rng() * 0.5, drag: 0.92, gravity: -1.2, turb: 1.2,
+      c0: [0.88, 0.86, 0.84], c1: [0.55, 0.54, 0.53], a0: 0.62, a1: 0,
+      s0: 3.2, s1: 26,
     });
     this.spawn(this.add, {
-      pos, life: 0.06, c0: [3.0, 1.6, 0.5], c1: [1.0, 0.4, 0.1], s0: 5, s1: 2,
+      pos, life: 0.07, c0: [3.2, 1.9, 0.7], c1: [1.2, 0.5, 0.1], s0: 8, s1: 3,
     });
   }
 
