@@ -160,9 +160,6 @@ export class Input {
     return code.startsWith('Mouse') ? this.mouseJust[+code.slice(5)] : this.justPressed.has(code);
   }
 
-  // raw e.code passthrough for fixed UI keys (Enter, Escape)
-  pressedRaw(code) { return this.justPressed.has(code); }
-
   mouse(btn) { return this.mouseDown[btn]; }
   mousePressed(btn) { return this.mouseJust[btn]; }
 

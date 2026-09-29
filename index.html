@@ -48,6 +48,39 @@
     position: fixed; inset: 0; pointer-events: none; z-index: 5; opacity: 0;
     background: radial-gradient(ellipse at center, transparent 40%, rgba(255, 30, 10, .45));
   }
+  #bind-entry {
+    position: fixed; left: 14px; bottom: 12px; z-index: 8;
+    font-family: Consolas, monospace; font-size: 12px; letter-spacing: .2em;
+    color: #8fe0ff; opacity: .55; cursor: pointer; pointer-events: auto;
+    border: 1px solid rgba(143,224,255,.3); padding: 5px 12px; border-radius: 4px;
+    background: rgba(8, 16, 34, .5);
+  }
+  #bind-entry:hover { opacity: 1; }
+  #bindings { z-index: 20; pointer-events: auto; justify-content: flex-start; padding-top: 7vh; overflow-y: auto; }
+  #bindings .panel {
+    background: rgba(8, 18, 38, .92); border: 1px solid rgba(120, 180, 255, .35);
+    border-radius: 8px; padding: 26px 40px; min-width: 420px;
+  }
+  #bindings h2 {
+    font-family: Consolas, monospace; color: #ffe9c4; letter-spacing: .3em;
+    font-size: 22px; margin-bottom: 4px;
+  }
+  #bindings .hint { color: #9fd0ff; font-size: 12px; margin-bottom: 18px; letter-spacing: .1em; }
+  .bind-row {
+    display: grid; grid-template-columns: 1fr 130px 90px; gap: 10px; align-items: center;
+    padding: 7px 10px; border-radius: 4px; font-size: 14px; color: #cfe3ff;
+  }
+  .bind-row:nth-child(odd) { background: rgba(120, 180, 255, .06); }
+  .bind-row .key {
+    font-family: Consolas, monospace; text-align: center; color: #ffe9c4;
+    border: 1px solid rgba(255, 200, 102, .35); border-radius: 4px; padding: 3px 0;
+    cursor: pointer;
+  }
+  .bind-row .key:hover, .bind-row .key.wait { border-color: #ffe9c4; background: rgba(255,200,102,.12); }
+  .bind-actions { margin-top: 18px; display: flex; gap: 22px; justify-content: center;
+    font-size: 13px; letter-spacing: .15em; }
+  .bind-actions span { color: #9fd0ff; cursor: pointer; }
+  .bind-actions span:hover { color: #fff; }
 </style>
 <script type="importmap">
   { "imports": { "three": "./vendor/three.module.js" } }
@@ -57,6 +90,19 @@
   <canvas id="gl"></canvas>
   <canvas id="hud"></canvas>
   <div class="screen-flash" id="flash"></div>
+  <div id="bind-entry">键位设置</div>
+
+  <div class="overlay hidden" id="bindings">
+    <div class="panel">
+      <h2>CONTROLS</h2>
+      <div class="hint">键位设置 — 点击按键框后按下新的键或鼠标键 · 鼠标移动/滚轮固定用于瞄准与油门</div>
+      <div id="bind-rows"></div>
+      <div class="bind-actions">
+        <span id="bind-reset">恢复默认</span>
+        <span id="bind-close">关闭 (ESC)</span>
+      </div>
+    </div>
+  </div>
 
   <div class="overlay" id="title">
     <div class="title-en">SKY BARONESS</div>
@@ -64,9 +110,10 @@
     <div class="mission">OPERATION GOLDEN HOUR — 拦截入侵机群</div>
     <div class="controls">
       <span><b>鼠标</b> 引导圈+视角跟随鼠标指向,机头自动追圈</span><span><b>左键</b> 机炮</span>
-      <span><b>右键</b> 发射导弹(需锁定)</span><span><b>W / S</b> 推杆俯冲 / 拉杆爬升</span>
-      <span><b>Shift / Ctrl / 滚轮</b> 油门增减</span><span><b>A / D</b> 手动横滚(覆盖)</span>
-      <span><b>Q / E</b> 方向舵</span><span><b>C</b> 切换视角 · <b>P / ESC</b> 暂停</span>
+      <span><b>右键</b> 发射导弹(需锁定)</span><span><b>中键</b> 热诱弹(方向影响成功率)</span>
+      <span><b>W / S</b> 推杆俯冲 / 拉杆爬升</span><span><b>Shift / Ctrl / 滚轮</b> 油门</span>
+      <span><b>A / D</b> 手动横滚(覆盖)</span><span><b>Q / E</b> 方向舵</span>
+      <span><b>C</b> 切换视角</span><span><b>P / ESC</b> 暂停 · 左下角可自定义键位</span>
     </div>
     <div class="start-hint">— 按 回车 或 点击 开始任务 —</div>
   </div>

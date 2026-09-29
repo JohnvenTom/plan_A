@@ -129,7 +129,7 @@ class Enemy {
     }
 
     // --- aim direction per state ---
-    let targetSpeed = 300;
+    let targetSpeed = 250;
     if (this.state === 'dodgeMissile') {
       // beam the missile: fly perpendicular to its approach, vary the side
       const mDir = _tmp.copy(b.pos);
@@ -139,7 +139,7 @@ class Enemy {
       _aim.copy(mDir).cross(_fwd.set(0, 1, 0)).normalize().multiplyScalar(side);
       _aim.y = -0.15;
       _aim.normalize();
-      targetSpeed = 370;
+      targetSpeed = 330;
       this.flareT -= dt;
       if (this.flareT <= 0 && this.flareCount > 0) {
         this.flareT = 0.45;
@@ -148,10 +148,10 @@ class Enemy {
       }
     } else if (this.state === 'extend') {
       _aim.copy(this.extDir).normalize();
-      targetSpeed = 360;
+      targetSpeed = 300;
     } else if (this.state === 'evade') {
       _aim.copy(this.evadeDir);
-      targetSpeed = 340;
+      targetSpeed = 320;
     } else if (this.state === 'pursue') {
       // lead pursuit using the player's true velocity vector
       const tLead = clamp(dist / 800, 0, 2.0);
@@ -163,7 +163,7 @@ class Enemy {
         const w = Math.sin(this.stateTime * this.jinkFreq + this.jinkPhase);
         _aim.addScaledVector(_fwd, w * 0.28).addScaledVector(_tmp, Math.sin(this.stateTime * this.jinkFreq * 0.7) * 0.14).normalize();
       }
-      targetSpeed = dist < 700 ? 230 : dist < 1500 ? 290 : 380;   // close the gap hard, then settle
+      targetSpeed = dist < 900 ? 230 : 270;
     } else {
       if (b.pos.distanceTo(this.wp) < 700 || this.stateTime > 12) { this.pickWaypoint(player.position); this.stateTime = 0; }
       _aim.copy(this.wp).sub(b.pos).normalize();

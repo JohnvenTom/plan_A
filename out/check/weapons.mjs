@@ -213,8 +213,7 @@ export class Weapons {
     ms.target = best;
   }
 
-  // ---------- lock-on ----------
-  updateLock(dt, player, enemies) {
+  // ---------- lock-on ----------  updateLock(dt, player, enemies) {
     const ls = this.lockState;
     const fwd = player.forward(new THREE.Vector3());
     let best = null, bestDot = 0.905;   // ~25 deg cone

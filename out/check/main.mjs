@@ -38,7 +38,6 @@ const enemies = new EnemyManager(scene);
 const hud = new HUD(document.getElementById('hud'));
 window.__hud = hud;   // debug hook
 window.__weapons = weapons;   // debug hook
-window.__player = player;     // debug hook
 const audio = new GameAudio();
 const input = new Input();
 weapons.playerRef = player;
@@ -282,7 +281,7 @@ function frame() {
   const dt = Math.min(clock.getDelta(), 0.05);
 
   if (G.state === 'title') {
-    if (input.pressedRaw('Enter') || input.mousePressed(0)) startGame();
+    if (input.pressed('Enter') || input.mousePressed(0)) startGame();
     // idle orbit so the title screen isn't static
     G.time += dt;
     const a = G.time * 0.05;
@@ -298,8 +297,8 @@ function frame() {
     effects.update(dt);
     hud.draw(dt, { state: 'title' });
   } else {
-    if (G.state === 'gameover' && input.pressedRaw('Enter')) { startGame(); }
-    else if (G.state === 'playing' && input.pressed('pause')) setPaused(!G.paused);
+    if (G.state === 'gameover' && input.pressed('Enter')) { startGame(); }
+    else if (G.state === 'playing' && (input.pressed('pause') || (input.pressed('Escape') && !G.menuOpen))) setPaused(!G.paused);
     update(dt);
     renderer.render(scene, camera);
     renderHUD();
@@ -330,10 +329,9 @@ function frame() {
         enemies: enemies.enemies.map(e => ({
           hp: Math.round(e.hp), dying: e.dying, state: e.state,
           dist: Math.round(e.position.distanceTo(player.position)),
-          v: Math.round(e.speed), thr: Math.round(e.body.throttle * 100) / 100,
         })),
         missiles: weapons.missiles.map(m => ({ fromPlayer: m.fromPlayer, age: Math.round(m.life * 10) / 10 })),
-        lock: weapons.lockState.locked, lockProg: Math.round(weapons.lockState.progress * 100) / 100, ammo: weapons.ammo,
+        lock: weapons.lockState.locked, ammo: weapons.ammo,
         enemyScreens: enemies.enemies.slice(0, 5).map(e => {
           _v2.copy(e.position).project(camera);
           return [Math.round((_v2.x * 0.5 + 0.5) * 1000) / 1000, Math.round((-_v2.y * 0.5 + 0.5) * 1000) / 1000, _v2.z < 1];
@@ -417,13 +415,9 @@ document.getElementById('bind-reset').addEventListener('click', () => {
   input.resetDefaults();
   renderBindings();
 });
-// ESC: closes the menu, otherwise toggles pause (when the pointer lock
-// consumes ESC, the pointerlockchange handler pauses instead)
+// ESC closes the menu (also cancels an in-progress capture)
 addEventListener('keydown', e => {
-  if (e.code === 'Escape') {
-    if (G.menuOpen) closeMenu();
-    else if (G.state === 'playing') setPaused(!G.paused);
-  }
+  if (e.code === 'Escape' && G.menuOpen) { closeMenu(); }
 });
 
 addEventListener('resize', () => {
