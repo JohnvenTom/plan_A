@@ -3,7 +3,7 @@
 // ray; an instructor steers pitch/roll/yaw to chase it, banking into turns and
 // leveling the wings when the cursor recenters. A/D/Q/E remain manual overrides.
 import * as THREE from 'three';
-import { clamp, damp, lerp, smoothstep } from './utils.js';
+import { clamp, damp, lerp } from './utils.js';
 import { buildJet } from './jet.js';
 import { terrainHeightAt, SEA_LEVEL } from './terrain.js';
 
@@ -34,6 +34,7 @@ export class Player {
     this._keyOverride = 0;   // manual roll override (-1..1, while A/D held)
     this._keyYaw = 0;        // manual rudder (-1..1, while Q/E held)
     this._keyPitch = 0;      // manual elevator (-1 push/dive, +1 pull/climb, W/S)
+    this._phiSign = 1;       // remembered roll direction through the atan2 singularity
 
     this._qTmp = new THREE.Quaternion();
     this._qInv = new THREE.Quaternion();
@@ -125,13 +126,29 @@ export class Player {
       rollIn = clamp(-bankErr * 2.0, -0.5, 0.5);
       pitchIn = clamp(offV * 2.0, -0.25, 0.25);
       yawIn = clamp(-offH * 0.9, -0.22, 0.22);
+    } else if (mag < 0.2 && offV < -0.02) {
+      // aim just below the nose: pushing down is cheaper than a 180 deg roll
+      rollIn = clamp(-bankErr * 1.5, -0.4, 0.4);
+      pitchIn = clamp(offV * 1.8, -0.5, 0);
     } else {
-      // bank toward the aim; the turn bias fades out near alignment so the
-      // nose settles instead of limit-cycling around the aim direction
-      const bias = Math.sign(offH) * 0.14 * smoothstep(0.06, 0.25, Math.abs(offH));
-      rollIn = clamp(-offH * 2.2 - bias, -1, 1);
-      pitchIn = clamp(offV * 2.2 + Math.abs(offH) * 0.8, -0.6, 1);
-      yawIn = clamp(-offH * 0.4, -0.3, 0.3);
+      // WT instructor: ROLL FIRST, THEN PULL.
+      // Roll nulls the aim's bearing from plane-up (atan2(offH, offV)), which
+      // puts the aim directly "above" the nose in the plane frame; then a pure
+      // pull sweeps the nose onto it along the lift circle. NO rudder in the
+      // turn — stepping into it skids the nose and worsens the drift.
+      let phi;
+      if (offV < 0 && Math.abs(offH) < 0.04) {
+        phi = (this._phiSign || 1) * Math.PI;   // hold roll direction through the singularity
+      } else {
+        this._phiSign = offH >= 0 ? 1 : -1;
+        phi = Math.atan2(offH, offV);
+      }
+      rollIn = clamp(-phi * 1.4, -1, 1);
+      // pull only as the aim comes "above" the nose (offV): while rolling,
+      // offV ~ 0 -> almost no pull; once aligned it ramps in. This is the
+      // roll-FIRST-then-pull geometry and keeps the nose from sliding past.
+      pitchIn = clamp(Math.max(0, offV) * 1.6, 0.08, 1);
+      yawIn = 0;
     }
 
     // manual overrides (keyboard authority while held)
