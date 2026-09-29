@@ -262,6 +262,10 @@ function freezeFrame() {
       hasTarget: !!m.target,
     })),
     lock: weapons.lockState.locked,
+    enemyScreens: enemies.enemies.slice(0, 5).map(e => {
+      _v2.copy(e.position).project(camera);
+      return [Math.round((_v2.x * 0.5 + 0.5) * 1000) / 1000, Math.round((-_v2.y * 0.5 + 0.5) * 1000) / 1000, _v2.z < 1];
+    }),
     ammo: weapons.ammo,
     playerPos: [Math.round(player.position.x), Math.round(player.position.y), Math.round(player.position.z)],
     playerAlive: player.alive,
@@ -301,6 +305,9 @@ function frame() {
         hp: Math.round(player.hp), speed: Math.round(player.speed),
         alt: Math.round(player.position.y),
         g: Math.round((player.gLoad || 1) * 10) / 10,
+        alphaDeg: Math.round((player.alpha || 0) * 573) / 10,
+        noseDeg: (() => { player.forward(_v2); return Math.round(Math.asin(clamp(_v2.y, -1, 1)) * 573) / 10; })(),
+        omegaX: Math.round(player.body.omega.x * 100) / 100,
         boosting: !!player.boosting,
         ctlPitch: player.ctl.pitch, thr: Math.round(player.throttle * 100) / 100,
         heading: Math.round(player.headingDeg * 10) / 10,
@@ -322,6 +329,10 @@ function frame() {
         })),
         missiles: weapons.missiles.map(m => ({ fromPlayer: m.fromPlayer, age: Math.round(m.life * 10) / 10 })),
         lock: weapons.lockState.locked, ammo: weapons.ammo,
+        enemyScreens: enemies.enemies.slice(0, 5).map(e => {
+          _v2.copy(e.position).project(camera);
+          return [Math.round((_v2.x * 0.5 + 0.5) * 1000) / 1000, Math.round((-_v2.y * 0.5 + 0.5) * 1000) / 1000, _v2.z < 1];
+        }),
         gunRounds: weapons.rounds.length, gunHeat: Math.round(weapons.gunHeat * 100) / 100,
         audio: audio.ctx ? {
           state: audio.ctx.state,

@@ -6,6 +6,7 @@ const CYAN = '#8fe0ff';
 const CYAN_DIM = 'rgba(143,224,255,0.55)';
 const RED = '#ff5a4a';
 const AMBER = '#ffc866';
+const _hv = new THREE.Vector3();
 
 export class HUD {
   constructor(canvas) {
@@ -117,9 +118,11 @@ export class HUD {
     this.line(tbx, cy + boxH / 2, tbx, cy - boxH / 2, CYAN_DIM, 1);
     const ty = cy + boxH / 2 - p.throttle * boxH;
     this.line(tbx - 4, ty, tbx + 4, ty, p.boosting ? AMBER : CYAN, 3);
-    // G readout (warmed by the energy model: hard pulls bleed speed)
+    // G + AOA readouts (lift G and angle of attack from the flight body)
     this.text(`G ${p.gLoad.toFixed(1)}`, sx + 2, cy + boxH / 2 + 16, 13,
       p.gLoad > 12 ? RED : p.gLoad > 7 ? AMBER : CYAN_DIM);
+    this.text(`α ${(p.alpha * 57.3).toFixed(1)}°`, sx + 2, cy + boxH / 2 + 34, 12,
+      Math.abs(p.alpha) > 0.24 ? AMBER : CYAN_DIM);
     // altitude (right)
     const ax = cx + 250 - boxW / 2;
     this.strokeRect(ax, cy - boxH / 2, boxW, boxH, CYAN);
@@ -151,8 +154,10 @@ export class HUD {
   // ---- War Thunder style: aim director circle at the mouse + flight path marker ----
   drawReticle(S) {
     const c = this.ctx;
-    // flight path marker: where the nose actually points (chases the circle)
-    const fp = S.player.position.clone().addScaledVector(S.player.forward(this._v), 2600);
+    // flight path marker: the TRUE velocity vector — with real aerodynamics the
+    // nose and the flight path separate; this marker lags the boresight by AOA
+    const fp = S.player.position.clone()
+      .addScaledVector(_hv.copy(S.player.vel).normalize(), 2600);
     const s = this.proj(fp, S.camera);
     const fpOn = !s.behind && s.x > 20 && s.x < this.w - 20 && s.y > 20 && s.y < this.h - 20;
     if (fpOn) {

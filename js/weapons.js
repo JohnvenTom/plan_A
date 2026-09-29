@@ -139,10 +139,10 @@ export class Weapons {
 
   enemyGun(enemy, player) {
     if (Math.random() < 0.35) return;   // per-frame gate -> ~9 rps
-    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(enemy.quaternion ?? enemy.obj.quaternion);
+    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(enemy.quaternion);
     const origin = enemy.position.clone().addScaledVector(fwd, 10);
     const aim = player.position.clone()
-      .addScaledVector(player.forward(new THREE.Vector3()), player.speed * 0.4)
+      .addScaledVector(player.vel, player.speed > 0 ? 0.4 : 0)
       .sub(origin).normalize();
     this.fireGun(origin, aim, 950 + enemy.speed, false, 3, 0.016);
   }
@@ -215,8 +215,8 @@ export class Weapons {
 
   enemyMissile(enemy, player) {
     const origin = enemy.position.clone().addScaledVector(
-      new THREE.Vector3(0, 0, -1).applyQuaternion(enemy.obj.quaternion), 2);
-    this.launchMissile(origin, enemy.obj.quaternion, false, player);
+      new THREE.Vector3(0, 0, -1).applyQuaternion(enemy.quaternion), 2);
+    this.launchMissile(origin, enemy.quaternion, false, player);
   }
 
   steerMissile(ms, dt) {
@@ -226,11 +226,8 @@ export class Weapons {
     if (hasTarget) {
       const dist = ms.pos.distanceTo(ms.target.position);
       const tLead = clamp(dist / 800, 0, 2.0);
-      // target velocity: enemies expose obj.quaternion, the player exposes forward()
-      const tvel = ms.target.obj
-        ? _v3.set(0, 0, -1).applyQuaternion(ms.target.obj.quaternion).multiplyScalar(ms.target.speed)
-        : this.playerRef.forward(_v3).multiplyScalar(this.playerRef.speed);
-      _v.copy(ms.target.position).addScaledVector(tvel, tLead).sub(ms.pos).normalize();
+      // both sides expose their true velocity vector on the flight body
+      _v.copy(ms.target.position).addScaledVector(ms.target.vel, tLead).sub(ms.pos).normalize();
       _m.lookAt(ms.pos, _v2.copy(ms.pos).add(_v), UP);   // -Z of the matrix faces the aim point
       _q.setFromRotationMatrix(_m);
       const maxTurn = (ms.fromPlayer ? 3.4 : 2.55) * (ms.life > 0.35 ? 1 : 0.25);

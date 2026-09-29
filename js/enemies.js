@@ -1,25 +1,28 @@
-// enemies.js — enemy fighters: patrol/pursue/evade state machine + wave spawner
+// enemies.js — enemy fighters on the SAME full-aerodynamics FlightBody as the
+// player. The AI computes a world aim direction per state; aimAt() turns the
+// stick toward it. Dying aircraft just hold hard stick and let physics spiral.
 import * as THREE from 'three';
-import { clamp, wrapAngle } from './utils.js';
+import { clamp } from './utils.js';
 import { GROUND_CLEAR_AGL } from './utils.js';
 import { buildJet } from './jet.js';
+import { FlightBody } from './flightmodel.js';
 import { terrainHeightAt, SEA_LEVEL } from './terrain.js';
 
-const _local = new THREE.Vector3();
-const _fwd = new THREE.Vector3();
+const _aim = new THREE.Vector3();
 const _tmp = new THREE.Vector3();
-const _qInv = new THREE.Quaternion();
+const _fwd = new THREE.Vector3();
 
 class Enemy {
   constructor(scene, spawnPos, heading, wave) {
     this.scene = scene;
     this.model = buildJet({ paint: 0x5a5f66, accent: 0x8f3a2e });
     scene.add(this.model.group);
-    this.obj = new THREE.Object3D();
-    this.obj.position.copy(spawnPos);
-    this.obj.rotation.y = heading;
-    this.speed = 190 + Math.random() * 60;
-    this.agility = clamp(0.75 + wave * 0.08, 0.75, 1.35);
+
+    const agility = clamp(0.75 + wave * 0.08, 0.75, 1.3);
+    this.body = new FlightBody({ power: agility, thrustMax: 8.2 });
+    this.body.setState(spawnPos, heading, 190 + Math.random() * 60);
+    this.body.throttle = 0.72;
+
     this.hp = Math.min(130, 100 + wave * 5);   // one missile (60) leaves it smoking
     this.pilotHit = false;
     this.state = 'pursue';
@@ -32,72 +35,54 @@ class Enemy {
     this.dead = false;
     this.deadTime = 0;
     this.isTarget = false;
-    this.rollRate = 0;
     this.wp = new THREE.Vector3();
     this.pickWaypoint();
   }
 
-  pickWaypoint() {
+  pickWaypoint(playerPos) {
     const a = Math.random() * Math.PI * 2;
-    const r = 1500 + Math.random() * 5000;
-    this.wp.set(Math.cos(a) * r, 1200 + Math.random() * 3200, Math.sin(a) * r);
+    const r = 1500 + Math.random() * 3500;
+    const cx = playerPos ? playerPos.x : 0;
+    const cz = playerPos ? playerPos.z : 0;
+    this.wp.set(cx + Math.cos(a) * r, 1200 + Math.random() * 3200, cz + Math.sin(a) * r);
   }
 
-  get position() { return this.obj.position; }
+  // --- delegate to the flight body ---
+  get position() { return this.body.pos; }
+  get quaternion() { return this.body.quat; }
+  get vel() { return this.body.vel; }
+  get speed() { return this.body.airspeed; }
+  forward(out) { return this.body.forward(out); }
 
   applyDamage(n) {
     if (this.dying) return false;
     this.hp -= n;
     if (this.hp <= 0) {
-      this.dying = Math.random() < 0.55;   // some spiral down, some pop
+      this.dying = Math.random() < 0.55;
       if (!this.dying) this.dead = true;
       return true;
     }
     return false;
   }
 
-  steerToward(dir, dt, rollAggr = 1.0, pitchMul = 1.0) {
-    // convert world desired-direction into local steering
-    _qInv.copy(this.obj.quaternion).invert();
-    _local.copy(dir).applyQuaternion(_qInv).normalize();
-    const yawIn = clamp(_local.x * 2.2, -1, 1);
-    const pitchIn = clamp(_local.y * 2.6, -1, 1) * pitchMul;
-    // bank into the turn, level out when aligned
-    const rollIn = clamp(yawIn * 1.6 * rollAggr - this.bankError() * 0.7, -1, 1);
-    const e = new THREE.Euler(pitchIn * 1.05 * this.agility * dt,
-                              yawIn * 0.38 * this.agility * dt,
-                              rollIn * 3.1 * this.agility * dt, 'XYZ');
-    const q = new THREE.Quaternion().setFromEuler(e);
-    this.obj.quaternion.multiply(q).normalize();
-  }
-
-  bankError() {  // roll angle away from level (roughly)
-    _fwd.set(0, 0, -1).applyQuaternion(this.obj.quaternion);
-    _tmp.set(1, 0, 0).applyQuaternion(this.obj.quaternion);
-    return _tmp.y;
-  }
-
   update(dt, player, ctx) {
     this.stateTime += dt;
-    const toPlayer = _tmp.copy(player.position).sub(this.obj.position);
-    const dist = toPlayer.length();
-    toPlayer.normalize();
+    const b = this.body;
+    b.forward(_fwd);
+    const dist = _tmp.copy(player.position).sub(b.pos).length();
 
     if (this.dying) {
       this.deadTime += dt;
-      // uncontrolled spiral
-      const e = new THREE.Euler(-0.9 * dt, 0.3 * dt, 3.4 * dt, 'XYZ');
-      this.obj.quaternion.multiply(new THREE.Quaternion().setFromEuler(e));
-      _fwd.set(0, 0, -1).applyQuaternion(this.obj.quaternion);
-      this.speed = Math.min(320, this.speed + 40 * dt);
-      this.obj.position.addScaledVector(_fwd, this.speed * dt);
+      b.ctl.pitch = -0.55; b.ctl.roll = 1; b.ctl.yaw = 0.35;
+      b.throttle = 1;
+      b.update(dt);
       if (ctx && ctx.effects && Math.random() < 0.75) {
-        ctx.effects.damageSmoke(this.obj.position, _fwd.clone().multiplyScalar(-0.3), true);
+        ctx.effects.damageSmoke(b.pos, _tmp.copy(b.vel).multiplyScalar(-0.02), true);
       }
-      const ground = Math.max(terrainHeightAt(this.obj.position.x, this.obj.position.z), SEA_LEVEL);
-      if (this.obj.position.y < ground + GROUND_CLEAR_AGL || this.deadTime > 7) {
+      const ground = Math.max(terrainHeightAt(b.pos.x, b.pos.z), SEA_LEVEL);
+      if (b.pos.y < ground + GROUND_CLEAR_AGL || this.deadTime > 9) {
         this.dead = true;
-        if (ctx && ctx.effects) ctx.effects.explosion(this.obj.position, 1.4);
+        if (ctx && ctx.effects) ctx.effects.explosion(b.pos, 1.4);
         if (ctx && ctx.onKill) ctx.onKill(this, true);
       }
       this.syncModel();
@@ -105,11 +90,11 @@ class Enemy {
     }
 
     // --- state selection ---
-    const behindDot = toPlayer.dot(player.forward(_fwd.set(0, 0, -1))) ; // player's forward vs enemy direction
-    const playerAimingAtMe = player.forward(new THREE.Vector3()).dot(toPlayer.clone().negate()) > 0.94 && dist < 1300;
+    const playerAimingAtMe = player.alive &&
+      player.forward(_tmp).dot(_aim.copy(b.pos).sub(player.position).normalize()) > 0.94 && dist < 1300;
     if (this.state === 'evade') {
       if (this.stateTime > 2.6 + (this.seedH ?? 0.9)) { this.state = 'pursue'; this.stateTime = 0; }
-    } else if (playerAimingAtMe && Math.random() < 0.9) {
+    } else if (playerAimingAtMe) {
       this.state = 'evade';
       this.stateTime = 0;
       this.seedH = Math.random() * 1.2;
@@ -121,42 +106,39 @@ class Enemy {
       this.state = 'pursue';
     }
 
-    // --- steering by state ---
+    // --- aim direction per state ---
+    let targetSpeed = 250;
     if (this.state === 'evade') {
-      this.steerToward(this.evadeDir, dt, 1.4, 1.25);
-      this.speed = Math.min(330, this.speed + 55 * dt);
+      _aim.copy(this.evadeDir);
+      targetSpeed = 320;
     } else if (this.state === 'pursue') {
-      // lead pursuit: aim ahead of the player's motion
-      const lead = _local.copy(player.position).addScaledVector(player.forward(new THREE.Vector3()), player.speed * 0.55);
-      _tmp.copy(lead).sub(this.obj.position).normalize();
-      this.steerToward(_tmp, dt, 1.0);
-      this.speed += (dist < 900 ? -30 : 35) * dt;
+      // lead pursuit using the player's true velocity vector
+      const tLead = clamp(dist / 800, 0, 2.0);
+      _aim.copy(player.position).addScaledVector(player.vel, tLead).sub(b.pos).normalize();
+      targetSpeed = dist < 900 ? 230 : 270;
     } else {
-      if (this.obj.position.distanceTo(this.wp) < 700 || this.stateTime > 12) { this.pickWaypoint(); this.stateTime = 0; }
-      _tmp.copy(this.wp).sub(this.obj.position).normalize();
-      this.steerToward(_tmp, dt, 0.7);
-      this.speed += 20 * dt;
+      if (b.pos.distanceTo(this.wp) < 700 || this.stateTime > 12) { this.pickWaypoint(player.position); this.stateTime = 0; }
+      _aim.copy(this.wp).sub(b.pos).normalize();
+      targetSpeed = 230;
     }
-    this.speed = clamp(this.speed, 130, 340);
 
     // --- ground avoidance override ---
-    const ground = Math.max(terrainHeightAt(this.obj.position.x, this.obj.position.z), SEA_LEVEL);
-    const agl = this.obj.position.y - ground;
-    if (agl < 420) {
-      const climb = _tmp.set(this.obj.position.x - 500, this.obj.position.y + 3000, this.obj.position.z - 500).sub(this.obj.position).normalize();
-      this.steerToward(climb, dt, 0.5, 1.0);
+    const ground = Math.max(terrainHeightAt(b.pos.x, b.pos.z), SEA_LEVEL);
+    if (b.pos.y - ground < 450) {
+      _aim.set(b.pos.x - _fwd.x * 800, b.pos.y + 3500, b.pos.z - _fwd.z * 800).sub(b.pos).normalize();
     }
 
-    // --- integrate ---
-    _fwd.set(0, 0, -1).applyQuaternion(this.obj.quaternion);
-    this.obj.position.addScaledVector(_fwd, this.speed * dt);
+    b.aimAt(_aim);
+    b.throttle = clamp(0.5 + (targetSpeed - b.airspeed) * 0.008, 0.15, 1);
+    b.burner = 0;
+    b.update(dt);
 
     // --- weapons ---
     this.fireCooldown -= dt;
     this.missileCooldown -= dt;
     if (!player.alive) return this.syncModel();
-    const aimDot = _fwd.dot(toPlayer);
-    if (this.state === 'pursue' && dist < 1100 && aimDot > 0.990 && this.fireCooldown <= 0) {
+    const aimDot = b.forward(_fwd).dot(_tmp.copy(player.position).sub(b.pos).normalize());
+    if (this.state === 'pursue' && dist < 1100 && aimDot > 0.988 && this.fireCooldown <= 0) {
       this.gunBurst = 0.5;
       this.fireCooldown = 1.6 + Math.random() * 2.2;
     }
@@ -172,8 +154,9 @@ class Enemy {
   }
 
   syncModel() {
-    this.model.group.position.copy(this.obj.position);
-    this.model.group.quaternion.copy(this.obj.quaternion);
+    this.model.group.position.copy(this.body.pos);
+    this.model.group.quaternion.copy(this.body.quat);
+    if (this.model.setControlSurfaces) this.model.setControlSurfaces(this.body.ctl);
   }
 
   dispose() {
