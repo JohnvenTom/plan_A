@@ -290,12 +290,16 @@ export class HUD {
       }
     }
 
-    // lock-on ring rides the flight path marker (the nose chases the circle)
+    // lock ring rides the LOCKED TARGET itself (head-sight lock: it sits
+    // wherever the target is, not on the flight path marker)
     const ls = S.weapons.lockState;
-    if (ls.target && fpOn) {
-      const r = 46 - ls.progress * 30;
-      this.circle(s.x, s.y, Math.max(10, r), ls.locked ? RED : AMBER, ls.locked ? 2.5 : 2);
-      this.text(ls.locked ? 'LOCK' : '...', s.x, s.y + 62, 14, ls.locked ? RED : AMBER, 'center');
+    if (ls.target) {
+      const tp = this.proj(ls.target.position, S.camera);
+      if (!tp.behind) {
+        const r = 46 - ls.progress * 30;
+        this.circle(tp.x, tp.y, Math.max(10, r), ls.locked ? RED : AMBER, ls.locked ? 2.5 : 2);
+        this.text(ls.locked ? 'LOCK' : '...', tp.x, tp.y + 62, 14, ls.locked ? RED : AMBER, 'center');
+      }
     }
   }
 

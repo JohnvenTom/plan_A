@@ -15,7 +15,7 @@ export const DEFAULT_BINDINGS = {
   fireMissile: 'Mouse2',
   flares: 'Mouse1',        // 干扰弹(热诱弹/箔条自动识别)默认鼠标中键
   cycleMissile: 'KeyR',    // 切换红外弹/雷达弹
-  cycleTarget: 'KeyX',     // 切换锁定目标
+  cycleTarget: 'KeyX',     // 头瞄锁定(引导圈瞄准+X尝试锁定)
   freeLook: 'KeyC',        // 长按自由视角(鼠标环视)
   camera: 'KeyV',          // 切换视角档位
   zoom: 'KeyZ',            // 放大
@@ -28,7 +28,7 @@ export const ACTION_LABELS = {
   rudderLeft: '左方向舵', rudderRight: '右方向舵',
   throttleUp: '油门+', throttleDown: '油门-',
   fireGun: '机炮', fireMissile: '导弹', flares: '干扰弹(诱弹/箔条)',
-  cycleMissile: '切换弹种(红外/雷达)', cycleTarget: '切换锁定目标',
+  cycleMissile: '切换弹种(红外/雷达)', cycleTarget: '头瞄锁定',
   freeLook: '自由视角(长按)', camera: '切换视角档位', zoom: '放大',
   pause: '暂停',
 };

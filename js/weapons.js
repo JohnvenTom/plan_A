@@ -216,25 +216,32 @@ export class Weapons {
     return decoyed;
   }
 
-  // X key: cycle the lock target through valid enemies (sorted by nose angle)
-  cycleTarget(player, enemies) {
+  // X key: HEAD-SIGHT lock attempt — the aim circle (引导圈) is the helmet
+  // sight. Pressing X tries to lock the enemy closest to the circle center
+  // inside the ±8° head basket (and inside the current missile's lock range).
+  // No passive auto-lock: nothing locks without the explicit command.
+  headLockAttempt(player, enemies) {
+    const aim = player.aimDir;
     const range = this.mslKind === 'radar' ? 10000 : 5200;
-    const fwd = player.forward(new THREE.Vector3());
-    const cands = [];
+    let best = null, bestDot = 0.990;            // ±8° basket around the circle
     for (const e of enemies) {
       if (e.dying) continue;
       _v.copy(e.position).sub(player.position);
       const dist = _v.length();
       if (dist > range || dist < 90) continue;
-      const dot = _v.divideScalar(dist).dot(fwd);
-      if (dot > 0.7) cands.push({ e, dot });   // wider cone for manual cycling
+      _v.divideScalar(dist);
+      const dot = _v.dot(aim);
+      if (dot > bestDot) { bestDot = dot; best = e; }
     }
-    if (!cands.length) return;
-    cands.sort((a, b) => b.dot - a.dot);
-    const cur = this.manualTarget || this.lockState.target;
-    const idx = cands.findIndex(c => c.e === cur);
-    this.manualTarget = cands[(idx + 1) % cands.length].e;
-    if (this.audio) this.audio.lockTick();
+    if (best && best !== this.manualTarget) {
+      this.manualTarget = best;
+      this.lockState.target = best;
+      this.lockState.progress = 0;
+      this.lockState.locked = false;
+      if (this.audio) this.audio.lockTick();
+    }
+    // pressing X with nothing (new) in the basket is a no-op: an ongoing or
+    // completed lock is kept — X never breaks what it already has
   }
 
   // after a decoy blind period, the missile may re-acquire ANY aircraft
@@ -256,31 +263,21 @@ export class Weapons {
     ms.target = best;
   }
 
-  // ---------- lock-on ----------
+  // ---------- lock-on (head-sight): the lock only exists because X put it
+  // there; it holds while the target stays in range and inside ±25° of the
+  // VIEW (the pilot's head still points at it). No automatic acquisition. ----------
   updateLock(dt, player, enemies) {
     const ls = this.lockState;
-    const fwd = player.forward(new THREE.Vector3());
+    const aim = player.aimDir;                     // head reference = aim circle
     const range = this.mslKind === 'radar' ? 10000 : 5200;
-    // manual target (X key) overrides auto-pick while it stays valid
     if (this.manualTarget) {
       const t = this.manualTarget;
       const valid = !t.dying && t.alive !== false &&
         t.position.distanceTo(player.position) < range &&
-        _v.copy(t.position).sub(player.position).normalize().dot(fwd) > 0.8;
+        _v.copy(t.position).sub(player.position).normalize().dot(aim) > 0.906;   // ±25° of view
       if (!valid) this.manualTarget = null;
     }
-    let best = this.manualTarget, bestDot = 0.905;   // ~25 deg cone
-    if (!best) {
-      for (const e of enemies) {
-        if (e.dying) continue;
-        _v.copy(e.position).sub(player.position);
-        const dist = _v.length();
-        if (dist > range || dist < 90) continue;
-        _v.divideScalar(dist);
-        const dot = _v.dot(fwd);
-        if (dot > bestDot) { bestDot = dot; best = e; }
-      }
-    }
+    const best = this.manualTarget;
     if (best !== ls.target) {
       ls.target = best;
       ls.progress = 0;

@@ -178,7 +178,7 @@ function update(dt) {
       hud.announce(weapons.mslKind === 'radar' ? '雷达弹' : '红外弹',
         weapons.mslKind === 'radar' ? 'RADAR — 10km 锁定 · 39/箔条可避' : 'IR — 5.2km 锁定 · 热诱弹可避', 1.2, 'info');
     }
-    if (input.pressed('cycleTarget')) weapons.cycleTarget(player, enemies.enemies);
+    if (input.pressed('cycleTarget')) weapons.headLockAttempt(player, enemies.enemies);
     weapons.updateLock(dt, player, enemies.enemies);
 
     // world
