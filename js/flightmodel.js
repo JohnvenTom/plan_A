@@ -95,10 +95,12 @@ export class FlightBody {
       // aim nearly behind the tail: roll hard and pull through the vertical
       roll = 1; pitch = 0.55;
     } else if (mag < 0.06) {
-      // converged: level the wings; gentle trims
-      roll = clamp(-bankErr * 2.0, -0.5, 0.5);
-      pitch = clamp(offV * 2.0, -0.25, 0.25);
-      yaw = clamp(-offH * 0.9, -0.22, 0.22);
+      // converged — but the FLIGHT PATH must keep following the aim: a small
+      // coordinated bank turns the velocity the last few degrees via lift,
+      // and the rudder damps sideslip so the view and the path never diverge
+      roll = clamp(-offH * 3.0 - bankErr * 2.5, -0.5, 0.5);
+      pitch = clamp(offV * 2.5, -0.3, 0.3);
+      yaw = clamp(-offH * 1.2 - this.beta * 2.0, -0.3, 0.3);
     } else if (mag < 0.2 && offV < -0.02) {
       // aim just below the nose: pushing beats a 180 deg roll
       roll = clamp(-bankErr * 1.5, -0.4, 0.4);

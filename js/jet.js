@@ -108,11 +108,12 @@ export function buildJet(opts = {}) {
   }
 
   // hydraulic-feel deflection toward commanded angles (called by player each frame)
-  let surfState = { roll: 0, pitch: 0 };
+  let surfState = { roll: 0, pitch: 0, yaw: 0 };
   const setControlSurfaces = (ctl) => {
     surfState.roll += (clamp(ctl.roll, -1, 1) - surfState.roll) * 0.28;
     surfState.pitch += (clamp(ctl.pitch, -1, 1) - surfState.pitch) * 0.28;
-    const r = surfState.roll, p = surfState.pitch;
+    surfState.yaw += (clamp(ctl.yaw, -1, 1) - surfState.yaw) * 0.28;
+    const r = surfState.roll, p = surfState.pitch, y = surfState.yaw;
     const set = (name, target) => {
       const s = surfaces[name];
       s.angle += (target - s.angle) * 0.35;
@@ -124,6 +125,7 @@ export function buildJet(opts = {}) {
     set('elevR', -0.38 * p);
     set('canL', 0.45 * p);   // canards deflect opposite
     set('canR', 0.45 * p);
+    for (const rp of rudPivots) rp.rotation.x = -0.5 * y;   // yaw input: rudders swing
   };
 
   // --- horizontal stabilizers ---
@@ -137,9 +139,20 @@ export function buildJet(opts = {}) {
   // --- twin canted vertical tails: fin built standing in (height=x, chord=z),
   //     stood up by rotZ, mirrored half inside a flipped group ---
   const finPts = [[0.3, 5.6], [2.8, 2.9], [3.05, 2.3], [0.3, 2.2]];
+  const rudPivots = [];
   for (const side of [1, -1]) {
     const fin = extrudedPart(finPts, 0.18, accentMat);
     fin.rotation.z = Math.PI / 2 - 0.30;   // stand up, cant outward
+    // rudder: hinged panel on the fin's trailing edge (child of the fin so it
+    // inherits the cant), rotating about the fin's height axis
+    const rud = new THREE.Object3D();
+    rud.name = 'surf_rud';
+    rud.position.set(1.9, 0, 4.35);
+    const rudPanel = new THREE.Mesh(new THREE.BoxGeometry(1.25, 0.09, 0.42), darkMat);
+    rudPanel.position.set(0, 0, 0.23);
+    rud.add(rudPanel);
+    fin.add(rud);
+    rudPivots.push(rud);
     const holder = new THREE.Group();
     holder.add(fin);
     holder.scale.x = side;

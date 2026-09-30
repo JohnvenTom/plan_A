@@ -362,6 +362,8 @@ function frame() {
           yaw: Math.round(player.ctl.yaw * 100) / 100,
         },
         aimOff: Math.round(Math.acos(clamp(player.forward(_v).dot(player.aimDir), -1, 1)) * 1800 / Math.PI) / 10,
+        velAimOff: Math.round(Math.acos(clamp(player.vel.clone().normalize().dot(player.aimDir), -1, 1)) * 1800 / Math.PI) / 10,
+        betaDeg: Math.round((player.body.beta || 0) * 573) / 10,
     aimScreen: (() => {
       const p = player.aimPoint.project(camera);
       return [Math.round((p.x * 0.5 + 0.5) * 1000) / 1000, Math.round((-p.y * 0.5 + 0.5) * 1000) / 1000];
