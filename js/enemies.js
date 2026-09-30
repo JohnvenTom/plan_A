@@ -129,9 +129,9 @@ class Enemy {
       this.stateTime = 0;
       this.body.forward(this.extDir);
       this.extDir.applyAxisAngle(_tmp.set(0, 1, 0), (Math.random() < 0.5 ? 1 : -1) * (0.6 + Math.random() * 0.5));
-    } else if (dist > 4500) {
-      this.state = 'patrol';
     } else {
+      // pursue at any range — with 10 km+ spawns, far contacts must close at
+      // attack speed instead of drifting on patrol waypoints
       this.state = 'pursue';
     }
 
@@ -254,8 +254,8 @@ export class EnemyManager {
     const count = Math.min(this.wave, 7);   // wave 1: a lone contact, then +1 per wave
     for (let i = 0; i < count; i++) {
       const a = Math.random() * Math.PI * 2;
-      const r = 2600 + Math.random() * 2200;
-      const pos = new THREE.Vector3(
+      const r = 10000 + Math.random() * 3000;   // spawn beyond 10 km: contacts
+      const pos = new THREE.Vector3(             // appear on radar, not on top of you
         player.position.x + Math.cos(a) * r,
         clamp(player.position.y + (Math.random() - 0.5) * 1200, 1400, 5200),
         player.position.z + Math.sin(a) * r
