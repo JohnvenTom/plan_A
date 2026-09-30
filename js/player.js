@@ -148,7 +148,9 @@ export class Player {
     if (this._freeLook) {
       const sens = AIM_SENS * clamp(this.camera.fov / 66, 0.25, 1.2);
       this.lookYaw -= input.aimDX * sens;
-      this.lookPitch = clamp(this.lookPitch - input.aimDY * sens, -1.1, 1.1);
+      // the pitch orbit axis is camera-LEFT (viewDir × up, negated), so the
+      // stick sign runs opposite the yaw axis — += keeps mouse-up = look-up
+      this.lookPitch = clamp(this.lookPitch + input.aimDY * sens, -1.1, 1.1);
     } else {
       this.rotateAim(input.aimDX, input.aimDY);
     }
@@ -209,9 +211,18 @@ export class Player {
     // Free-look (C held) adds yaw/pitch offsets on top and orbits the camera
     // around the jet; releasing springs the offsets back to zero.
     // F-14 framing: ~30% further back than the old procedural jet (longer,
-    // bulkier airframe fills the frame at the legacy distances)
-    const dist = [12.5, 17.5, 30][this.viewMode];
-    const hOff = [3.1, 4.9, 9.8][this.viewMode];
+    // bulkier airframe fills the frame at the legacy distances).
+    // V mode changes EASE between rigs (~0.4 s dolly) instead of snapping:
+    // only the rig scalars are damped — the camera still sits exactly on the
+    // view axis every frame, so the rigid-orbit no-cut-through guarantee holds
+    const distT = [12.5, 17.5, 30][this.viewMode];
+    const hOffT = [3.1, 4.9, 9.8][this.viewMode];
+    const fovT = [62, 66, 70][this.viewMode];
+    if (this._vDist === undefined) { this._vDist = distT; this._vHOff = hOffT; this._vFov = fovT; }
+    this._vDist = damp(this._vDist, distT, 6, dt);
+    this._vHOff = damp(this._vHOff, hOffT, 6, dt);
+    this._vFov = damp(this._vFov, fovT, 6, dt);
+    const dist = this._vDist, hOff = this._vHOff;
     // Z zoom boom: pull back+up along the view axis so the bubble canopy drops
     // below the gunsight line; damped at the FOV's rate for one smooth motion
     this._zoomK = damp(this._zoomK, this.zoomed ? 1 : 0, 6, dt);
@@ -267,8 +278,7 @@ export class Player {
     this.camera.up.copy(up);
     this.camLook.copy(this.camPos).addScaledVector(viewDir, 100);
     this.camera.lookAt(this.camLook);
-    const fovBase = [62, 66, 70][this.viewMode];
-    const targetFov = this.zoomed ? 22 : fovBase + clamp((this.body.airspeed - 240) / 480, 0, 1) * 14;
+    const targetFov = this.zoomed ? 22 : this._vFov + clamp((this.body.airspeed - 240) / 480, 0, 1) * 14;
     this.camera.fov = damp(this.camera.fov, targetFov, 6, dt);
     this.camera.updateProjectionMatrix();
   }
