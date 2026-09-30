@@ -12,7 +12,9 @@ import { clamp } from './utils.js';
 
 // --- atmosphere & aero coefficients (accelerations fold area/mass into KA) ---
 const G0 = 9.81;
-const KA = 0.00285;        // force factor: a_lift = q * KA * CL
+const KA = 0.00299;        // force factor: a_lift = q * KA * CL (tuned so the
+                          // G-limit / alpha-limit crossing — the corner speed —
+                          // lands at exactly 1000 km/h at sea level)
 const CLA = 5.2;           // lift-curve slope per rad
 const ALPHA_MAX = 15 * Math.PI / 180;   // stall angle
 const ALPHA_TRIM = 1.5 * Math.PI / 180; // hands-off trim AOA (level cruise)
@@ -27,6 +29,7 @@ const K_BETA = 1.25;       // weathervane: nose seeks the airflow
 const CX_DAMP = 2.0, CY_DAMP = 2.4, CZ_DAMP = 4.2;   // rate damping
 const Q_REF = 26000;       // dynamic pressure at ~240 m/s sea-adjacent
 const G_LIMIT = 16;
+export const CORNER_SPEED_KMH = 1000;   // max-G speed (design spec)
 
 const _qInv = new THREE.Quaternion();
 const _vb = new THREE.Vector3();
