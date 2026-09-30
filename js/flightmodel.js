@@ -29,7 +29,14 @@ const K_BETA = 1.25;       // weathervane: nose seeks the airflow
 const CX_DAMP = 2.0, CY_DAMP = 2.4, CZ_DAMP = 4.2;   // rate damping
 const Q_REF = 26000;       // dynamic pressure at ~240 m/s sea-adjacent
 const G_LIMIT = 16;
-export const CORNER_SPEED_KMH = 1000;   // max-G speed (design spec)
+export const CORNER_SPEED_KMH = 1000;   // max-G speed design spec (sea level)
+// corner speed at the CURRENT altitude (km/h): the G-limit / alpha-limit
+// crossing rises as air density falls — 1000 at sea level, ~1066 @ 3 km
+export function cornerSpeedKMH(alt) {
+  const rho = 1 - clamp(alt / 15000, 0, 1) * 0.6;
+  const q = G_LIMIT * G0 / (KA * CLA * ALPHA_MAX);
+  return Math.round(Math.sqrt(2 * q / Math.max(rho, 0.1)) * 3.6 / 10) * 10;
+}
 
 const _qInv = new THREE.Quaternion();
 const _vb = new THREE.Vector3();

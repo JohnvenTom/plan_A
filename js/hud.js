@@ -1,7 +1,7 @@
 // hud.js — Ace-Combat-style HUD drawn on a 2D canvas overlay
 import * as THREE from 'three';
 import { clamp, pad } from './utils.js';
-import { CORNER_SPEED_KMH } from './flightmodel.js';
+import { cornerSpeedKMH } from './flightmodel.js';
 
 const CYAN = '#8fe0ff';
 const CYAN_DIM = 'rgba(143,224,255,0.55)';
@@ -142,12 +142,14 @@ export class HUD {
     this.text(`${Math.round(p.speed * 3.6)}`, sx + 10, cy, 20, CYAN);
     this.text('km/h', sx + boxW + 8, cy - 10, 11, CYAN_DIM);
     this.text('SPD', sx + 2, cy - boxH / 2 - 12, 11, CYAN_DIM);
-    // corner-speed (max-G) reference: lights up inside the ±40 km/h window —
-    // below it alpha can't make 16 G, above it G is capped and turn rate falls
+    // corner-speed (max-G) reference, altitude-compensated (density thins ->
+    // crossing rises with alt): lights up inside the ±40 km/h window — below
+    // it alpha can't make 16 G, above it G is capped and turn rate falls
     {
       const kmh = p.speed * 3.6;
-      const inBand = Math.abs(kmh - CORNER_SPEED_KMH) <= 40;
-      this.text(inBand ? `▶ 机动速度 ${CORNER_SPEED_KMH} ◀` : `机动 ${CORNER_SPEED_KMH}`,
+      const corner = cornerSpeedKMH(p.position.y);
+      const inBand = Math.abs(kmh - corner) <= 40;
+      this.text(inBand ? `▶ 机动速度 ${corner} ◀` : `机动 ${corner}`,
         sx + boxW / 2, cy - boxH / 2 - 30, inBand ? 14 : 11, inBand ? AMBER : CYAN_DIM, 'center');
     }
     // throttle bar
