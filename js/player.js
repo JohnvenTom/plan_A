@@ -89,6 +89,14 @@ export class Player {
   get ctl() { return this.body.ctl; }
   get throttle() { return this.body.throttle; }
 
+  // stall / departure warning state: limiter-fighting AOA (past the FBW soft
+  // cap, into the hard-cap zone), actual post-stall departure, or the
+  // low-speed pusher regime — any of these flashes the HUD warning
+  get stalling() {
+    const b = this.body;
+    return this.alive && (b.stall > 0.05 || b.alpha > 0.22 || b.airspeed < 155);
+  }
+
   forward(out) { return this.body.forward(out); }
   upVec(out) { return this.body.upVec(out); }
 

@@ -374,6 +374,11 @@ export class HUD {
     if (S.enemyLock > 0.25 && !S.weapons.inboundWarning && blink) {
       this.text('⚠ 敌方锁定中 ⚠', cx, this.h / 2 - 150, 20, AMBER, 'center', 10);
     }
+    // stall / departure: flashing red + recovery hint (push to unload)
+    if (S.player.stalling && blink) {
+      this.text('⚠ 失速 STALL ⚠', cx, this.h / 2 - 118, 24, RED, 'center', 14);
+      this.text('推杆俯冲加速改出', cx, this.h / 2 - 96, 14, AMBER, 'center', 8);
+    }
     // low hp
     if (S.player.hp <= 30 && blink) {
       this.text('DAMAGE CRITICAL', cx, this.h / 2 + 180, 18, RED, 'center');
