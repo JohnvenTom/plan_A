@@ -196,6 +196,19 @@ export class HUD {
       this.line(s.x, s.y + 9, s.x, s.y + 17, CYAN, 2);
     }
 
+    // nose boresight cross: where the fuselage actually points — it chases
+    // the aim circle and leads the flight path marker by the AOA, so all
+    // three converge only when the jet has settled on the aim direction
+    const np = S.player.position.clone()
+      .addScaledVector(S.player.forward(_hv), 2600);
+    const ns = this.proj(np, S.camera);
+    if (!ns.behind) {
+      this.line(ns.x - 9, ns.y, ns.x - 3, ns.y, CYAN_DIM, 1.5);
+      this.line(ns.x + 3, ns.y, ns.x + 9, ns.y, CYAN_DIM, 1.5);
+      this.line(ns.x, ns.y - 9, ns.x, ns.y - 3, CYAN_DIM, 1.5);
+      this.line(ns.x, ns.y + 3, ns.x, ns.y + 9, CYAN_DIM, 1.5);
+    }
+
     // aim director circle at the WORLD-ANCHORED aim direction: it stays pinned
     // to the world spot while the nose chases it (WT behavior — the circle and
     // the flight path marker converge as the plane aligns)

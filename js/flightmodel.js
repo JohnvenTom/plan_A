@@ -94,27 +94,30 @@ export class FlightBody {
     if (_aim.z > 0.25 && mag < 0.35) {
       // aim nearly behind the tail: roll hard and pull through the vertical
       roll = 1; pitch = 0.55;
-    } else if (mag < 0.06) {
-      // converged — but the FLIGHT PATH must keep following the aim: a small
-      // coordinated bank turns the velocity the last few degrees via lift,
-      // and the rudder damps sideslip so the view and the path never diverge
-      roll = clamp(-offH * 3.0 - bankErr * 2.5, -0.5, 0.5);
-      pitch = clamp(offV * 2.5, -0.3, 0.3);
-      yaw = clamp(-offH * 1.2 - this.beta * 2.0, -0.3, 0.3);
     } else if (mag < 0.2 && offV < -0.02) {
       // aim just below the nose: pushing beats a 180 deg roll
-      roll = clamp(-bankErr * 1.5, -0.4, 0.4);
+      roll = clamp(-offH * 1.2 - bankErr * 1.5, -0.4, 0.4);
       pitch = clamp(offV * 1.8, -0.5, 0);
     } else {
+      // unified continuous law: near center the commanded bank is PROPORTIONAL
+      // to the offset (gentle bank + rudder cleanup, wings-level damping),
+      // blending smoothly into the full bank-first pull-through geometry by
+      // ~22° off. One formula — no dead zone, no snap at the old 3.4° gate.
       let phi;
       if (offV < 0 && Math.abs(offH) < 0.04) {
         phi = this._phiSign * Math.PI;
       } else {
         this._phiSign = offH >= 0 ? 1 : -1;
-        phi = Math.atan2(offH, offV);
+        // offV floor: just-below-nose aims must not demand >90° banks nearby
+        phi = Math.atan2(offH, Math.max(offV, 0.035));
       }
-      roll = clamp(-phi * 1.4, -1, 1);
-      pitch = clamp(Math.max(0, offV) * 1.7, 0.08, 1);
+      const s = clamp((mag - 0.03) / 0.35, 0, 1);
+      const t = s * s * (3 - 2 * s);              // 0 at center → 1 at ~22° off
+      phi = clamp(offH * 5, -1.2, 1.2) * (1 - t) + phi * t;
+      roll = clamp(-phi * 1.4 - bankErr * 2.5 * (1 - t), -1, 1);
+      pitch = clamp(offV * 2.5, -0.3, 0.3) * (1 - t)
+            + clamp(Math.max(0, offV) * 1.7, 0.08, 1) * t;
+      yaw = clamp((-offH * 1.2 - this.beta * 2.0) * (1 - 0.75 * t), -0.3, 0.3);
     }
 
     // G / AOA protection: cap the pull so lift stays inside the limit

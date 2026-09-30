@@ -46,6 +46,7 @@ export class Player {
     this.lookYaw = 0;        // free-look offsets (C held)
     this.lookPitch = 0;
     this.zoomed = false;     // Z toggles magnification
+    this._zoomK = 0;         // smoothed 0..1 zoom-boom factor (camera pull-back)
     this._camInit = false;
     this._camDirInit = false;
   }
@@ -199,8 +200,15 @@ export class Player {
     // view anchors to the AIM direction; camera rides the aim axis behind.
     // Free-look (C held) adds yaw/pitch offsets on top and orbits the camera
     // around the jet; releasing springs the offsets back to zero.
-    const dist = [9.5, 14.5, 26][this.viewMode];
-    const hOff = [2.4, 3.8, 7.5][this.viewMode];
+    // F-14 framing: ~30% further back than the old procedural jet (longer,
+    // bulkier airframe fills the frame at the legacy distances)
+    const dist = [12.5, 17.5, 30][this.viewMode];
+    const hOff = [3.1, 4.9, 9.8][this.viewMode];
+    // Z zoom boom: pull back+up along the view axis so the bubble canopy drops
+    // below the gunsight line; damped at the FOV's rate for one smooth motion
+    this._zoomK = damp(this._zoomK, this.zoomed ? 1 : 0, 6, dt);
+    const boom = 1 + 0.6 * this._zoomK;
+    const lift = 1.5 * this._zoomK;
     const lag = this._freeLook ? 12 : [7, 5.5, 4.5][this.viewMode];
 
     if (!this._freeLook) {
@@ -229,8 +237,8 @@ export class Player {
     // the jet every frame. Smoothing comes from camDir/freeLook themselves —
     // damping the POSITION in world space would cut a straight line through
     // the jet on big swings and throw it out of frame.
-    const desired = this._v2.copy(viewDir).multiplyScalar(-dist).add(this.body.pos);
-    desired.y += hOff;
+    const desired = this._v2.copy(viewDir).multiplyScalar(-dist * boom).add(this.body.pos);
+    desired.y += hOff + lift;
     this.camPos.copy(desired);
     const ground = Math.max(terrainHeightAt(this.camPos.x, this.camPos.z), SEA_LEVEL);
     if (this.camPos.y < ground + 4) this.camPos.y = ground + 4;
