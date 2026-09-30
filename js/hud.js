@@ -71,6 +71,45 @@ export class HUD {
     c.shadowBlur = 0;
   }
 
+  // rolling-digit drum gauge: each position keeps its shown digit; on change
+  // the old digit slides out of the cell and the new one slides in — UP when
+  // the value grew, DOWN when it shrank (old-fighter mechanical instrument).
+  drawDrum(num, x, y, size, color, dt) {
+    if (!this._drum || this._drum.chars.length !== num.length) {
+      this._drum = { chars: num.split(''), anims: num.split('').map(() => null) };
+    }
+    const c = this.ctx;
+    c.font = `bold ${size}px Consolas, "Courier New", monospace`;
+    const cw = c.measureText('0').width;
+    const cellH = size * 1.35, DUR = 0.28;
+    for (let i = 0; i < num.length; i++) {
+      const ch = num[i];
+      if (this._drum.chars[i] !== ch) {
+        const from = this._drum.chars[i];
+        const up = ch > from;                 // bigger digit pushes up, smaller drops
+        this._drum.anims[i] = { from, to: ch, t: 0, up };
+        this._drum.chars[i] = ch;
+      }
+      const cx = x + i * cw + cw / 2;
+      const a = this._drum.anims[i];
+      c.save();
+      c.beginPath();
+      c.rect(cx - cw / 2 - 0.5, y - cellH / 2, cw + 1, cellH);
+      c.clip();
+      if (a && a.t < 1) {
+        a.t = Math.min(1, a.t + (dt || 1 / 60) / DUR);
+        const e = a.t * a.t * (3 - 2 * a.t);  // smoothstep, like a drum's snap
+        const dir = a.up ? -1 : 1;            // outgoing travel direction
+        this.text(a.from, cx, y + dir * e * cellH, size, color, 'center');
+        this.text(a.to, cx, y - dir * (1 - e) * cellH, size, color, 'center');
+        if (a.t >= 1) this._drum.anims[i] = null;
+      } else {
+        this.text(ch, cx, y, size, color, 'center');
+      }
+      c.restore();
+    }
+  }
+
   line(x0, y0, x1, y1, color, lw = 1.5) {
     const c = this.ctx;
     c.strokeStyle = color; c.lineWidth = lw;
@@ -120,7 +159,7 @@ export class HUD {
     c.clearRect(0, 0, this.w, this.h);
     if (S.state !== 'playing') return;
 
-    this.drawSpeedAlt(S);
+    this.drawSpeedAlt(dt, S);
     this.drawHeading(S);
     this.drawReticle(S);
     this.drawTargets(S);
@@ -132,7 +171,7 @@ export class HUD {
   }
 
   // ---- speed / altitude / throttle ----
-  drawSpeedAlt(S) {
+  drawSpeedAlt(dt, S) {
     const p = S.player;
     const cx = this.w / 2, cy = this.h / 2;
     const boxW = 118, boxH = 34;
@@ -144,13 +183,25 @@ export class HUD {
     this.text('SPD', sx + 2, cy - boxH / 2 - 12, 11, CYAN_DIM);
     // corner-speed (max-G) reference, altitude-compensated (density thins ->
     // crossing rises with alt): lights up inside the ±40 km/h window — below
-    // it alpha can't make 16 G, above it G is capped and turn rate falls
+    // it alpha can't make 16 G, above it G is capped and turn rate falls.
+    // The number itself rolls like a mechanical drum gauge: a digit position
+    // whose value grows is pushed UP out of the cell, one that shrinks drops
+    // DOWN (old-fighter instrument feel).
     {
       const kmh = p.speed * 3.6;
       const corner = cornerSpeedKMH(p.position.y);
       const inBand = Math.abs(kmh - corner) <= 40;
-      this.text(inBand ? `▶ 机动速度 ${corner} ◀` : `机动 ${corner}`,
-        sx + boxW / 2, cy - boxH / 2 - 30, inBand ? 14 : 11, inBand ? AMBER : CYAN_DIM, 'center');
+      const label = inBand ? '▶ 机动速度 ' : '机动 ';
+      const color = inBand ? AMBER : CYAN_DIM;
+      const size = inBand ? 19 : 15;
+      const c = this.ctx;
+      c.font = `bold ${size}px Consolas, "Courier New", monospace`;
+      const num = String(corner);
+      const cw = c.measureText('0').width;
+      const total = c.measureText(label).width + num.length * cw;
+      const lx = sx + boxW / 2 - total / 2;
+      this.text(label, lx, cy - boxH / 2 - 34, size, color);
+      this.drawDrum(num, lx + c.measureText(label).width, cy - boxH / 2 - 34, size, color, dt);
     }
     // throttle bar
     const tbx = sx - 16;
