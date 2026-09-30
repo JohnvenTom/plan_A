@@ -211,13 +211,14 @@ export class Player {
     }
 
     // NOTE: viewDir lives in _vTmp — use _v2 for the desired position so the
-    // view direction is not mutated before lookAt uses it
+    // view direction is not mutated before lookAt uses it.
+    // RIGID ORBIT (WT-style): the camera sits exactly on the view axis behind
+    // the jet every frame. Smoothing comes from camDir/freeLook themselves —
+    // damping the POSITION in world space would cut a straight line through
+    // the jet on big swings and throw it out of frame.
     const desired = this._v2.copy(viewDir).multiplyScalar(-dist).add(this.body.pos);
     desired.y += hOff;
-    if (!this._camInit) { this.camPos.copy(desired); this._camInit = true; }
-    this.camPos.x = damp(this.camPos.x, desired.x, lag, dt);
-    this.camPos.y = damp(this.camPos.y, desired.y, lag, dt);
-    this.camPos.z = damp(this.camPos.z, desired.z, lag, dt);
+    this.camPos.copy(desired);
     const ground = Math.max(terrainHeightAt(this.camPos.x, this.camPos.z), SEA_LEVEL);
     if (this.camPos.y < ground + 4) this.camPos.y = ground + 4;
 
