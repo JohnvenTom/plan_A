@@ -157,7 +157,7 @@ export class Player {
       b.ctl.yaw = this._keyYaw;
       this.aimLocal = null;
     } else {
-      b.aimAt(this.aimDir);
+      b.aimAt(this.aimDir, dt);
     }
 
     // ---- physics ----

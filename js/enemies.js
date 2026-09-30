@@ -184,7 +184,7 @@ class Enemy {
       _aim.set(b.pos.x - _fwd.x * 800, b.pos.y + 3500, b.pos.z - _fwd.z * 800).sub(b.pos).normalize();
     }
 
-    b.aimAt(_aim);
+    b.aimAt(_aim, dt);
     b.throttle = clamp(0.5 + (targetSpeed - b.airspeed) * 0.008, 0.15, 1);
     b.burner = 0;
     b.update(dt);

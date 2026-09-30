@@ -64,6 +64,7 @@ export class FlightBody {
 
     // instructor hysteresis through the atan2 singularity
     this._phiSign = 1;
+    this._eUpF = 0;      // slow path-trim filter state (aim-vs-path vertical)
   }
 
   forward(out) { return out.set(0, 0, -1).applyQuaternion(this.quat); }
@@ -83,7 +84,7 @@ export class FlightBody {
 
   // ---- instructor: turn the nose toward a world aim direction with
   // bank-first-then-pull geometry, G- and AOA-limited. Writes ctl. ----
-  aimAt(aimDir) {
+  aimAt(aimDir, dt = 1 / 60) {
     _qInv.copy(this.quat).invert();
     _aim.copy(aimDir).applyQuaternion(_qInv).normalize();
     const offH = _aim.x, offV = _aim.y;
@@ -119,6 +120,16 @@ export class FlightBody {
             + clamp(Math.max(0, offV) * 1.7, 0.08, 1) * t;
       yaw = clamp((-offH * 1.2 - this.beta * 2.0) * (1 - 0.75 * t), -0.3, 0.3);
     }
+
+    // slow path trim: a nose-referenced law settles into a permanent glide
+    // (nose on the aim, path sagging a couple of degrees below it). This
+    // low-passed aim-vs-PATH term trims that DC bias out; the clamp keeps it
+    // to trim scale so it can never fight a real maneuver.
+    if (this.vel.lengthSq() > 1600) _velDir.copy(this.vel).normalize();
+    else this.forward(_velDir);
+    const eUp = aimDir.y - _velDir.y * aimDir.dot(_velDir);
+    this._eUpF = clamp(this._eUpF + (eUp - this._eUpF) * Math.min(1, dt / 1.2), -0.01, 0.01);
+    pitch = clamp(pitch + 4.0 * this._eUpF, -1, 1);
 
     // G / AOA protection: cap the pull so lift stays inside the limit
     const aAllow = clamp(G_LIMIT * G0 / Math.max(1, this.q * KA * CLA), 0.02, ALPHA_MAX);
