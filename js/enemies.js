@@ -61,6 +61,7 @@ class Enemy {
   get vel() { return this.body.vel; }
   get speed() { return this.body.airspeed; }
   forward(out) { return this.body.forward(out); }
+  upVec(out) { return this.body.upVec(out); }
 
   applyDamage(n) {
     if (this.dying) return false;

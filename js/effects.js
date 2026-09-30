@@ -206,6 +206,30 @@ export class Effects {
     }
   }
 
+  // continuous trail emitter for countermeasures, called along the real
+  // (drag-bent) trajectory: hot glow streak for flares, silver wisps for
+  // chaff, plus smoke that lingers, rises buoyantly and disperses
+  cmTrail(pos, vel, isFlare) {
+    if (isFlare) {
+      this.spawn(this.add, {
+        pos, vel, life: 0.22, drag: 0.985, gravity: 0,
+        c0: [4.2, 3.2, 1.9], c1: [2.0, 0.75, 0.2],
+        s0: 3.6, s1: 1.1,
+      });
+      this.spawn(this.smoke, {
+        pos, vel, life: 2.8 + this.rng() * 1.2, drag: 0.995, gravity: -1.6, turb: 2.2,
+        c0: [0.62, 0.60, 0.58], c1: [0.42, 0.42, 0.44], a0: 0.34, a1: 0,
+        s0: 1.6, s1: 10,
+      });
+    } else {
+      this.spawn(this.smoke, {
+        pos, vel, life: 3.2 + this.rng() * 0.8, drag: 0.997, gravity: -1.1, turb: 2.6,
+        c0: [0.8, 0.82, 0.86], c1: [0.55, 0.57, 0.6], a0: 0.3, a1: 0,
+        s0: 1.4, s1: 14,
+      });
+    }
+  }
+
   flare(pos, vel) {
     // bright burning countermeasure: hot white-orange core that fades
     this.spawn(this.add, {

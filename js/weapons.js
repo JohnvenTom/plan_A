@@ -160,9 +160,11 @@ export class Weapons {
   }
 
   // ---- countermeasures: drop n flares from owner, roll decoy per flare ----
-  // ---- countermeasures: one press, auto-matched payload. Spawns n flares
-  // (IR seduction) AND n chaff clouds (radar seduction) from the shared
-  // stock — whichever seeker is inbound meets its matching decoy. ----
+  // ---- countermeasures: one press, auto-matched payload. Ejected DOWNWARD
+  // from belly dispensers (alternating left/right) with full aircraft
+  // velocity inheritance plus a pyrotechnic kick along body-down — the
+  // realistic throw. Flares decoy IR seekers, chaff clouds decoy nothing
+  // directly (they widen the radar notch window). ----
   deployFlares(owner, n) {
     const isPlayer = owner === this.playerRef;
     if (isPlayer) {
@@ -171,23 +173,23 @@ export class Weapons {
       this.flares -= n;
     }
     const fwd = owner.forward(new THREE.Vector3());
+    const down = owner.upVec(new THREE.Vector3()).multiplyScalar(-1);
+    const right = new THREE.Vector3().crossVectors(fwd, down).normalize();
     for (let i = 0; i < n; i++) {
-      const pos = owner.position.clone().addScaledVector(fwd, 7);
-      pos.y -= 1;
-      const vel = owner.vel.clone().multiplyScalar(0.25);
-      vel.x += (Math.random() - 0.5) * 14;
-      vel.y -= 6 + Math.random() * 6;
-      vel.z += (Math.random() - 0.5) * 14;
-      this.flareList.push({ pos: pos.clone(), vel: vel.clone(), life: 0, ttl: 2.4, owner, rollT: 0.55, rolls: 2, kind: 'ir' });
-      // chaff blooms wider and hangs slower than flares
-      const cvel = vel.clone().multiplyScalar(0.6);
-      cvel.y *= 0.4;
-      this.chaffList.push({ pos, vel: cvel, life: 0, ttl: 3.0, owner, rollT: 0.55, rolls: 2, kind: 'radar' });
-      if (this.effects) { this.effects.flare(pos, vel); this.effects.chaff(pos, cvel); }
+      // alternate dispensers under the left/right rear fuselage
+      const side = (this._cmSide = !this._cmSide) ? 1 : -1;
+      const pos = owner.position.clone().addScaledVector(fwd, 2.5).addScaledVector(right, side * 1.1);
+      pos.addScaledVector(down, 1.4);
+      const kick = 18 + Math.random() * 10;
+      const vel = owner.vel.clone()
+        .addScaledVector(down, kick)
+        .addScaledVector(right, side * (2 + Math.random() * 4));
+      this.flareList.push({ pos, vel, life: 0, ttl: 2.6, owner, rollT: 0.55, rolls: 2, kind: 'ir', emitT: 0 });
+      // chaff: lighter bundles — same downward throw, ejected slightly apart
+      const cvel = vel.clone().addScaledVector(down, 4 + Math.random() * 4);
+      this.chaffList.push({ pos: pos.clone().addScaledVector(right, side * 0.4), vel: cvel, life: 0, ttl: 3.2, owner, rollT: 0.55, rolls: 0, kind: 'radar', emitT: 0 });
     }
     if (this.audio && isPlayer) this.audio.flare();
-    // chaff does NOT decoy the radar seeker directly — it widens the notch
-    // window (see the radar guidance block below). Only flares roll here.
     return this._rollDecoys(owner, n, 'ir');
   }
 
@@ -436,16 +438,30 @@ export class Weapons {
       this.flareRegenT += dt;
       if (this.flareRegenT > 5) { this.flareRegenT = 0; this.flares++; }
     }
+    // realistic countermeasure ballistics:
+    //  - flares inherit full aircraft speed, then form drag bleeds the
+    //    horizontal component (~0.55/s) while gravity pulls them to a
+    //    ~50 m/s terminal fall — the classic arcing flare trail
+    //  - chaff bundles are far lighter: drag strips their speed almost
+    //    instantly and they hang, sinking slowly while they tumble
     const burnCloud = (list, kind) => {
+      const dragPerSec = kind === 'ir' ? 0.55 : 0.10;
+      const grav = kind === 'ir' ? 30 : 8;
       for (let i = list.length - 1; i >= 0; i--) {
         const fl = list[i];
         fl.life += dt;
         if (fl.life > fl.ttl) { list.splice(i, 1); continue; }
-        fl.vel.y -= (kind === 'ir' ? 25 : 8) * dt;
-        fl.vel.multiplyScalar(Math.pow(0.995, dt * 60));
+        fl.vel.y -= grav * dt;
+        fl.vel.multiplyScalar(Math.pow(dragPerSec, dt));
         fl.pos.addScaledVector(fl.vel, dt);
+        // trail emission: burning glow streaks + lingering smoke that the
+        // flare leaves along its real (drag-bent) trajectory
+        fl.emitT -= dt;
+        if (fl.emitT <= 0) {
+          fl.emitT = kind === 'ir' ? 0.035 : 0.11;
+          if (this.effects) this.effects.cmTrail(fl.pos, fl.vel, kind === 'ir');
+        }
         // burning flares keep seducing IR seekers; chaff clouds only persist
-        // (their effect is the widened notch window, not a roll)
         fl.rollT -= dt;
         if (kind === 'ir' && fl.rollT <= 0 && fl.rolls > 0) {
           fl.rollT = 0.55;
