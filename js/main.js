@@ -5,6 +5,7 @@ import { Sky } from './sky.js';
 import { Weather } from './weather.js';
 import { buildTerrain, buildOcean } from './terrain.js';
 import { Player } from './player.js';
+import { loadF14 } from './f14.js';
 import { EnemyManager } from './enemies.js';
 import { Weapons } from './weapons.js';
 import { Effects } from './effects.js';
@@ -35,6 +36,10 @@ buildTerrain(scene);
 const ocean = buildOcean(scene);
 const effects = new Effects(scene);
 const player = new Player(scene, camera);
+// async F-14 GLB: swaps in whenever it arrives; falls back silently to the
+// procedural jet if the asset is absent (freeze mode waits for the verdict)
+const f14Ready = loadF14();
+f14Ready.then(m => { if (m) player.swapModel(m); });
 const weapons = new Weapons(scene, effects);
 const enemies = new EnemyManager(scene);
 const hud = new HUD(document.getElementById('hud'));
@@ -42,6 +47,8 @@ window.__hud = hud;   // debug hook
 window.__weapons = weapons;   // debug hook
 window.__player = player;     // debug hook
 window.__weather = weather;   // debug hook
+window.__scene = scene;       // debug hook (screenshot harness: __renderer.render(__scene, __player.camera))
+window.__renderer = renderer; // debug hook
 const audio = new GameAudio();
 const input = new Input();
 weapons.playerRef = player;
@@ -481,7 +488,7 @@ addEventListener('resize', () => {
 });
 
 if (FREEZE_T !== null) {
-  freezeFrame();
+  f14Ready.then(() => freezeFrame());   // model swap resolved first, stills show the F-14
 } else {
   player.reset();           // park the jet for the title backdrop
   frame();

@@ -65,6 +65,19 @@ export class Player {
     this._camDirInit = false;
   }
 
+  // hot-swap the visual (procedural jet → F-14 GLB once it finishes loading);
+  // keeps the current transform and visibility so it is safe mid-flight
+  swapModel(m) {
+    if (!m || !m.group || m === this.model) return;
+    const old = this.model;
+    this.scene.remove(old.group);
+    this.model = m;
+    m.group.position.copy(old.group.position);
+    m.group.quaternion.copy(old.group.quaternion);
+    m.group.visible = old.group.visible;
+    this.scene.add(m.group);
+  }
+
   // --- delegate the external surface area to the flight body ---
   get position() { return this.body.pos; }
   get quaternion() { return this.body.quat; }

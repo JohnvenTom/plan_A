@@ -1,6 +1,6 @@
 # SKY BARONESS — 皇牌空战
 
-浏览器里的皇牌空战(Ace Combat)风格 3D 空战游戏。纯 [three.js](https://threejs.org)(WebGL,已本地 vendored,离线可玩),无任何外部资源——战机、地形、海洋、天空、音效全部程序化生成。
+浏览器里的皇牌空战(Ace Combat)风格 3D 空战游戏。纯 [three.js](https://threejs.org)(WebGL,已本地 vendored,离线可玩),地形、海洋、天空、音效全部程序化生成。玩家座机为**真实 F-14 Tomcat 模型**(`assets/F14Tomcat.glb`,约 3.4MB,缺失时自动回退到程序化战机);敌机与其余元素仍为程序化生成。
 
 ## 运行
 
@@ -89,7 +89,8 @@ python -m http.server 8421
 | `js/main.js` | 游戏循环、状态机、系统接线、`?t=` 冻结 harness |
 | `js/sky.js` | 大气模型:天空穹顶着色器(渐变+太阳+Mie 前向光晕)、fbm 云层、雾、光照 |
 | `js/terrain.js` | 岛链高度场(ridge fbm)、顶点色分层、海洋着色器(菲涅尔+太阳光带) |
-| `js/jet.js` | 程序化战机建模(机身/三角翼/双垂尾/座舱/加力锥) |
+| `js/jet.js` | 程序化战机建模(机身/三角翼/双垂尾/座舱/加力锥)— 敌机与玩家回退模型 |
+| `js/f14.js` | 玩家 F-14 GLB 加载器(锚点/加力锥/舵面驱动,失败回退程序化战机) |
 | `js/player.js` | 街机飞行模型(四元数姿态)、追尾相机 |
 | `js/enemies.js` | 敌机 AI(巡逻/追击/规避)、波次刷新 |
 | `js/weapons.js` | 机炮弹道、锁定导弹(比例导引+近炸)、敌导弹 |
