@@ -91,13 +91,19 @@ export class FlightBody {
     const mag = Math.hypot(offH, offV);
     const bankErr = this.rightVec(_right).y;   // + = banked left
 
+    // wings-level gate: leveling must wait until the LATERAL error is gone.
+    // Without it the leveler fires on total-magnitude alone and chops the
+    // turn a few degrees short — wings level, pause, then small corrections
+    // re-bank to close the rest (the classic arrive-in-stages feel).
+    const levelGate = clamp(1 - Math.abs(offH) / 0.05, 0, 1);
+
     let pitch, roll, yaw = 0;
     if (_aim.z > 0.25 && mag < 0.35) {
       // aim nearly behind the tail: roll hard and pull through the vertical
       roll = 1; pitch = 0.55;
     } else if (mag < 0.2 && offV < -0.02) {
       // aim just below the nose: pushing beats a 180 deg roll
-      roll = clamp(-offH * 1.2 - bankErr * 1.5, -0.4, 0.4);
+      roll = clamp(-offH * 1.2 - bankErr * 1.5 * levelGate, -0.4, 0.4);
       pitch = clamp(offV * 1.8, -0.5, 0);
     } else {
       // unified continuous law: near center the commanded bank is PROPORTIONAL
@@ -112,10 +118,14 @@ export class FlightBody {
         // offV floor: just-below-nose aims must not demand >90° banks nearby
         phi = Math.atan2(offH, Math.max(offV, 0.035));
       }
-      const s = clamp((mag - 0.03) / 0.35, 0, 1);
-      const t = s * s * (3 - 2 * s);              // 0 at center → 1 at ~22° off
+      const s = clamp((mag - 0.03) / 0.25, 0, 1);
+      const t = s * s * (3 - 2 * s);              // 0 at center → 1 at ~17° off:
+                                                  // proportional bank takes over
+                                                  // early enough to bleed turn
+                                                  // rate before arrival (no
+                                                  // overshoot-bounce)
       phi = clamp(offH * 5, -1.2, 1.2) * (1 - t) + phi * t;
-      roll = clamp(-phi * 1.4 - bankErr * 2.5 * (1 - t), -1, 1);
+      roll = clamp(-phi * 1.4 - bankErr * 2.5 * (1 - t) * levelGate, -1, 1);
       pitch = clamp(offV * 2.5, -0.3, 0.3) * (1 - t)
             + clamp(Math.max(0, offV) * 1.7, 0.08, 1) * t;
       yaw = clamp((-offH * 1.2 - this.beta * 2.0) * (1 - 0.75 * t), -0.3, 0.3);
