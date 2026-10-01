@@ -20,7 +20,11 @@ const MSL_HOT_WINDOW = 8.0;
 // Lock/bite ACQUISITION still requires the ±8° head-sight basket.
 const ENV_DOT = Math.cos(60 * Math.PI / 180);
 const BASKET_DOT = Math.cos(8 * Math.PI / 180);   // head-sight basket ±8°
-const SEEK_RANGE = { ir: 5200, radar: 20000 };
+// the head-sight lock is a RADAR lock for BOTH kinds — 20 km acquire/hold;
+// for IR missiles the radar lock is nothing but a guidance source (the
+// seeker keeps its own shorter heat-source detection range)
+const LOCK_RANGE = 20000;
+const SEEKER_RANGE = 5200;                        // IR seeker heat detection
 const AMMO_REGEN = { ir: 5.5, radar: 8 };         // s per missile, per pool
 
 function tracerMaterial() {
@@ -256,7 +260,7 @@ export class Weapons {
       return;
     }
     const aim = player.aimDir;
-    const range = SEEK_RANGE[this.mslKind];
+    const range = LOCK_RANGE;
     let best = null, bestDot = BASKET_DOT;
     for (const e of enemies) {
       if (e.dying) continue;
@@ -312,7 +316,7 @@ export class Weapons {
       this.lockConeDot = null;
       return;
     }
-    const range = SEEK_RANGE[this.mslKind];
+    const range = LOCK_RANGE;
     _v.copy(t.position).sub(player.position);
     const d = _v.length() || 1;
     this.lockConeDot = _v.divideScalar(d).dot(player.forward(_v2));
@@ -399,7 +403,7 @@ export class Weapons {
     const consider = (pos, src) => {
       _v.copy(pos).sub(player.position);
       const d = _v.length();
-      if (d > SEEK_RANGE.ir || d < 60) return;
+      if (d > SEEKER_RANGE || d < 60) return;
       _v.divideScalar(d);
       if (_v.dot(aim) < BASKET_DOT) return;
       const cone = _v.dot(player.forward(_v2));
