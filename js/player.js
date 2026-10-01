@@ -32,6 +32,8 @@ export class Player {
     this.camShake = 0;
     this.boosting = false;
     this.aimDir = new THREE.Vector3(0, 0, -1);  // WORLD-ANCHORED aim direction
+    this._flAim = new THREE.Vector3(0, 0, -1);  // chase target frozen at C-press
+    this._flWasHeld = false;
     this.aimLocal = null;
     this._keyOverride = 0; this._keyYaw = 0; this._keyPitch = 0;
 
@@ -149,6 +151,15 @@ export class Player {
     //      inside the envelope (see weapons.headLockAttempt). On release the
     //      camera returns and the nose resumes chasing the aim. ----
     this._freeLook = input.down('freeLook');
+    if (this._freeLook && !this._flWasHeld) {
+      // C press: freeze the CHASE TARGET, not the stick — the instructor
+      // keeps steering toward where the sight pointed at the press, so the
+      // maneuver in progress continues smoothly. (Freezing the ctl itself
+      // would turn steady-flight's small converging corrections into a
+      // constant deflection and the jet would wobble all over the sky.)
+      this._flAim.copy(this.aimDir);
+    }
+    this._flWasHeld = this._freeLook;
     if (input.pressed('zoom')) this.zoomed = !this.zoomed;
     if (this._freeLook) {
       const sens = AIM_SENS * clamp(this.camera.fov / 66, 0.25, 1.2);
@@ -166,12 +177,10 @@ export class Player {
 
     const kbActive = this._keyOverride !== 0 || this._keyPitch !== 0 || this._keyYaw !== 0;
     if (this._freeLook && !kbActive) {
-      // C held: the jet HOLDS ITS HEADING — the sight is fully decoupled from
-      // the flight path (view and aim move together, the nose stops chasing).
-      // Neutral stick; aerodynamics trims the rest.
-      b.ctl.pitch = 0;
-      b.ctl.roll = 0;
-      b.ctl.yaw = 0;
+      // C held: keep chasing the aim point frozen at the press — the turn in
+      // progress completes naturally and steady flight stays steady, while
+      // the sight is fully decoupled from the flight path
+      b.aimAt(this._flAim, dt);
       this.aimLocal = null;
     } else if (kbActive) {
       // view/aim lets go of the plane while the stick is worked manually
