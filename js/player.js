@@ -142,9 +142,11 @@ export class Player {
     if (input.pressed('camera')) this.viewMode = (this.viewMode + 1) % 3;
 
     // ---- mouse: free look (C held) orbits the camera AND drags the world-
-    //      anchored aim with it — the sight rides the orbit so targets seen
-    //      while looking around can be head-locked; on release the camera
-    //      returns to the jet but the aim keeps its new position ----
+    //      anchored aim with it — view and sight move together, targets seen
+    //      while looking around can be head-locked, and the jet holds its
+    //      heading instead of chasing the sight (see the ctl block below).
+    //      On release the camera returns to the jet and the nose resumes
+    //      chasing the aim wherever it was left. ----
     this._freeLook = input.down('freeLook');
     if (input.pressed('zoom')) this.zoomed = !this.zoomed;
     if (this._freeLook) {
@@ -161,7 +163,15 @@ export class Player {
     this._keyPitch = (input.down('pitchPull') ? 1 : 0) - (input.down('pitchPush') ? 1 : 0);
 
     const kbActive = this._keyOverride !== 0 || this._keyPitch !== 0 || this._keyYaw !== 0;
-    if (kbActive) {
+    if (this._freeLook && !kbActive) {
+      // C held: the jet HOLDS ITS HEADING — the sight is fully decoupled from
+      // the flight path (view and aim move together, the nose stops chasing).
+      // Neutral stick; aerodynamics trims the rest.
+      b.ctl.pitch = 0;
+      b.ctl.roll = 0;
+      b.ctl.yaw = 0;
+      this.aimLocal = null;
+    } else if (kbActive) {
       // view/aim lets go of the plane while the stick is worked manually
       b.ctl.pitch = this._keyPitch;
       b.ctl.roll = this._keyOverride;
