@@ -5,7 +5,6 @@
 // caller keeps the procedural jet as fallback.
 import * as THREE from 'three';
 import { GLTFLoader } from '../vendor/GLTFLoader.js';
-import { clamp } from './utils.js';
 
 let pending = null;   // cached promise → model | null
 
@@ -58,32 +57,10 @@ function build(gltf) {
     afterburners.push(ab);
   }
 
-  // hydraulic-feel deflection toward commanded angles (same feel as jet.js);
-  // pivots carry their hinge orientation from Blender, deflection adds to the
-  // base euler X so the baked hinge axis is preserved.
-  const surfaces = {};
-  for (const n of ['ailL', 'ailR', 'elevL', 'elevR', 'rudL', 'rudR']) {
-    const pivot = byName['surf_' + n];
-    if (pivot) surfaces[n] = { pivot, base: pivot.rotation.clone(), angle: 0 };
-  }
-  let surfState = { roll: 0, pitch: 0, yaw: 0 };
-  const setControlSurfaces = (ctl) => {
-    surfState.roll += (clamp(ctl.roll, -1, 1) - surfState.roll) * 0.28;
-    surfState.pitch += (clamp(ctl.pitch, -1, 1) - surfState.pitch) * 0.28;
-    surfState.yaw += (clamp(ctl.yaw, -1, 1) - surfState.yaw) * 0.28;
-    const r = surfState.roll, p = surfState.pitch, y = surfState.yaw;
-    const set = (name, target) => {
-      const s = surfaces[name];
-      s.angle += (target - s.angle) * 0.35;
-      s.pivot.rotation.set(s.base.x + s.angle, s.base.y, s.base.z);
-    };
-    set('ailL', -0.5 * r);
-    set('ailR', 0.5 * r);
-    set('elevL', -0.38 * p);
-    set('elevR', -0.38 * p);
-    set('rudL', -0.5 * y);
-    set('rudR', -0.5 * y);
-  };
+  // The GLB carries baked `surf_*` hinge pivots (part of the airframe
+  // geometry — removing the meshes would gut the wing), but the stock-model
+  // look is wanted: the interface stays, nothing ever deflects.
+  const setControlSurfaces = () => {};
 
   return { group, anchors, afterburners, setControlSurfaces };
 }

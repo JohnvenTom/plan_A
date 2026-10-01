@@ -154,14 +154,18 @@ export class HUD {
     c.shadowBlur = 0;
   }
 
-  _diamond(x, y, r, col, fill) {
+  _diamond(x, y, r, col, fill, rot = 0) {
     const c = this.ctx;
+    c.save();
+    c.translate(x, y);
+    c.rotate(rot || 0);
     c.fillStyle = col; c.strokeStyle = col; c.lineWidth = 1.5;
     c.shadowColor = col; c.shadowBlur = 6;
     c.beginPath();
-    c.moveTo(x, y - r); c.lineTo(x + r, y); c.lineTo(x, y + r); c.lineTo(x - r, y);
+    c.moveTo(0, -r); c.lineTo(r, 0); c.lineTo(0, r); c.lineTo(-r, 0);
     c.closePath();
     if (fill) c.fill(); else c.stroke();
+    c.restore();
     c.shadowBlur = 0;
   }
 
@@ -216,6 +220,7 @@ export class HUD {
     this.drawEnvelope(S);
     this.drawReticle(S);
     this.drawTargets(S);
+    this.drawMissileMarkers(S);
     this.drawRadar(S);
     this.drawRWR(S);
     this.drawStatus(S);
@@ -557,6 +562,29 @@ export class HUD {
         } else {
           this.circle(tp.x, tp.y, r, RED, 1.25);
         }
+      }
+    }
+  }
+
+  // ---- hostile missiles: an unmistakable SPINNING diamond marker ----
+  // rides the missile on-screen; clamps to a screen-edge ellipse when the
+  // threat leaves the frame so it never becomes unreadable
+  drawMissileMarkers(S) {
+    for (const ms of S.weapons.missiles) {
+      if (ms.fromPlayer) continue;
+      const dist = ms.pos.distanceTo(S.player.position);
+      const s = this.proj(ms.pos, S.camera);
+      const r = clamp(3000 / Math.max(dist, 1), 7, 18);
+      const spin = S.time * 3.2;
+      if (!s.behind && s.x > 24 && s.x < this.w - 24 && s.y > 24 && s.y < this.h - 24) {
+        this._diamond(s.x, s.y, r, RED, false, spin);
+      } else {
+        const dx = s.behind ? this.w / 2 - s.x : s.x - this.w / 2;
+        const dy = s.behind ? this.h / 2 - s.y : s.y - this.h / 2;
+        const ang = Math.atan2(dy, dx);
+        const rx = this.w / 2 - 56, ry = this.h / 2 - 56;
+        const t = 1 / Math.max(Math.abs(Math.cos(ang)) / rx, Math.abs(Math.sin(ang)) / ry);
+        this._diamond(this.w / 2 + Math.cos(ang) * t, this.h / 2 + Math.sin(ang) * t, r * 0.8, RED, false, spin);
       }
     }
   }

@@ -108,7 +108,7 @@ export class Weapons {
     }
     // missile pool
     this.missilePool = [];
-    for (let i = 0; i < 18; i++) this.missilePool.push(buildMissileMesh(scene));
+    for (let i = 0; i < 30; i++) this.missilePool.push(buildMissileMesh(scene));
   }
 
   reset() {
@@ -439,9 +439,13 @@ export class Weapons {
     mesh.visible = true;
     const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(quat);
     // per-kind bodies: radar missiles are slower, heavier, longer-legged,
-    // wider-locking (10 km) and turn more lazily than IR missiles
-    const body = kind === 'radar'
-      ? { maxSpeed: fromPlayer ? 780 : 650, turn: fromPlayer ? 2.5 : 2.2, dmg: fromPlayer ? 80 : 55, ttl: 16, lockRange: 10000 }
+    // wider-locking (20 km) and turn more lazily than IR missiles; AA rounds
+    // (map-boundary batteries) never run out of motor and turn far too hard
+    // to outmaneuver — the boundary is a wall, not a duel
+    const body = kind === 'aa'
+      ? { maxSpeed: 900, turn: 4.5, dmg: 60, ttl: Infinity, lockRange: 0 }
+      : kind === 'radar'
+      ? { maxSpeed: fromPlayer ? 780 : 650, turn: fromPlayer ? 2.5 : 2.2, dmg: fromPlayer ? 80 : 55, ttl: 16, lockRange: 20000 }
       : { maxSpeed: fromPlayer ? 880 : 700, turn: fromPlayer ? 3.4 : 2.55, dmg: fromPlayer ? 60 : 38, ttl: 8.5, lockRange: 5200 };
     this.missiles.push({
       pos: origin.clone(),

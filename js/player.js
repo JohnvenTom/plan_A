@@ -26,7 +26,7 @@ export class Player {
 
     this.hp = 100;
     this.alive = true;
-    this.viewMode = 0;               // 0 near, 1 mid, 2 far
+    this.viewMode = 1;               // 0 near, 1 mid (default), 2 far
     this.outOfAreaTime = 0;
     this.hitFlash = 0;
     this.camShake = 0;
@@ -141,8 +141,10 @@ export class Player {
     this.boosting = burnerFrac > 0.1;
     if (input.pressed('camera')) this.viewMode = (this.viewMode + 1) % 3;
 
-    // ---- mouse: free look (C held) orbits the camera without touching the
-    //      world-anchored aim; otherwise the mouse steers the aim ----
+    // ---- mouse: free look (C held) orbits the camera AND drags the world-
+    //      anchored aim with it — the sight rides the orbit so targets seen
+    //      while looking around can be head-locked; on release the camera
+    //      returns to the jet but the aim keeps its new position ----
     this._freeLook = input.down('freeLook');
     if (input.pressed('zoom')) this.zoomed = !this.zoomed;
     if (this._freeLook) {
@@ -151,9 +153,8 @@ export class Player {
       // the pitch orbit axis is camera-LEFT (viewDir × up, negated), so the
       // stick sign runs opposite the yaw axis — += keeps mouse-up = look-up
       this.lookPitch = clamp(this.lookPitch + input.aimDY * sens, -1.1, 1.1);
-    } else {
-      this.rotateAim(input.aimDX, input.aimDY);
     }
+    this.rotateAim(input.aimDX, input.aimDY);
 
     this._keyOverride = (input.down('rollLeft') ? 1 : 0) - (input.down('rollRight') ? 1 : 0);
     this._keyYaw = (input.down('rudderLeft') ? 1 : 0) - (input.down('rudderRight') ? 1 : 0);

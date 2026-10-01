@@ -8,6 +8,7 @@ import { Player } from './player.js';
 import { loadF14 } from './f14.js';
 import { EnemyManager } from './enemies.js';
 import { Weapons } from './weapons.js';
+import { AASites } from './aasites.js';
 import { Effects } from './effects.js';
 import { HUD } from './hud.js';
 import { GameAudio } from './audio.js';
@@ -42,6 +43,7 @@ const f14Ready = loadF14();
 f14Ready.then(m => { if (m) player.swapModel(m); });
 const weapons = new Weapons(scene, effects);
 const enemies = new EnemyManager(scene);
+const aaSites = new AASites(scene);
 const hud = new HUD(document.getElementById('hud'));
 window.__hud = hud;   // debug hook
 window.__weapons = weapons;   // debug hook
@@ -96,6 +98,7 @@ function resetAll() {
   player.reset();
   enemies.reset();
   weapons.reset();
+  aaSites.reset();
   hud.msgQueue.length = 0;
   hud.announce('任务开始', 'OPERATION GOLDEN HOUR', 3.0, 'info');
 }
@@ -187,6 +190,7 @@ function update(dt) {
 
     // world
     enemies.update(dt, player, player.alive ? killCtx : { effects });
+    aaSites.update(dt, player, weapons);
     weapons.update(dt, player, enemies.enemies, effects);
 
     // weapon feedback events (crit hits) -> animated HUD stack
