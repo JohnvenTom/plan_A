@@ -49,6 +49,7 @@ window.__hud = hud;   // debug hook
 window.__weapons = weapons;   // debug hook
 window.__player = player;     // debug hook
 window.__enemies = enemies;   // debug hook
+window.__aaSites = aaSites;   // debug hook
 window.__weather = weather;   // debug hook
 window.__scene = scene;       // debug hook (screenshot harness: __renderer.render(__scene, __player.camera))
 window.__renderer = renderer; // debug hook

@@ -57,10 +57,13 @@ function build(gltf) {
     afterburners.push(ab);
   }
 
-  // The GLB carries baked `surf_*` hinge pivots (part of the airframe
-  // geometry — removing the meshes would gut the wing), but the stock-model
-  // look is wanted: the interface stays, nothing ever deflects.
-  const setControlSurfaces = () => {};
+  // Strip the baked `surf_*` hinge pivots and their panel meshes entirely —
+  // the user wants the plain airframe, no separate control-surface pieces.
+  // Interface symmetry: player.js calls setControlSurfaces only when present.
+  for (const n of ['ailL', 'ailR', 'elevL', 'elevR', 'rudL', 'rudR']) {
+    const pivot = byName['surf_' + n];
+    if (pivot && pivot.parent) pivot.parent.remove(pivot);
+  }
 
-  return { group, anchors, afterburners, setControlSurfaces };
+  return { group, anchors, afterburners };
 }
