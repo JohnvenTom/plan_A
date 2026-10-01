@@ -319,19 +319,42 @@ export class HUD {
   }
 
   // ---- 120° front cone envelope ring (TRUE projection) ----
-  // The circle of directions 60° off the nose, projected to screen with the
-  // current FOV (zoom-aware). Appears only while a launch procedure is live:
-  // seeker warming/hot, or a lock held. In steady flight the edge sits just
-  // outside the screen corners (~3° beyond) — hard maneuvers swing arcs of
-  // the ring into view. Takes the cone-edge warning colors near the boundary.
+  // The circle of directions 60° off the nose, sampled in 3D and drawn run
+  // by run — only what the camera can actually see, strictly true projection
+  // (off-screen parts are simply not drawn).
+  //   cold & unlocked: ONLY the arc segment nearest the sight direction — the
+  //     boundary the player is approaching; shows itself when the aim pulls
+  //     far enough off the nose in a fight.
+  //   warming/hot or locked: the full visible ring.
+  // Takes the cone-edge warning colors near the boundary.
   drawEnvelope(S) {
     const p = S.player, w = S.weapons;
-    const warming = w.warm.state !== 'cold';
-    if (!warming && !w.lockState.locked) return;
-    const np = this.proj(_hv.copy(p.position).addScaledVector(p.forward(_hv2), 2600), S.camera);
-    if (np.behind) return;
-    const halfFov = (S.camera.fov * Math.PI / 180) / 2;
-    const r = (this.h / 2) * Math.tan(60 * Math.PI / 180) / Math.tan(halfFov);
+    const active = w.warm.state !== 'cold' || w.lockState.locked;
+    const N = 72, STEP = Math.PI * 2 / N;
+    if (!this._envDirs) {
+      this._envDirs = [];
+      this._envPts = [];
+      for (let i = 0; i <= N; i++) {
+        this._envDirs.push(new THREE.Vector3());
+        this._envPts.push({ x: 0, y: 0, ok: false });
+      }
+    }
+    const nose = new THREE.Vector3();
+    p.forward(nose);
+    const ref = Math.abs(nose.y) > 0.95 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+    const right = new THREE.Vector3().crossVectors(ref, nose).normalize();
+    const upv = new THREE.Vector3().crossVectors(nose, right).normalize();
+    const R = 2600, cosT = Math.cos(60 * Math.PI / 180), sinT = Math.sin(60 * Math.PI / 180);
+    for (let i = 0; i <= N; i++) {
+      const a = i * STEP;
+      this._envDirs[i].copy(nose).multiplyScalar(cosT)
+        .addScaledVector(right, Math.cos(a) * sinT)
+        .addScaledVector(upv, Math.sin(a) * sinT);
+      const s = this.proj(_hv.copy(this._envDirs[i]).multiplyScalar(R).add(p.position), S.camera);
+      this._envPts[i].ok = !s.behind;
+      this._envPts[i].x = s.x;
+      this._envPts[i].y = s.y;
+    }
     const cd = w.guideConeDot;
     const hasCd = cd !== null && cd !== undefined;
     let col = 'rgba(159,232,255,0.32)';
@@ -339,13 +362,49 @@ export class HUD {
     if (hasCd && cd < CONE_CRIT) col = Math.floor(S.time * 6) % 2 === 0 ? RED : 'rgba(255,90,74,0.3)';
     else if (hasCd && cd < CONE_WARN) col = AMBER;
     if (col !== 'rgba(159,232,255,0.32)') lw = 2;
-    this.circle(np.x, np.y, r, col, lw);
-    // label at whichever side intersection is on screen
-    if (np.x + r < this.w - 12 && np.y > 20 && np.y < this.h - 20) {
-      this.text('LIM 120°', np.x + r + 6, np.y, 10, CYAN_DIM, 'left', 3);
-    } else if (np.x - r > 12 && np.y > 20 && np.y < this.h - 20) {
-      this.text('LIM 120°', np.x - r - 6, np.y, 10, CYAN_DIM, 'right', 3);
+    const c = this.ctx;
+    c.strokeStyle = col; c.lineWidth = lw;
+    c.shadowColor = col; c.shadowBlur = 6;
+    let labelPt = null;
+    if (active) {
+      // full visible ring; the longest run carries the label
+      let bestLen = 0, bestMid = -1, runLen = 0, runStart = 0;
+      c.beginPath();
+      for (let i = 0; i <= N; i++) {
+        const q = this._envPts[i];
+        if (!q.ok) {
+          if (runLen > bestLen) { bestLen = runLen; bestMid = runStart + (runLen >> 1); }
+          runLen = 0;
+          continue;
+        }
+        if (!runLen) { runStart = i; c.moveTo(q.x, q.y); } else c.lineTo(q.x, q.y);
+        runLen++;
+      }
+      if (runLen > bestLen) { bestLen = runLen; bestMid = runStart + (runLen >> 1); }
+      c.stroke();
+      if (bestMid >= 0) labelPt = this._envPts[bestMid];
+    } else {
+      // cold: only the arc segment nearest the sight direction
+      const aim = p.aimDir;
+      let best = 0, bestDot = -Infinity;
+      for (let i = 0; i < N; i++) {
+        const d = aim.dot(this._envDirs[i]);
+        if (d > bestDot) { bestDot = d; best = i; }
+      }
+      const W = 8;   // ±40° of ring parameter around the nearest point
+      c.beginPath();
+      let started = false;
+      for (let k = -W; k <= W; k++) {
+        const q = this._envPts[((best + k) % N + N) % N];
+        if (!q.ok) { started = false; continue; }
+        if (!started) { c.moveTo(q.x, q.y); started = true; }
+        else c.lineTo(q.x, q.y);
+      }
+      c.stroke();
+      if (this._envPts[best].ok) labelPt = this._envPts[best];
     }
+    c.shadowBlur = 0;
+    if (labelPt) this.text('LIM 120°', labelPt.x + 12, labelPt.y - 12, 10, CYAN_DIM, 'left', 3);
   }
 
   // ---- War Thunder style: aim director circle at the mouse + flight path marker ----
