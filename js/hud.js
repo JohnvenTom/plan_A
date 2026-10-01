@@ -1,13 +1,20 @@
-// hud.js — Ace-Combat-style HUD drawn on a 2D canvas overlay
+// hud.js — Ace-Combat-7-style HUD drawn on a 2D canvas overlay: cyan-white
+// thin lines, vertical speed/altitude tapes with drum-digit readout boxes,
+// bracket target frames, a nose-anchored 80° missile envelope ring, dual
+// missile loadout cards with the seeker warmup state, and center warnings
+// with a red edge glow while missiles are inbound.
 import * as THREE from 'three';
 import { clamp, pad } from './utils.js';
 import { cornerSpeedKMH } from './flightmodel.js';
 
-const CYAN = '#8fe0ff';
-const CYAN_DIM = 'rgba(143,224,255,0.55)';
+const CYAN = '#9fe8ff';
+const CYAN_DIM = 'rgba(159,232,255,0.5)';
 const RED = '#ff5a4a';
 const AMBER = '#ffc866';
 const _hv = new THREE.Vector3();
+const _hv2 = new THREE.Vector3();
+const ENV_DOT_WARN = Math.cos(36 * Math.PI / 180);   // inside 4° of the 80° edge
+const ENV_DOT_WARN2 = Math.cos(32 * Math.PI / 180);
 
 export class HUD {
   constructor(canvas) {
@@ -19,6 +26,7 @@ export class HUD {
     this._v = new THREE.Vector3();
     this.msgQueue = [];   // {text, sub, t, dur}
     this.killFeed = [];   // {text, t}
+    this._hintMsg = null; // transient gate hint (预热中…/未锁定/…)
   }
 
   resize() {
@@ -40,6 +48,10 @@ export class HUD {
   clearSticky() {
     this.msgQueue = this.msgQueue.filter(m => !m.sticky);
   }
+
+  // small transient line under the reticle: rejected SPACE presses explain
+  // themselves here instead of a full center announcement
+  hint(text) { this._hintMsg = { text, t: 0 }; }
 
   // world position -> screen px; returns {x, y, behind}
   proj(pos, camera) {
@@ -74,9 +86,12 @@ export class HUD {
   // rolling-digit drum gauge: each position keeps its shown digit; on change
   // the old digit slides out of the cell and the new one slides in — UP when
   // the value grew, DOWN when it shrank (old-fighter mechanical instrument).
-  drawDrum(num, x, y, size, color, dt) {
-    if (!this._drum || this._drum.chars.length !== num.length) {
-      this._drum = { chars: num.split(''), anims: num.split('').map(() => null) };
+  // key: which gauge this is — speed/alt/corner each keep their own drum state.
+  drawDrum(key, num, x, y, size, color, dt) {
+    this._drums = this._drums || {};
+    let st = this._drums[key];
+    if (!st || st.chars.length !== num.length) {
+      st = this._drums[key] = { chars: num.split(''), anims: num.split('').map(() => null) };
     }
     const c = this.ctx;
     c.font = `bold ${size}px Consolas, "Courier New", monospace`;
@@ -84,14 +99,14 @@ export class HUD {
     const cellH = size * 1.35, DUR = 0.28;
     for (let i = 0; i < num.length; i++) {
       const ch = num[i];
-      if (this._drum.chars[i] !== ch) {
-        const from = this._drum.chars[i];
+      if (st.chars[i] !== ch) {
+        const from = st.chars[i];
         const up = ch > from;                 // bigger digit pushes up, smaller drops
-        this._drum.anims[i] = { from, to: ch, t: 0, up };
-        this._drum.chars[i] = ch;
+        st.anims[i] = { from, to: ch, t: 0, up };
+        st.chars[i] = ch;
       }
       const cx = x + i * cw + cw / 2;
-      const a = this._drum.anims[i];
+      const a = st.anims[i];
       c.save();
       c.beginPath();
       c.rect(cx - cw / 2 - 0.5, y - cellH / 2, cw + 1, cellH);
@@ -102,7 +117,7 @@ export class HUD {
         const dir = a.up ? -1 : 1;            // outgoing travel direction
         this.text(a.from, cx, y + dir * e * cellH, size, color, 'center');
         this.text(a.to, cx, y - dir * (1 - e) * cellH, size, color, 'center');
-        if (a.t >= 1) this._drum.anims[i] = null;
+        if (a.t >= 1) st.anims[i] = null;
       } else {
         this.text(ch, cx, y, size, color, 'center');
       }
@@ -124,6 +139,41 @@ export class HUD {
     c.shadowColor = color; c.shadowBlur = 6;
     c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.stroke();
     c.shadowBlur = 0;
+  }
+
+  // arc from -90° clockwise spanning `frac` of a full turn
+  arcProgress(x, y, r, frac, color, lw = 2.5) {
+    const c = this.ctx;
+    c.strokeStyle = color; c.lineWidth = lw;
+    c.shadowColor = color; c.shadowBlur = 8;
+    c.beginPath();
+    c.arc(x, y, r, -Math.PI / 2, -Math.PI / 2 + clamp(frac, 0, 1) * Math.PI * 2);
+    c.stroke();
+    c.shadowBlur = 0;
+  }
+
+  _diamond(x, y, r, col, fill) {
+    const c = this.ctx;
+    c.fillStyle = col; c.strokeStyle = col; c.lineWidth = 1.5;
+    c.shadowColor = col; c.shadowBlur = 6;
+    c.beginPath();
+    c.moveTo(x, y - r); c.lineTo(x + r, y); c.lineTo(x, y + r); c.lineTo(x - r, y);
+    c.closePath();
+    if (fill) c.fill(); else c.stroke();
+    c.shadowBlur = 0;
+  }
+
+  // AC7-style target frame: four corner brackets around (x, y)
+  _brackets(x, y, s, col, lw) {
+    const h = s / 2, k = Math.max(5, s * 0.28);
+    this.line(x - h, y - h + k, x - h, y - h, col, lw);
+    this.line(x - h, y - h, x - h + k, y - h, col, lw);
+    this.line(x + h - k, y - h, x + h, y - h, col, lw);
+    this.line(x + h, y - h, x + h, y - h + k, col, lw);
+    this.line(x + h, y + h - k, x + h, y + h, col, lw);
+    this.line(x + h, y + h, x + h - k, y + h, col, lw);
+    this.line(x - h + k, y + h, x - h, y + h, col, lw);
+    this.line(x - h, y + h, x - h, y + h - k, col, lw);
   }
 
   // ---- RWR: radar threat bearing ring, bottom-center ----
@@ -161,66 +211,91 @@ export class HUD {
 
     this.drawSpeedAlt(dt, S);
     this.drawHeading(S);
+    this.drawEnvelope(S);
     this.drawReticle(S);
     this.drawTargets(S);
     this.drawRadar(S);
     this.drawRWR(S);
     this.drawStatus(S);
     this.drawAlerts(dt, S);
+    this.drawHint(dt);
     this.vignette(S);
   }
 
-  // ---- speed / altitude / throttle ----
+  // ---- vertical tick tape (AC7 style) ----
+  // side 1: ticks point right (left tape); side -1: ticks point left
+  _tape(x, cy, H, value, minor, major, side) {
+    const pxPerUnit = H / (minor * 28);
+    const half = H / 2;
+    this.line(x, cy - half, x, cy + half, CYAN_DIM, 1.5);
+    const vLo = value - half / pxPerUnit, vHi = value + half / pxPerUnit;
+    const i0 = Math.max(0, Math.ceil(vLo / minor));
+    const i1 = Math.floor(vHi / minor);
+    for (let i = i0; i <= i1; i++) {
+      const v = i * minor;
+      const y = cy - (v - value) * pxPerUnit;
+      const isMajor = i % (major / minor) === 0;
+      const len = isMajor ? 12 : 6;
+      this.line(x, y, x + side * len, y, isMajor ? CYAN : CYAN_DIM, 1);
+      if (isMajor && v > 0) {
+        this.text(String(Math.round(v)), x + side * (len + 4), y, 11, CYAN_DIM,
+          side > 0 ? 'left' : 'right', 3);
+      }
+    }
+  }
+
+  // drum-digit readout box sitting on the tape
+  _drumBox(key, x, cy, num, unit, dt) {
+    const c = this.ctx;
+    const w = 104, h = 44;
+    c.fillStyle = 'rgba(4,14,24,0.72)';
+    c.fillRect(x - w / 2, cy - h / 2, w, h);
+    this.strokeRect(x - w / 2, cy - h / 2, w, h, CYAN, 1.5);
+    this.drawDrum(key, num, x - 24, cy, 19, CYAN, dt);
+    this.text(unit, x + w / 2 - 8, cy + h / 2 - 9, 9, CYAN_DIM, 'right', 2);
+  }
+
+  // ---- speed / altitude vertical tapes + throttle + G/AOA ----
   drawSpeedAlt(dt, S) {
     const p = S.player;
-    const cx = this.w / 2, cy = this.h / 2;
-    const boxW = 118, boxH = 34;
+    const cy = this.h / 2;
+    const H = 320;
+    const xL = 118, xR = this.w - 118;
     // speed (left)
-    const sx = cx - 250 - boxW / 2;
-    this.strokeRect(sx, cy - boxH / 2, boxW, boxH, CYAN);
-    this.text(`${Math.round(p.speed * 3.6)}`, sx + 10, cy, 20, CYAN);
-    this.text('km/h', sx + boxW + 8, cy - 10, 11, CYAN_DIM);
-    this.text('SPD', sx + 2, cy - boxH / 2 - 12, 11, CYAN_DIM);
+    this._tape(xL, cy, H, p.speed * 3.6, 20, 100, 1);
+    this._drumBox('spd', xL, cy, String(Math.round(p.speed * 3.6)), 'km/h', dt);
+    this.text('SPD', xL - 16, cy - H / 2 - 16, 11, CYAN_DIM, 'right', 4);
     // corner-speed (max-G) reference, altitude-compensated (density thins ->
-    // crossing rises with alt): lights up inside the ±40 km/h window — below
-    // it alpha can't make 16 G, above it G is capped and turn rate falls.
-    // The number itself rolls like a mechanical drum gauge: a digit position
-    // whose value grows is pushed UP out of the cell, one that shrinks drops
-    // DOWN (old-fighter instrument feel).
+    // crossing rises with alt): lights up inside the ±40 km/h window
     {
       const kmh = p.speed * 3.6;
       const corner = cornerSpeedKMH(p.position.y);
       const inBand = Math.abs(kmh - corner) <= 40;
       const label = inBand ? '▶ 机动速度 ' : '机动 ';
       const color = inBand ? AMBER : CYAN_DIM;
-      const size = inBand ? 19 : 15;
+      const size = inBand ? 17 : 14;
       const c = this.ctx;
       c.font = `bold ${size}px Consolas, "Courier New", monospace`;
       const num = String(corner);
-      const cw = c.measureText('0').width;
-      const total = c.measureText(label).width + num.length * cw;
-      const lx = sx + boxW / 2 - total / 2;
-      this.text(label, lx, cy - boxH / 2 - 34, size, color);
-      this.drawDrum(num, lx + c.measureText(label).width, cy - boxH / 2 - 34, size, color, dt);
+      const lx = xL - 34, ly = cy + H / 2 + 26;
+      this.text(label, lx, ly, size, color);
+      this.drawDrum('corner', num, lx + c.measureText(label).width, ly, size, color, dt);
     }
-    // throttle bar
-    const tbx = sx - 16;
-    this.line(tbx, cy + boxH / 2, tbx, cy - boxH / 2, CYAN_DIM, 1);
-    const ty = cy + boxH / 2 - p.throttle * boxH;
+    // throttle bar outboard of the tape
+    const tbx = xL - 32;
+    this.line(tbx, cy + 60, tbx, cy - 60, CYAN_DIM, 1);
+    const ty = cy + 60 - p.throttle * 120;
     this.line(tbx - 4, ty, tbx + 4, ty, p.boosting ? AMBER : CYAN, 3);
-    // G + AOA readouts (lift G and angle of attack from the flight body)
-    this.text(`G ${p.gLoad.toFixed(1)}`, sx + 2, cy + boxH / 2 + 16, 13,
+    // G + AOA readouts below the tape
+    this.text(`G ${p.gLoad.toFixed(1)}`, xL - 34, cy + H / 2 + 52, 13,
       p.gLoad > 12 ? RED : p.gLoad > 7 ? AMBER : CYAN_DIM);
-    this.text(`α ${(p.alpha * 57.3).toFixed(1)}°`, sx + 2, cy + boxH / 2 + 34, 12,
+    this.text(`α ${(p.alpha * 57.3).toFixed(1)}°`, xL - 34, cy + H / 2 + 72, 12,
       Math.abs(p.alpha) > 0.24 ? AMBER : CYAN_DIM);
     // altitude (right)
-    const ax = cx + 250 - boxW / 2;
-    this.strokeRect(ax, cy - boxH / 2, boxW, boxH, CYAN);
-    this.text(`${Math.round(p.position.y)}`, ax + 10, cy, 20, CYAN);
-    this.text('ALT m', ax + boxW + 8, cy - 10, 11, CYAN_DIM);
-    this.text('ALT', ax + 2, cy - boxH / 2 - 12, 11, CYAN_DIM);
-    // G / heading readout small
-    this.text(`HDG ${pad(Math.round(p.headingDeg) % 360, 3)}`, ax + 2, cy + boxH / 2 + 14, 12, CYAN_DIM);
+    this._tape(xR, cy, H, p.position.y, 20, 100, -1);
+    this._drumBox('alt', xR, cy, String(Math.round(p.position.y)), 'm', dt);
+    this.text('ALT', xR + 16, cy - H / 2 - 16, 11, CYAN_DIM, 'left', 4);
+    this.text(`HDG ${pad(Math.round(p.headingDeg) % 360, 3)}`, xR + 16, cy + H / 2 + 26, 12, CYAN_DIM, 'left');
   }
 
   // ---- heading tape ----
@@ -239,6 +314,33 @@ export class HUD {
     // caret
     this.line(cx, y + 22, cx - 6, y + 30, CYAN, 2);
     this.line(cx, y + 22, cx + 6, y + 30, CYAN, 2);
+  }
+
+  // ---- 80° nose envelope ring (±40° off the fuselage axis) ----
+  // Anchored to the NOSE direction projection: during hard maneuvers the ring
+  // lags behind the aim circle — you can see the nose hasn't caught up. Locks
+  // hold and IR shots leave the rail only inside this circle.
+  drawEnvelope(S) {
+    const p = S.player, w = S.weapons;
+    const np = this.proj(_hv.copy(p.position).addScaledVector(p.forward(_hv2), 2600), S.camera);
+    if (np.behind) return;
+    const halfFov = (S.camera.fov * Math.PI / 180) / 2;
+    const r = (this.h / 2) * Math.tan(40 * Math.PI / 180) / Math.tan(halfFov);
+    let col = 'rgba(159,232,255,0.3)';
+    let lw = 1.25;
+    if (w.lockConeDot !== null && w.lockConeDot !== undefined) {
+      const blink = Math.floor(S.time * 6) % 2 === 0;
+      if (w.lockConeDot < ENV_DOT_WARN2) col = blink ? RED : 'rgba(255,90,74,0.35)';
+      else if (w.lockConeDot < ENV_DOT_WARN) col = AMBER;
+      if (col === RED || col === AMBER) lw = 2;
+    }
+    this.circle(np.x, np.y, r, col, lw);
+    // small label at whichever side intersection is on screen
+    if (np.x + r < this.w - 12 && np.y - 20 > 0 && np.y + 20 < this.h) {
+      this.text('MSL LIM 80°', np.x + r + 6, np.y, 10, CYAN_DIM, 'left', 3);
+    } else if (np.x - r > 12 && np.y - 20 > 0 && np.y + 20 < this.h) {
+      this.text('MSL LIM 80°', np.x - r - 6, np.y, 10, CYAN_DIM, 'right', 3);
+    }
   }
 
   // ---- War Thunder style: aim director circle at the mouse + flight path marker ----
@@ -290,22 +392,42 @@ export class HUD {
       }
     }
 
-    // lock ring rides the LOCKED TARGET itself (head-sight lock: it sits
-    // wherever the target is, not on the flight path marker)
-    const ls = S.weapons.lockState;
-    if (ls.target) {
-      const tp = this.proj(ls.target.position, S.camera);
-      if (!tp.behind) {
-        const r = 46 - ls.progress * 30;
-        this.circle(tp.x, tp.y, Math.max(10, r), ls.locked ? RED : AMBER, ls.locked ? 2.5 : 2);
-        this.text(ls.locked ? 'LOCK' : '...', tp.x, tp.y + 62, 14, ls.locked ? RED : AMBER, 'center');
+    this.drawIRReticle(S, ap);
+  }
+
+  // ---- IR seeker reticle (rides the sight circle) ----
+  // Flashing red frame from the moment the warmup starts; goes SOLID when the
+  // seeker has bitten a heat source — a diamond marks WHAT it bit (aircraft
+  // or decoy: the seeker is fully physical and never explains itself).
+  drawIRReticle(S, ap) {
+    const w = S.weapons;
+    if (w.mslKind !== 'ir' || w.warm.state === 'cold' || ap.behind) return;
+    const blink = Math.floor(S.time * 5) % 2 === 0;
+    const solid = w.warm.state === 'hot' && w.irSeek;
+    if (solid) {
+      this.circle(ap.x, ap.y, 44, RED, 2.5);
+      // marker on the bitten heat source + thin tie line from the reticle
+      const src = w.irSeek;
+      const bp = this.proj(src.position ?? src.pos, S.camera);
+      if (!bp.behind) {
+        this.line(ap.x, ap.y, bp.x, bp.y, 'rgba(255,90,74,0.4)', 1);
+        this._diamond(bp.x, bp.y, 9, RED, false);
       }
+    } else {
+      if (blink) this.circle(ap.x, ap.y, 44, RED, 2);
+      if (w.warm.state === 'warming') {
+        this.arcProgress(ap.x, ap.y, 52, w.warm.t / 1.0, AMBER);
+      }
+    }
+    if (w.warm.state === 'hot') {
+      this.text(`HOT ${Math.max(0, w.warm.t).toFixed(1)}`, ap.x, ap.y + 62, 12, RED, 'center', 5);
     }
   }
 
-  // filled by edit: drawTargets, drawRadar, drawStatus, drawAlerts, vignette
+  // ---- target frames: AC7 brackets + RNG, off-screen arrows ----
   drawTargets(S) {
-    const ls = S.weapons.lockState;
+    const w = S.weapons;
+    const ls = w.lockState;
     for (const e of S.enemies) {
       if (e.dying) continue;
       const s = this.proj(e.position, S.camera);
@@ -313,15 +435,15 @@ export class HUD {
       const onScreen = !s.behind && s.x > 30 && s.x < this.w - 30 && s.y > 30 && s.y < this.h - 30;
       const isLock = ls.target === e;
       if (onScreen) {
-        const size = clamp(3600 / dist, 16, 64);
-        const col = isLock ? (ls.locked ? RED : AMBER) : CYAN;
-        this.strokeRect(s.x - size / 2, s.y - size / 2, size, size, col, isLock ? 2.5 : 1.5);
-        // corner ticks for the locked target
-        if (isLock && ls.locked) {
-          this.strokeRect(s.x - size / 2 - 6, s.y - size / 2 - 6, size + 12, size + 12, RED, 1.5);
+        const size = clamp(4200 / dist, 18, 66);
+        const col = isLock ? RED : CYAN_DIM;
+        this._brackets(s.x, s.y, size, col, isLock ? 2 : 1.25);
+        if (isLock) {
+          this._diamond(s.x, s.y, 5, RED, true);
+          this.text('LOCK', s.x + size / 2 + 8, s.y - size / 2 - 9, 12, RED, 'left', 4);
         }
-        this.text(`${(dist / 1000).toFixed(1)}`, s.x + size / 2 + 8, s.y - size / 2 + 4, 12, col, 'left', 4);
-        if (e.hp < 42) this.text('DMG', s.x + size / 2 + 8, s.y + size / 2 - 4, 11, AMBER, 'left', 4);
+        this.text(`RNG ${(dist / 1000).toFixed(1)}`, s.x + size / 2 + 8, s.y - size / 2 + 7, 11, col, 'left', 3);
+        if (e.hp < 42) this.text('DMG', s.x + size / 2 + 8, s.y + size / 2 - 5, 11, AMBER, 'left', 3);
       } else {
         // off-screen: arrow clamped to a centered ellipse pointing outward
         const dx = s.x - this.w / 2, dy = s.y - this.h / 2;
@@ -340,6 +462,20 @@ export class HUD {
         c.shadowBlur = 0;
       }
     }
+    // radar seeker warmup arc around the locked target:
+    // amber while warming (progress), thin solid red ring when hot
+    if (w.mslKind === 'radar' && ls.target && w.warm.state !== 'cold') {
+      const tp = this.proj(ls.target.position, S.camera);
+      if (!tp.behind) {
+        const size = clamp(4200 / ls.target.position.distanceTo(S.player.position), 18, 66);
+        const r = size * 0.78 + 10;
+        if (w.warm.state === 'warming') {
+          this.arcProgress(tp.x, tp.y, r, w.warm.t / 1.0, AMBER);
+        } else {
+          this.circle(tp.x, tp.y, r, RED, 1.25);
+        }
+      }
+    }
   }
 
   drawRadar(S) {
@@ -348,13 +484,12 @@ export class HUD {
     c.save();
     // dial
     this.circle(cx, cy, R, CYAN_DIM, 1.5);
-    this.circle(cx, cy, R * 0.55, 'rgba(143,224,255,0.22)', 1);
-    this.line(cx - R, cy, cx + R, cy, 'rgba(143,224,255,0.18)', 1);
-    this.line(cx, cy - R, cx, cy + R, 'rgba(143,224,255,0.18)', 1);
+    this.circle(cx, cy, R * 0.55, 'rgba(159,232,255,0.22)', 1);
+    this.line(cx - R, cy, cx + R, cy, 'rgba(159,232,255,0.18)', 1);
+    this.line(cx, cy - R, cx, cy + R, 'rgba(159,232,255,0.18)', 1);
     // sweep
     const sw = (S.time * 1.5) % (Math.PI * 2);
-    const grad = c.createLinearGradient(cx, cy, cx + Math.cos(sw - Math.PI / 2) * R, cy + Math.sin(sw - Math.PI / 2) * R);
-    c.strokeStyle = 'rgba(143,224,255,0.5)'; c.lineWidth = 2;
+    c.strokeStyle = 'rgba(159,232,255,0.5)'; c.lineWidth = 2;
     c.beginPath(); c.moveTo(cx, cy);
     c.lineTo(cx + Math.cos(sw - Math.PI / 2) * R, cy + Math.sin(sw - Math.PI / 2) * R); c.stroke();
     // player heading-up rotation
@@ -380,42 +515,63 @@ export class HUD {
     this.text('RNG 5km', cx, cy + R + 16, 11, CYAN_DIM, 'center', 4);
     c.restore();
   }
+
   drawStatus(S) {
     const p = S.player, w = S.weapons;
-    // left column: HP + ammo
-    const x = 46, y = this.h - 150;
+    const c = this.ctx;
+    // left column: HP + dual missile pools
+    const x = 46, y = this.h - 232;
     this.text('AIRFRAME', x, y, 12, CYAN_DIM);
     const hpw = 190;
     this.strokeRect(x, y + 10, hpw, 12, CYAN_DIM, 1);
     const hpcol = p.hp > 55 ? CYAN : p.hp > 25 ? AMBER : RED;
-    const c = this.ctx;
     c.fillStyle = hpcol; c.shadowColor = hpcol; c.shadowBlur = 8;
     c.fillRect(x + 2, y + 12, Math.max(0, (hpw - 4) * p.hp / 100), 8);
     c.shadowBlur = 0;
     this.text(`${Math.round(p.hp)}`, x + hpw + 10, y + 16, 13, hpcol);
-    // missiles
-    this.text('MISSILE', x, y + 46, 12, CYAN_DIM);
-    for (let i = 0; i < w.ammoMax; i++) {
-      const mx = x + 2 + i * 16;
-      if (i < w.ammo) {
-        c.fillStyle = AMBER; c.shadowColor = AMBER; c.shadowBlur = 6;
-        c.beginPath(); c.moveTo(mx, y + 68); c.lineTo(mx + 5, y + 54); c.lineTo(mx + 10, y + 68); c.closePath(); c.fill();
-        c.shadowBlur = 0;
-      } else {
-        this.strokeRect(mx, y + 55, 10, 13, 'rgba(255,200,102,0.25)', 1);
+    // missile loadout cards: one row per pool, the selected kind framed
+    this.text('MSL', x, y + 42, 12, CYAN_DIM);
+    const rows = [['ir', 'IR', AMBER], ['radar', 'RDR', RED]];
+    let yy = y + 66;
+    for (const [k, label, col] of rows) {
+      const active = w.mslKind === k;
+      if (active) this.strokeRect(x - 5, yy - 13, 240, 25, CYAN, 1);
+      this.text(label, x, yy, 12, active ? col : CYAN_DIM);
+      for (let i = 0; i < w.ammoMax[k]; i++) {
+        const mx = x + 40 + i * 15;
+        if (i < w.ammo[k]) {
+          c.fillStyle = col; c.shadowColor = col; c.shadowBlur = active ? 6 : 2;
+          c.beginPath(); c.moveTo(mx, yy + 7); c.lineTo(mx + 4.5, yy - 6); c.lineTo(mx + 9, yy + 7); c.closePath(); c.fill();
+          c.shadowBlur = 0;
+        } else {
+          c.strokeStyle = 'rgba(255,200,102,0.22)'; c.lineWidth = 1;
+          c.strokeRect(mx, yy - 6, 9, 13);
+        }
       }
+      this.text(`${w.ammo[k]}`, x + 40 + w.ammoMax[k] * 15 + 10, yy, 12, active ? col : CYAN_DIM);
+      yy += 30;
     }
-    this.text(`${w.ammo}/${w.ammoMax}`, x + w.ammoMax * 16 + 12, y + 61, 13, AMBER);
-    // selected missile type + countermeasure stock
-    this.text(w.mslKind === 'radar' ? 'MSL:RADAR' : 'MSL:IR', x + w.ammoMax * 16 + 12, y + 44, 12,
-      w.mslKind === 'radar' ? RED : CYAN_DIM, 'left', 4);
-    this.text(`CM ${Math.floor(w.flares)}`, x, y + 106, 12, w.flares >= 10 ? CYAN_DIM : AMBER);
-    // gun heat
-    this.text('GUN', x, y + 88, 12, CYAN_DIM);
-    this.strokeRect(x + 36, y + 82, 120, 10, CYAN_DIM, 1);
+    // seeker warmup status of the selected kind
+    const ws = w.warm;
+    if (ws.state === 'warming') {
+      this.text('WARMING', x, yy + 2, 12, AMBER);
+      c.fillStyle = AMBER; c.shadowColor = AMBER; c.shadowBlur = 6;
+      c.fillRect(x + 76, yy - 3, Math.max(2, 60 * clamp(ws.t / 1.0, 0, 1)), 6);
+      c.shadowBlur = 0;
+    } else if (ws.state === 'hot') {
+      const blink = ws.t < 2 && Math.floor(S.time * 4) % 2 === 0;
+      this.text(`HOT ${Math.max(0, ws.t).toFixed(1)}`, x, yy + 2, 12, blink ? 'rgba(255,90,74,0.5)' : RED);
+    } else {
+      this.text('COLD', x, yy + 2, 12, CYAN_DIM);
+    }
+    if (w.mslKind === 'ir' && w.irSeek) this.text('SEEK LOCK', x + 130, yy + 2, 12, RED, 'left', 5);
+    // countermeasure stock + gun heat
+    this.text(`CM ${Math.floor(w.flares)}`, x, yy + 28, 12, w.flares >= 10 ? CYAN_DIM : AMBER);
+    this.text('GUN', x, yy + 52, 12, CYAN_DIM);
+    this.strokeRect(x + 36, yy + 46, 120, 10, CYAN_DIM, 1);
     if (w.gunHeat > 0.02) {
       c.fillStyle = w.gunHeat > 0.8 ? RED : CYAN;
-      c.fillRect(x + 38, y + 84, 116 * Math.min(1, w.gunHeat), 6);
+      c.fillRect(x + 38, yy + 48, 116 * Math.min(1, w.gunHeat), 6);
     }
     // kills top-right
     this.text(`KILLS ${S.kills}`, this.w - 46, 40, 16, CYAN, 'right');
@@ -436,9 +592,14 @@ export class HUD {
     if (S.weapons.radarInbound && blink) {
       this.text('⚠ RADAR ⚠ 39机动/箔条!', cx, this.h / 2 - 150, 22, RED, 'center', 12);
     }
-    // enemy building a lock on us (RWR-style warning before the launch)
-    if (S.enemyLock > 0.25 && !S.weapons.inboundWarning && blink) {
-      this.text('⚠ 敌方锁定中 ⚠', cx, this.h / 2 - 150, 20, AMBER, 'center', 10);
+    // enemy fire-control phases (only when nothing of ours is inbound):
+    // amber while the enemy builds the 1.15 s lock, red-ish while warming
+    if (!S.weapons.inboundWarning && !S.weapons.radarInbound) {
+      if (S.enemyWarm > 0.1 && blink) {
+        this.text('⚠ 敌方预热中 ⚠', cx, this.h / 2 - 150, 20, RED, 'center', 10);
+      } else if (S.enemyLock > 0.25) {
+        this.text('⚠ 敌方锁定中 ⚠', cx, this.h / 2 - 150, 20, AMBER, 'center', 10);
+      }
     }
     // stall / departure: flashing red + recovery hint (push to unload)
     if (S.player.stalling && blink) {
@@ -502,9 +663,30 @@ export class HUD {
     }
   }
 
+  drawHint(dt) {
+    const m = this._hintMsg;
+    if (!m) return;
+    m.t += dt;
+    if (m.t > 0.9) { this._hintMsg = null; return; }
+    const a = m.t < 0.7 ? 1 : 1 - (m.t - 0.7) / 0.2;
+    const c = this.ctx;
+    c.globalAlpha = a;
+    this.text(m.text, this.w / 2, this.h / 2 + 120, 15, AMBER, 'center', 6);
+    c.globalAlpha = 1;
+  }
+
   vignette(S) {
     const p = S.player;
     const c = this.ctx;
+    // inbound missile: red edge pulse (AC-style warning glow)
+    if (S.weapons && (S.weapons.inboundWarning || S.weapons.radarInbound)) {
+      const pulse = 0.22 + Math.sin(S.time * 6) * 0.1;
+      const g = c.createRadialGradient(this.w / 2, this.h / 2, this.h * 0.42, this.w / 2, this.h / 2, this.h * 0.8);
+      g.addColorStop(0, 'rgba(255,30,10,0)');
+      g.addColorStop(1, `rgba(255,30,10,${pulse})`);
+      c.fillStyle = g;
+      c.fillRect(0, 0, this.w, this.h);
+    }
     // damage vignette
     const dmg = Math.max(p.hitFlash, p.hp <= 30 ? 0.22 + Math.sin(S.time * 5) * 0.08 : 0);
     if (dmg > 0.01) {

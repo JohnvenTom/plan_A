@@ -11,6 +11,17 @@ const _q = new THREE.Quaternion();
 const _m = new THREE.Matrix4();
 const UP = new THREE.Vector3(0, 1, 0);
 
+// seeker warmup machine (both kinds): cold --(SPACE/ALT)--> warming (1 s)
+// --(auto)--> hot (8 s hold window) --> cold. ALT is the ONLY cancel.
+const MSL_WARM_TIME = 1.0;
+const MSL_HOT_WINDOW = 8.0;
+// 80° nose envelope (±40° off the FUSELAGE axis, not the sight): radar locks
+// hold only inside it, IR shots may only leave the rail inside it
+const ENV_DOT = Math.cos(40 * Math.PI / 180);
+const BASKET_DOT = Math.cos(8 * Math.PI / 180);   // head-sight basket ±8°
+const SEEK_RANGE = { ir: 5200, radar: 10000 };
+const AMMO_REGEN = { ir: 5.5, radar: 8 };         // s per missile, per pool
+
 function tracerMaterial() {
   return new THREE.MeshBasicMaterial({
     color: 0xffc866, transparent: true, opacity: 0.95,
@@ -52,14 +63,19 @@ export class Weapons {
     this.effects = effects;
     this.audio = null;               // wired by main
 
-    // player state
-    this.ammo = 8;
-    this.ammoMax = 8;
-    this.ammoRegen = 0;
+    // player state — split missile pools: 6 IR light AAMs, 4 radar rounds
+    this.ammo = { ir: 6, radar: 4 };
+    this.ammoMax = { ir: 6, radar: 4 };
+    this.ammoRegen = { ir: 0, radar: 0 };
     this.gunHeat = 0;
-    this.lockState = { target: null, progress: 0, locked: false };
+    this.lockState = { target: null, locked: false };
     this.mslKind = 'ir';       // selected missile type: 'ir' | 'radar' (R key)
-    this.manualTarget = null;  // X-key cycled lock target
+    this.manualTarget = null;  // X-key head-sight lock target (instant)
+    // seeker warmup: 'cold' | 'warming' (t counts up to 1 s) | 'hot' (t = window left)
+    this.warm = { state: 'cold', t: 0 };
+    this.irSeek = null;        // IR seeker bite: nearest heat source in basket
+    this.lockConeDot = null;   // lock target's nose-cone dot (HUD edge warning)
+    this.hud = null;           // wired by main (transient hint line)
     this.flares = 90;          // regenerating countermeasure stock
     this.flareRegenT = 0;
     this.flareList = [];       // live flare entities (decoy IR seekers)
@@ -89,15 +105,21 @@ export class Weapons {
   }
 
   reset() {
-    this.ammo = this.ammoMax;
     this.gunHeat = 0;
-    this.lockState = { target: null, progress: 0, locked: false };
+    this.lockState = { target: null, locked: false };
     this.flares = 90;
     this.flareRegenT = 0;
     this.flareList.length = 0;
     this.chaffList.length = 0;
     this.mslKind = 'ir';
     this.manualTarget = null;
+    this.warm = { state: 'cold', t: 0 };
+    this.irSeek = null;
+    this.lockConeDot = null;
+    for (const k of Object.keys(this.ammo)) {
+      this.ammo[k] = this.ammoMax[k];
+      this.ammoRegen[k] = 0;
+    }
     for (const r of this.rounds) this.freeTracer(r.mesh);
     for (const ms of this.missiles) this.freeMissile(ms);
     this.rounds.length = 0;
@@ -184,7 +206,7 @@ export class Weapons {
       const vel = owner.vel.clone()
         .addScaledVector(down, kick)
         .addScaledVector(right, side * (2 + Math.random() * 4));
-      this.flareList.push({ pos, vel, life: 0, ttl: 2.6, owner, rollT: 0.55, rolls: 2, kind: 'ir', emitT: 0 });
+      this.flareList.push({ pos, vel, life: 0, ttl: 2.6, owner, rollT: 0.55, rolls: 2, kind: 'ir', emitT: 0, isFlare: true });
       // chaff: lighter bundles — same downward throw, ejected slightly apart
       const cvel = vel.clone().addScaledVector(down, 4 + Math.random() * 4);
       this.chaffList.push({ pos: pos.clone().addScaledVector(right, side * 0.4), vel: cvel, life: 0, ttl: 3.2, owner, rollT: 0.55, rolls: 0, kind: 'radar', emitT: 0 });
@@ -216,32 +238,43 @@ export class Weapons {
     return decoyed;
   }
 
-  // X key: HEAD-SIGHT lock attempt — the aim circle (引导圈) is the helmet
-  // sight. Pressing X tries to lock the enemy closest to the circle center
-  // inside the ±8° head basket (and inside the current missile's lock range).
-  // No passive auto-lock: nothing locks without the explicit command.
+  // X key: HEAD-SIGHT lock TOGGLE. With no lock: INSTANT lock on the enemy
+  // closest to the sight circle inside the ±8° basket and the current
+  // missile's range — no acquisition delay, 锁得上就是锁上了. With a lock:
+  // drops it (and kills a warming radar seeker — 断锁即熄火). No passive
+  // auto-lock: nothing locks without the explicit command.
   headLockAttempt(player, enemies) {
+    if (this.manualTarget) {
+      this.manualTarget = null;
+      this.lockState = { target: null, locked: false };
+      if (this.mslKind === 'radar') this.cancelWarm();
+      return;
+    }
     const aim = player.aimDir;
-    const range = this.mslKind === 'radar' ? 10000 : 5200;
-    let best = null, bestDot = 0.990;            // ±8° basket around the circle
+    const range = SEEK_RANGE[this.mslKind];
+    let best = null, bestDot = BASKET_DOT;
     for (const e of enemies) {
       if (e.dying) continue;
       _v.copy(e.position).sub(player.position);
       const dist = _v.length();
       if (dist > range || dist < 90) continue;
       _v.divideScalar(dist);
-      const dot = _v.dot(aim);
-      if (dot > bestDot) { bestDot = dot; best = e; }
+      if (_v.dot(aim) > bestDot) { bestDot = _v.dot(aim); best = e; }
     }
-    if (best && best !== this.manualTarget) {
+    if (best) {
       this.manualTarget = best;
-      this.lockState.target = best;
-      this.lockState.progress = 0;
-      this.lockState.locked = false;
-      if (this.audio) this.audio.lockTick();
+      this.lockState = { target: best, locked: true };
+      if (this.audio) this.audio.lock();
     }
-    // pressing X with nothing (new) in the basket is a no-op: an ongoing or
-    // completed lock is kept — X never breaks what it already has
+    // X with nothing (new) in the basket is a no-op
+  }
+
+  // 80° launch/hold envelope: is this world point inside ±40° of the NOSE
+  // (the missile leaves the rail along the fuselage axis, not the sight)?
+  _inEnvelope(player, pos) {
+    _v.copy(pos).sub(player.position);
+    const d = _v.length() || 1;
+    return _v.divideScalar(d).dot(player.forward(_v2)) > ENV_DOT;
   }
 
   // after a decoy blind period, the missile may re-acquire ANY aircraft
@@ -263,36 +296,124 @@ export class Weapons {
     ms.target = best;
   }
 
-  // ---------- lock-on (head-sight): the lock only exists because X put it
-  // there; it holds while the target stays in range and inside ±25° of the
-  // VIEW (the pilot's head still points at it). No automatic acquisition. ----------
+  // ---------- lock maintenance (locks are INSTANT, acquired by X) ----------
+  // A lock holds while the target stays alive, in range, and inside the 80°
+  // nose envelope. Breaking it drops the lock — and a radar seeker that is
+  // warming or hot dies with it (断锁即熄火, re-lock means re-warm).
   updateLock(dt, player, enemies) {
-    const ls = this.lockState;
-    const aim = player.aimDir;                     // head reference = aim circle
-    const range = this.mslKind === 'radar' ? 10000 : 5200;
-    if (this.manualTarget) {
-      const t = this.manualTarget;
-      const valid = !t.dying && t.alive !== false &&
-        t.position.distanceTo(player.position) < range &&
-        _v.copy(t.position).sub(player.position).normalize().dot(aim) > 0.906;   // ±25° of view
-      if (!valid) this.manualTarget = null;
+    const t = this.manualTarget;
+    if (!t) {
+      this.lockState = { target: null, locked: false };
+      this.lockConeDot = null;
+      return;
     }
-    const best = this.manualTarget;
-    if (best !== ls.target) {
-      ls.target = best;
-      ls.progress = 0;
-      ls.locked = false;
+    const range = SEEK_RANGE[this.mslKind];
+    _v.copy(t.position).sub(player.position);
+    const d = _v.length() || 1;
+    this.lockConeDot = _v.divideScalar(d).dot(player.forward(_v2));
+    const valid = !t.dying && t.alive !== false &&
+      t.position.distanceTo(player.position) < range &&
+      this.lockConeDot > ENV_DOT;
+    if (!valid) {
+      this.manualTarget = null;
+      this.lockState = { target: null, locked: false };
+      this.lockConeDot = null;
+      if (this.mslKind === 'radar') this.cancelWarm();
     }
-    if (best) {
-      ls.progress = Math.min(1, ls.progress + dt / 1.15);
-      if (ls.progress >= 1 && !ls.locked) {
-        ls.locked = true;
-        if (this.audio) this.audio.lock();
+  }
+
+  // ---------- seeker warmup machine (both kinds share one warm state) ----------
+  // SPACE when cold starts the warmup too; ALT toggles it off at any stage
+  // (the ONLY way to cancel). Firing consumes the warm seeker: the next
+  // missile is cold again.
+  mslWarmPress() {
+    if (this.warm.state === 'cold') this._startWarm();
+    else {
+      this.cancelWarm();
+      if (this.audio) this.audio.warmCancel();
+    }
+  }
+
+  // SPACE handler: cold -> start warming; warming -> rejected; hot -> fire gate
+  mslFirePress(player) {
+    if (!player.alive) return false;
+    if (this.warm.state === 'cold') { this._startWarm(); return false; }
+    if (this.warm.state === 'warming') { this._hint('预热中…'); return false; }
+    if (!this._fireGate()) return false;
+    return this.playerMissile(player, true);
+  }
+
+  _startWarm() {
+    if (this.ammo[this.mslKind] <= 0) { this._hint('导弹耗尽'); return; }
+    this.warm = { state: 'warming', t: 0 };
+    if (this.audio) this.audio.warmStart();
+  }
+
+  cancelWarm() {
+    if (this.warm.state === 'cold') return;
+    this.warm = { state: 'cold', t: 0 };
+    this.irSeek = null;
+  }
+
+  _updateWarm(dt) {
+    const w = this.warm;
+    if (w.state === 'warming') {
+      w.t += dt;
+      if (w.t >= MSL_WARM_TIME) {
+        this.warm = { state: 'hot', t: MSL_HOT_WINDOW };
+        if (this.audio) this.audio.warmReady();
       }
-    } else {
-      ls.progress = 0;
-      ls.locked = false;
+    } else if (w.state === 'hot') {
+      w.t -= dt;
+      if (w.t <= 0) this.cancelWarm();
     }
+  }
+
+  // gate for a HOT seeker: radar needs the lock; IR needs the seeker bite OR
+  // the radar designation (radar-guided IR shot)
+  _fireGate() {
+    const k = this.mslKind;
+    if (this.ammo[k] <= 0) { this._hint('导弹耗尽'); return false; }
+    if (k === 'radar' && !this.lockState.locked) { this._hint('未锁定'); return false; }
+    if (k === 'ir' && !this.irSeek && !this.lockState.locked) { this._hint('无热源 · 未锁定'); return false; }
+    return true;
+  }
+
+  _hint(text) { if (this.hud) this.hud.hint(text); }
+
+  // ---------- IR seeker scan (runs while IR is warming or hot) ----------
+  // Bites the NEAREST heat source inside the ±8° sight basket AND the 80°
+  // nose envelope — burning flares count exactly like aircraft (fully
+  // physical: a decoy drifting between you and the bandit bites first).
+  _updateSeeker(player, enemies) {
+    const prev = this.irSeek;
+    this.irSeek = null;
+    if (this.mslKind !== 'ir' || this.warm.state === 'cold') return;
+    const aim = player.aimDir;
+    let best = null, bestDist = Infinity;
+    const consider = (pos, src) => {
+      _v.copy(pos).sub(player.position);
+      const d = _v.length();
+      if (d > SEEK_RANGE.ir || d < 60) return;
+      _v.divideScalar(d);
+      if (_v.dot(aim) < BASKET_DOT) return;
+      if (_v.dot(player.forward(_v2)) < ENV_DOT) return;
+      if (d < bestDist) { bestDist = d; best = src; }
+    };
+    for (const e of enemies) {
+      if (e.dying || e.alive === false) continue;
+      consider(e.position, e);
+    }
+    for (const f of this.flareList) consider(f.pos, f);
+    this.irSeek = best;
+    if (best && best !== prev && this.audio) this.audio.seekBite();
+  }
+
+  // per-frame fire control: lock maintenance + warm machine + seeker scan
+  updateFireControl(dt, player, enemies) {
+    this.updateLock(dt, player, enemies);
+    this._updateWarm(dt);
+    this._updateSeeker(player, enemies);
   }
 
   // ---------- missiles ----------
@@ -332,17 +453,29 @@ export class Weapons {
     }
   }
 
-  playerMissile(player, wantFire) {
-    if (!wantFire || !player.alive || this.ammo <= 0) return false;
-    const ls = this.lockState;
+  // force=true bypasses the warm/gate checks (freeze harness scripted shots)
+  playerMissile(player, wantFire, force = false) {
+    if (!wantFire || !player.alive) return false;
+    const kind = this.mslKind;
+    if (!force) {
+      if (this.warm.state !== 'hot') return false;
+      if (!this._fireGate()) return false;
+    }
+    if (this.ammo[kind] <= 0) return false;
     // spawn under the wing, pointed forward
     const side = (this._side = !(this._side));
     const origin = player.position.clone()
       .addScaledVector(player.forward(new THREE.Vector3()), 2)
       .add(new THREE.Vector3(side ? 3.4 : -3.4, -1.1, 1.5).applyQuaternion(player.quaternion));
-    this.launchMissile(origin, player.quaternion, true, ls.locked ? ls.target : null, player, this.mslKind);
-    this.ammo--;
-    if (ls.locked) ls.progress = 0.35;   // re-lock quickly for the next shot
+    // guidance: for IR the seeker bite BEATS the radar designation (fully
+    // physical — even a radar-guided IR shot dives at the nearest heat
+    // source, flare included); radar lock guides when the seeker has nothing
+    const target = kind === 'ir'
+      ? (this.irSeek || this.lockState.target)
+      : this.lockState.target;
+    this.launchMissile(origin, player.quaternion, true, target, player, kind);
+    this.ammo[kind]--;
+    this.cancelWarm();   // the warmed missile is gone; the next one is cold
     return true;
   }
 
@@ -363,10 +496,11 @@ export class Weapons {
     }
     const hasTarget = ms.target && !ms.target.dying && ms.target.alive !== false;
     if (hasTarget) {
-      const dist = ms.pos.distanceTo(ms.target.position);
+      const tp = ms.target.position ?? ms.target.pos;   // flares carry .pos
+      const dist = ms.pos.distanceTo(tp);
       const tLead = clamp(dist / 800, 0, 2.0);
       // both sides expose their true velocity vector on the flight body
-      _v.copy(ms.target.position).addScaledVector(ms.target.vel, tLead).sub(ms.pos).normalize();
+      _v.copy(tp).addScaledVector(ms.target.vel, tLead).sub(ms.pos).normalize();
       _m.lookAt(ms.pos, _v2.copy(ms.pos).add(_v), UP);   // -Z of the matrix faces the aim point
       _q.setFromRotationMatrix(_m);
       const maxTurn = ms.turnRate * (ms.life > 0.35 ? 1 : 0.25);
@@ -377,10 +511,14 @@ export class Weapons {
   }
 
   update(dt, player, enemies, effects) {
-    // ammo regen
-    if (this.ammo < this.ammoMax && player.alive) {
-      this.ammoRegen += dt;
-      if (this.ammoRegen > 5.5) { this.ammoRegen = 0; this.ammo++; }
+    // ammo regen: two independent pools (IR light AAM / radar heavy)
+    if (player.alive) {
+      for (const k of ['ir', 'radar']) {
+        if (this.ammo[k] < this.ammoMax[k]) {
+          this.ammoRegen[k] += dt;
+          if (this.ammoRegen[k] > AMMO_REGEN[k]) { this.ammoRegen[k] = 0; this.ammo[k]++; }
+        }
+      }
     }
 
     // --- tracers ---
@@ -476,6 +614,12 @@ export class Weapons {
     for (let i = this.missiles.length - 1; i >= 0; i--) {
       const ms = this.missiles[i];
       ms.life += dt;
+      // a missile biting a flare chases it until the flare burns out, then
+      // goes decoyed-blind (IR re-acquires after 1.8 s — anyone, any aircraft)
+      if (ms.target && ms.target.isFlare && !this.flareList.includes(ms.target)) {
+        ms.target = null;
+        if (ms.kind === 'ir') ms.blind = Math.max(ms.blind, 1.8);
+      }
       if (ms.blind > 0) {
         ms.blind -= dt;
         // IR seekers re-acquire after the blind period; a radar missile that

@@ -12,10 +12,11 @@ export const DEFAULT_BINDINGS = {
   throttleUp: 'ShiftLeft',
   throttleDown: 'ControlLeft',
   fireGun: 'Mouse0',
-  fireMissile: 'Mouse2',
+  fireMissile: 'Space',    // 空格发射(已预热时)/冷态时代替ALT发起预热
+  mslWarmup: 'AltLeft',    // 导弹头预热开关(唯一的取消途径)
   flares: 'Mouse1',        // 干扰弹(热诱弹/箔条自动识别)默认鼠标中键
   cycleMissile: 'KeyR',    // 切换红外弹/雷达弹
-  cycleTarget: 'KeyX',     // 头瞄锁定(引导圈瞄准+X尝试锁定)
+  cycleTarget: 'KeyX',     // 头瞄锁定(即时) — 再按一次取消锁定
   freeLook: 'KeyC',        // 长按自由视角(鼠标环视)
   camera: 'KeyV',          // 切换视角档位
   zoom: 'KeyZ',            // 放大
@@ -27,8 +28,9 @@ export const ACTION_LABELS = {
   rollLeft: '左滚转', rollRight: '右滚转',
   rudderLeft: '左方向舵', rudderRight: '右方向舵',
   throttleUp: '油门+', throttleDown: '油门-',
-  fireGun: '机炮', fireMissile: '导弹', flares: '干扰弹(诱弹/箔条)',
-  cycleMissile: '切换弹种(红外/雷达)', cycleTarget: '头瞄锁定',
+  fireGun: '机炮', fireMissile: '发射导弹/发起预热', mslWarmup: '导弹预热(开/关)',
+  flares: '干扰弹(诱弹/箔条)',
+  cycleMissile: '切换弹种(红外/雷达)', cycleTarget: '头瞄锁定/取消',
   freeLook: '自由视角(长按)', camera: '切换视角档位', zoom: '放大',
   pause: '暂停',
 };
@@ -44,6 +46,8 @@ export function codeLabel(code) {
   if (code.startsWith('Digit')) return code.slice(5);
   if (code === 'ShiftLeft') return '左Shift';
   if (code === 'ShiftRight') return '右Shift';
+  if (code === 'AltLeft') return '左Alt';
+  if (code === 'AltRight') return '右Alt';
   if (code === 'ControlLeft') return '左Ctrl';
   if (code === 'ControlRight') return '右Ctrl';
   if (code === 'Space') return '空格';
@@ -73,9 +77,14 @@ export class Input {
       if (this._capturing) { this._finishCapture(e.code); e.preventDefault(); return; }
       this.keys.add(e.code);
       this.justPressed.add(e.code);
-      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+      // Space/Alt: page scroll and browser menu focus must not fire mid-combat
+      if (['Space', 'AltLeft', 'AltRight', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
     });
-    addEventListener('keyup', e => this.keys.delete(e.code));
+    addEventListener('keyup', e => {
+      this.keys.delete(e.code);
+      // ALT: the menu-focus trigger is the keyUP, so it needs swallowing too
+      if (e.code === 'AltLeft' || e.code === 'AltRight') e.preventDefault();
+    });
     addEventListener('blur', () => { this.keys.clear(); this.mouseDown = this.mouseDown.map(() => false); });
     addEventListener('mousedown', e => {
       if (e.button < 3) {
@@ -114,6 +123,10 @@ export class Input {
     try {
       const raw = localStorage.getItem(STORE_KEY);
       if (raw) Object.assign(this.bindings, JSON.parse(raw));
+      // migration: fireMissile moved from Mouse2 to Space when warmup landed —
+      // profiles saved before that still carry the old default and would
+      // never see the new key unless upgraded in place
+      if (this.bindings.fireMissile === 'Mouse2') this.bindings.fireMissile = 'Space';
     } catch (_) { /* fresh profile */ }
   }
 

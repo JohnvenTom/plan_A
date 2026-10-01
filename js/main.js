@@ -46,6 +46,7 @@ const hud = new HUD(document.getElementById('hud'));
 window.__hud = hud;   // debug hook
 window.__weapons = weapons;   // debug hook
 window.__player = player;     // debug hook
+window.__enemies = enemies;   // debug hook
 window.__weather = weather;   // debug hook
 window.__scene = scene;       // debug hook (screenshot harness: __renderer.render(__scene, __player.camera))
 window.__renderer = renderer; // debug hook
@@ -53,6 +54,7 @@ const audio = new GameAudio();
 const input = new Input();
 weapons.playerRef = player;
 weapons.audio = audio;
+weapons.hud = hud;
 
 const flashEl = document.getElementById('flash');
 const titleEl = document.getElementById('title');
@@ -170,16 +172,18 @@ function update(dt) {
     // player weapons
     const firing = input.down('fireGun');
     weapons.playerGun(player, dt, firing && player.alive, enemies.enemies);
-    if (input.pressed('fireMissile')) weapons.playerMissile(player, true);
+    if (input.pressed('fireMissile')) weapons.mslFirePress(player);
+    if (input.pressed('mslWarmup')) weapons.mslWarmPress();
     if (input.pressed('flares')) weapons.deployFlares(player, 3);
     if (input.pressed('cycleMissile')) {
       weapons.mslKind = weapons.mslKind === 'ir' ? 'radar' : 'ir';
       weapons.manualTarget = null;
+      weapons.cancelWarm();   // warm state belongs to the selected kind
       hud.announce(weapons.mslKind === 'radar' ? '雷达弹' : '红外弹',
-        weapons.mslKind === 'radar' ? 'RADAR — 10km 锁定 · 39/箔条可避' : 'IR — 5.2km 锁定 · 热诱弹可避', 1.2, 'info');
+        weapons.mslKind === 'radar' ? 'RADAR — 10km 即时锁定 · 预热后发射 · 39/箔条可避' : 'IR — 热源导引 · 预热后发射 · 热诱弹可避', 1.2, 'info');
     }
     if (input.pressed('cycleTarget')) weapons.headLockAttempt(player, enemies.enemies);
-    weapons.updateLock(dt, player, enemies.enemies);
+    weapons.updateFireControl(dt, player, enemies.enemies);
 
     // world
     enemies.update(dt, player, player.alive ? killCtx : { effects });
@@ -253,6 +257,7 @@ function renderHUD() {
     time: G.time,
     clock, weatherName: weather.name,
     enemyLock: enemies.enemies.reduce((m, e) => Math.max(m, e.lockT || 0), 0),
+    enemyWarm: enemies.enemies.reduce((m, e) => Math.max(m, e.warmT || 0), 0),
     radarThreats: weapons.missiles
       .filter(m => !m.fromPlayer && m.kind === 'radar' && m.blind < 5)
       .map(m => {
@@ -274,10 +279,11 @@ function freezeFrame() {
   const shotTimes = [4.2, 9.0, 13.5];
   for (let i = 0; i < steps; i++) {
     update(dt);
-    // scripted shots so stills can catch trails/impacts (freeze mode only)
+    // scripted shots so stills can catch trails/impacts (freeze mode only) —
+    // force=true bypasses the warmup gate, the harness has no ALT key
     if (missileShots < shotTimes.length && G.time >= shotTimes[missileShots]) {
       missileShots++;
-      if (weapons.lockState.target) weapons.playerMissile(player, true);
+      if (weapons.lockState.target) weapons.playerMissile(player, true, true);
     }
   }
   renderer.render(scene, camera);
@@ -387,8 +393,10 @@ function frame() {
           k: e.mslKind,
         })),
         missiles: weapons.missiles.map(m => ({ fromPlayer: m.fromPlayer, age: Math.round(m.life * 10) / 10 })),
-        lock: weapons.lockState.locked, lockProg: Math.round(weapons.lockState.progress * 100) / 100,
-        enemyLocks: enemies.enemies.map(e => Math.round((e.lockT || 0) * 100) / 100), ammo: weapons.ammo,
+        lock: weapons.lockState.locked, warm: weapons.warm.state,
+        irSeek: !!weapons.irSeek,
+        enemyLocks: enemies.enemies.map(e => Math.round((e.lockT || 0) * 100) / 100),
+        enemyWarms: enemies.enemies.map(e => Math.round((e.warmT || 0) * 100) / 100), ammo: weapons.ammo,
         enemyScreens: enemies.enemies.slice(0, 5).map(e => {
           _v2.copy(e.position).project(camera);
           return [Math.round((_v2.x * 0.5 + 0.5) * 1000) / 1000, Math.round((-_v2.y * 0.5 + 0.5) * 1000) / 1000, _v2.z < 1];

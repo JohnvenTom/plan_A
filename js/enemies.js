@@ -36,7 +36,8 @@ class Enemy {
     this.fireCooldown = 1.5 + Math.random() * 2;
     this.missileCooldown = 5 + Math.random() * 6;
     this.gunBurst = 0;
-    this.lockT = 0;            // missile lock hold time (same 1.15 s rule as the player)
+    this.lockT = 0;            // missile lock hold time (same 1.15 s rule)
+    this.warmT = 0;            // seeker warmup after the lock (1 s)
     // wave 2+: about half the flight carries 10 km radar missiles
     this.mslKind = (wave >= 2 && Math.random() < 0.5) ? 'radar' : 'ir';
     this.dying = false;
@@ -201,15 +202,24 @@ class Enemy {
       this.gunBurst -= dt;
       ctx.enemyGun(this, player);
     }
-    // --- enemy missile lock: SAME rule as the player's — hold the target in
-    //     the nose cone for 1.15 s before launch (fairness parity). Radar
-    //     shooters lock from 10 km, IR shooters from 2.6 km. ---
+    // --- enemy missile lock: hold the target in the nose cone for 1.15 s,
+    //     then warm the seeker for 1 s — 2.15 s total pre-launch telegraph
+    //     (the player's own head-sight lock is instant; enemy fire control is
+    //     deliberately conservative). Radar shooters track from 10 km, IR
+    //     shooters from 2.6 km. ---
     const lockRange = this.mslKind === 'radar' ? 10000 : 2600;
     const canTrack = (this.state !== 'patrol' || this.mslKind === 'radar') && dist < lockRange && aimDot > 0.90;
-    this.lockT = canTrack ? this.lockT + dt : 0;
-    if (this.missileCooldown <= 0 && this.lockT >= 1.15) {
+    if (canTrack) {
+      this.lockT += dt;
+      if (this.lockT >= 1.15) this.warmT += dt;
+    } else {
+      this.lockT = 0;
+      this.warmT = 0;
+    }
+    if (this.missileCooldown <= 0 && this.warmT >= 1.0) {
       this.missileCooldown = 7 + Math.random() * 7;
       this.lockT = 0;
+      this.warmT = 0;
       if (ctx && ctx.enemyMissile) ctx.enemyMissile(this, player);
     }
     this.syncModel();

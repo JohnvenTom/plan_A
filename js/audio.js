@@ -112,6 +112,18 @@ export class GameAudio {
   }
   lock() { this._tone('square', 1250, 1250, 0.09, 0.12); }
   lockTick() { this._tone('square', 780, 780, 0.05, 0.08); }
+  // seeker warmup: soft rising hum on start, two-tone confirm when hot,
+  // damped click on cancel, double ping when the IR seeker bites a heat source
+  warmStart() { this._tone('sine', 150, 340, 0.9, 0.07); }
+  warmReady() {
+    this._tone('square', 880, 880, 0.06, 0.1);
+    setTimeout(() => this._tone('square', 1320, 1320, 0.09, 0.12), 85);
+  }
+  warmCancel() { this._tone('sine', 300, 120, 0.14, 0.07); }
+  seekBite() {
+    this._tone('square', 1600, 1600, 0.05, 0.09);
+    setTimeout(() => this._tone('square', 1600, 1600, 0.05, 0.09), 70);
+  }
   missileAlert() { this._tone('square', 950, 690, 0.16, 0.10); }
   crit() {
     this._tone('square', 1500, 1500, 0.07, 0.16);
@@ -137,13 +149,8 @@ export class GameAudio {
     this.windFilter.frequency.value = 500 + s * 1400;
     this.windGain.gain.value = 0.02 + s * s * 0.14;
 
-    // lock tones
+    // inbound alert tones (locks are instant now — no acquisition beeping)
     if (weapons) {
-      const ls = weapons.lockState;
-      if (ls.target && !ls.locked) {
-        this._lockBeepT -= dt;
-        if (this._lockBeepT <= 0) { this.lockTick(); this._lockBeepT = 0.18; }
-      }
       if (weapons.inboundWarning || weapons.radarInbound) {
         this._alertT -= dt;
         if (this._alertT <= 0) {
