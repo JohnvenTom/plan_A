@@ -29,6 +29,11 @@ export class HUD {
     this.msgQueue = [];   // {text, sub, t, dur}
     this.killFeed = [];   // {text, t}
     this._hintMsg = null; // transient gate hint (预热中…/未锁定/…)
+    this._collapse = new Map(); // dying target frames: enemy -> 0..1
+    this._lockPrev = null;      // lock-fly: previous locked target
+    this._lockScreen = null;    // last frame's lock bracket screen pos
+    this._lockFly = null;       // {from:{x,y}, t}
+    this._banner = null;        // DESTROYED sweep {t}
   }
 
   resize() {
@@ -41,10 +46,12 @@ export class HUD {
   }
 
   announce(text, sub = '', dur = 3.2, style = 'info', sticky = false) {
+    const live = this.msgQueue.filter(m => !m.dead);
+    if (!sticky && live.length >= 6) return;   // saturated: drop, never grow
     this.msgQueue.push({ text, sub, t: 0, dur, style, sticky, y: null, dead: false, fade: 0 });
     // hard cap: force the oldest non-sticky message out
-    const live = this.msgQueue.filter(m => !m.dead);
-    if (live.length > 4) live[0].t = Math.max(live[0].t, live[0].dur);
+    const now = this.msgQueue.filter(m => !m.dead);
+    if (now.length > 4) now[0].t = Math.max(now[0].t, now[0].dur);
   }
 
   clearSticky() {
@@ -54,6 +61,9 @@ export class HUD {
   // small transient line under the reticle: rejected SPACE presses explain
   // themselves here instead of a full center announcement
   hint(text) { this._hintMsg = { text, t: 0 }; }
+
+  // DESTROYED sweep banner
+  destroyed() { this._banner = { t: 0 }; }
 
   // world position -> screen px; returns {x, y, behind}
   proj(pos, camera) {
@@ -188,7 +198,9 @@ export class HUD {
     if (!threats.length) return;
     const cx = this.w / 2, cy = this.h - 96, R = 64;
     const c = this.ctx;
-    this.circle(cx, cy, R, 'rgba(255,90,74,0.55)', 1.5);
+    const hot = S.weapons.inboundWarning || S.weapons.radarInbound;
+    const rPulse = hot ? R + Math.sin(S.time * 9) * 5 : R;
+    this.circle(cx, cy, rPulse, hot ? RED : 'rgba(255,90,74,0.55)', hot ? 2.5 : 1.5);
     this.circle(cx, cy, R * 0.5, 'rgba(255,90,74,0.2)', 1);
     // own marker
     c.fillStyle = CYAN; c.shadowColor = CYAN; c.shadowBlur = 6;
@@ -219,13 +231,15 @@ export class HUD {
     this.drawHeading(S);
     this.drawEnvelope(S);
     this.drawReticle(S);
-    this.drawTargets(S);
+    this.drawTargets(dt, S);
+    this.drawHitDir(S);
     this.drawMissileMarkers(S);
     this.drawRadar(S);
     this.drawRWR(S);
     this.drawStatus(S);
     this.drawAlerts(dt, S);
     this.drawHint(dt);
+    this.drawBanner(dt);
     this.vignette(S);
   }
 
@@ -504,7 +518,7 @@ export class HUD {
   // The guidance target's frame is the 120° cone edge display: normal red
   // inside the cone, amber past 50° off the nose, flashing red past 56°
   // (lock breaks / launch gate closes at 60°) + a CONE tag.
-  drawTargets(S) {
+  drawTargets(dt, S) {
     const w = S.weapons;
     const ls = w.lockState;
     const cd = w.guideConeDot;
@@ -522,15 +536,50 @@ export class HUD {
       const isGuide = isLock && nearEdge;   // this frame shows the edge state
       const col = isGuide ? edgeCol : (isLock ? RED : CYAN_DIM);
       if (onScreen) {
-        const size = clamp(4200 / dist, 18, 66);
-        this._brackets(s.x, s.y, size, col, isLock ? 2 : 1.25);
-        if (isLock) {
-          this._diamond(s.x, s.y, 5, col, true);
-          this.text('LOCK', s.x + size / 2 + 8, s.y - size / 2 - 9, 12, col, 'left', 4);
-          if (isGuide) this.text(atEdge ? 'CONE — 即将断锁' : 'CONE', s.x + size / 2 + 8, s.y - size / 2 + 22, 11, edgeCol, 'left', 4);
+        let size = clamp(4200 / dist, 18, 66);
+        let px = s.x, py = s.y, alpha = 1;
+        // dying: the frame collapses into the wreck and fades out
+        if (e.dying) {
+          if (!this._collapse.has(e)) this._collapse.set(e, 0);
+          const k = Math.min(1, this._collapse.get(e) + dt * 1.6);
+          this._collapse.set(e, k);
+          size *= (1 - k * 0.85);
+          alpha = 1 - k;
+          if (alpha <= 0.02) { size = 0; }
         }
-        this.text(`RNG ${(dist / 1000).toFixed(1)}`, s.x + size / 2 + 8, s.y - size / 2 + 7, 11, col, 'left', 3);
-        if (e.hp < 42) this.text('DMG', s.x + size / 2 + 8, s.y + size / 2 - 5, 11, AMBER, 'left', 3);
+        // lock switch: the brackets fly from the old target to the new one
+        if (isLock) {
+          if (this._lockPrev !== e) {
+            if (this._lockPrev && this._lockScreen) this._lockFly = { x: this._lockScreen.x, y: this._lockScreen.y, t: 0 };
+            this._lockPrev = e;
+          }
+          if (this._lockFly) {
+            this._lockFly.t += dt / 0.25;
+            if (this._lockFly.t >= 1) this._lockFly = null;
+            else {
+              const k = this._lockFly.t, e2 = 1 - Math.pow(1 - k, 3);
+              px = this._lockFly.x + (px - this._lockFly.x) * e2;
+              py = this._lockFly.y + (py - this._lockFly.y) * e2;
+            }
+          }
+          this._lockScreen = { x: s.x, y: s.y };
+        }
+        if (size > 1) {
+          const c = this.ctx;
+          c.globalAlpha = alpha;
+          this._brackets(px, py, size, col, isLock ? 2 : 1.25);
+          if (isLock) {
+            this._diamond(px, py, 5, col, true);
+            this.text('LOCK', px + size / 2 + 8, py - size / 2 - 9, 12, col, 'left', 4);
+            if (isGuide) this.text(atEdge ? 'CONE — 即将断锁' : 'CONE', px + size / 2 + 8, py - size / 2 + 22, 11, edgeCol, 'left', 4);
+            // distance readout rolls drum-style like the cockpit gauges
+            this.drawDrum('lockRng', (dist / 1000).toFixed(1), px + size / 2 + 12, py - size / 2 + 7, 11, col, dt);
+          } else {
+            this.text(`RNG ${(dist / 1000).toFixed(1)}`, px + size / 2 + 8, py - size / 2 + 7, 11, col, 'left', 3);
+          }
+          if (e.hp < 42 && !e.dying) this.text('DMG', px + size / 2 + 8, py + size / 2 - 5, 11, AMBER, 'left', 3);
+          c.globalAlpha = 1;
+        }
       } else {
         // off-screen: arrow clamped to a centered ellipse pointing outward
         const dx = s.x - this.w / 2, dy = s.y - this.h / 2;
@@ -550,6 +599,9 @@ export class HUD {
         if (isGuide) this.text('CONE', ax - Math.cos(ang) * 26, ay - Math.sin(ang) * 26, 11, edgeCol, 'center', 4);
       }
     }
+    if (this._collapse.size > 12) {
+      for (const k of this._collapse.keys()) if (!S.enemies.includes(k)) this._collapse.delete(k);
+    }
     // radar seeker warmup arc around the locked target:
     // amber while warming (progress), thin solid red ring when hot
     if (w.mslKind === 'radar' && ls.target && w.warm.state !== 'cold') {
@@ -564,6 +616,59 @@ export class HUD {
         }
       }
     }
+  }
+
+  // ---- hit direction: a red arc on the screen rim pointing at the shooter ----
+  drawHitDir(S) {
+    const hit = S.weapons.lastHit;
+    if (!hit) return;
+    const k = 1 - hit.age / 2;
+    const fp = this.proj(_hv.copy(S.player.position).addScaledVector(hit.dir, 800), S.camera);
+    if (fp.behind) return;
+    const ang = Math.atan2(fp.y - this.h / 2, fp.x - this.w / 2);
+    const rx = this.w / 2 - 90, ry = this.h / 2 - 90;
+    const t = 1 / Math.max(Math.abs(Math.cos(ang)) / rx, Math.abs(Math.sin(ang)) / ry);
+    const cx = this.w / 2 + Math.cos(ang) * t, cy = this.h / 2 + Math.sin(ang) * t;
+    const c = this.ctx;
+    c.globalAlpha = Math.min(1, k);
+    c.strokeStyle = RED; c.lineWidth = 5;
+    c.shadowColor = RED; c.shadowBlur = 12;
+    c.beginPath();
+    c.arc(cx, cy, 34, ang - Math.PI / 2 - 0.7, ang - Math.PI / 2 + 0.7);
+    c.stroke();
+    c.shadowBlur = 0;
+    // inward arrowhead
+    c.save();
+    c.translate(cx - Math.cos(ang) * 42, cy - Math.sin(ang) * 42);
+    c.rotate(ang);
+    c.fillStyle = RED;
+    c.beginPath(); c.moveTo(10, 0); c.lineTo(-5, -6); c.lineTo(-5, 6); c.closePath(); c.fill();
+    c.restore();
+    c.globalAlpha = 1;
+  }
+
+  // ---- DESTROYED sweep: a red bar with white letters slides across the kill ----
+  drawBanner(dt) {
+    const b = this._banner;
+    if (!b) return;
+    b.t += dt;
+    if (b.t > 1.5) { this._banner = null; return; }
+    const k = b.t / 1.5;
+    const cx = this.w / 2, cy = this.h * 0.34;
+    const barW = this.w * 0.42, barH = 40;
+    const slide = Math.min(1, b.t / 0.22);
+    const out = b.t > 1.1 ? (b.t - 1.1) / 0.4 : 0;
+    const c = this.ctx;
+    c.save();
+    c.globalAlpha = Math.min(1, slide) * (1 - out);
+    c.fillStyle = 'rgba(120,20,12,0.78)';
+    c.fillRect(cx - barW / 2 * slide, cy - barH / 2, barW * slide, barH);
+    this.strokeRect(cx - barW / 2 * slide, cy - barH / 2, barW * slide, barH, RED, 1.5);
+    c.beginPath();
+    c.rect(cx - barW / 2 * slide, cy - barH / 2, barW * slide, barH);
+    c.clip();
+    this.text('DESTROYED', cx + (1 - slide) * 90 - out * 60, cy, 24, '#ffd9d4', 'center', 10);
+    c.restore();
   }
 
   // ---- hostile missiles: an unmistakable SPINNING diamond marker ----
@@ -789,6 +894,20 @@ export class HUD {
   vignette(S) {
     const p = S.player;
     const c = this.ctx;
+    // sustained high G: grey-out tunnel vision from the edges (G-LOC)
+    if (p.gGrey > 0.02) {
+      const g = c.createRadialGradient(this.w / 2, this.h / 2, this.h * 0.22, this.w / 2, this.h / 2, this.h * 0.72);
+      g.addColorStop(0, 'rgba(10,10,12,0)');
+      g.addColorStop(1, `rgba(8,8,10,${0.72 * p.gGrey})`);
+      c.fillStyle = g;
+      c.fillRect(0, 0, this.w, this.h);
+    }
+    // flying inside a cloud deck: milky white-out pulse
+    if (S.inCloud) {
+      const a = 0.16 + Math.sin(S.time * 2.2) * 0.06;
+      c.fillStyle = `rgba(210,218,226,${a})`;
+      c.fillRect(0, 0, this.w, this.h);
+    }
     // inbound missile: red edge pulse (AC-style warning glow)
     if (S.weapons && (S.weapons.inboundWarning || S.weapons.radarInbound)) {
       const pulse = 0.22 + Math.sin(S.time * 6) * 0.1;

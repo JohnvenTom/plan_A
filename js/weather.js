@@ -24,6 +24,20 @@ export class Weather {
     this.renderer = renderer;
     this.keys = Object.keys(STATES);
     this.onChange = null;   // main wires this to the HUD announcer
+    // visible lightning: pooled jagged cloud-to-sea lines, lit with the flash
+    this.bolts = [];
+    const boltMat = new THREE.LineBasicMaterial({
+      color: 0xeaf4ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    for (let i = 0; i < 2; i++) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(10 * 3), 3));
+      const line = new THREE.Line(geo, boltMat.clone());
+      line.visible = false;
+      line.frustumCulled = false;
+      scene.add(line);
+      this.bolts.push({ line, t: 1 });
+    }
     this.state = 'clear';
     this.target = { ...STATES.clear };
     this.cur = { ...STATES.clear };
@@ -65,6 +79,24 @@ export class Weather {
 
   get name() { return STATES[this.state].name; }
 
+  strikeBolt(camera) {
+    const b = this.bolts.find(x => x.t >= 1);
+    if (!b) return;
+    const pos = b.line.geometry.attributes.position;
+    const top = 1500;
+    let x = camera.position.x + (Math.random() - 0.5) * 1400;
+    let z = camera.position.z + (Math.random() - 0.5) * 1400;
+    for (let i = 0; i < 10; i++) {
+      const k = i / 9;
+      pos.setXYZ(i, x, top * (1 - k), z);
+      x += (Math.random() - 0.5) * 160;
+      z += (Math.random() - 0.5) * 160;
+    }
+    pos.needsUpdate = true;
+    b.t = 0;
+    b.line.visible = true;
+  }
+
   pickNext() {
     let total = 0;
     for (const k of this.keys) total += STATES[k].w;
@@ -103,6 +135,8 @@ export class Weather {
     }
     // sky.setCycle reads this object as "weather"
     sm.weatherParams = this.cur;
+    // storm sea state: wave choppiness follows the wind past gale force
+    this.seaT = Math.min(1, Math.max(0, (this.cur.wind - 3) / 3.5));
 
     // lightning during storms
     if (this.state === 'storm' && this.cur.rain > 0.8) {
@@ -110,7 +144,14 @@ export class Weather {
       if (this.nextBolt <= 0) {
         this.nextBolt = 3 + Math.random() * 7;
         this.flash = 1;
+        this.strikeBolt(camera);
       }
+    }
+    for (const b of this.bolts) {
+      if (b.t >= 1) continue;
+      b.t += dt / 0.16;
+      b.line.material.opacity = Math.max(0, 0.95 * (1 - b.t));
+      if (b.t >= 1) b.line.visible = false;
     }
     if (this.flash > 0) {
       this.flash = Math.max(0, this.flash - dt / 0.16);

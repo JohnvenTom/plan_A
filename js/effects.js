@@ -2,6 +2,9 @@
 // Two Points layers: additive (fire/spark/flash) + alpha smoke. Seeded RNG keeps
 // the ?t=N freeze harness reproducible.
 import * as THREE from 'three';
+import { SEA_LEVEL } from './terrain.js';
+
+const _wp = new THREE.Vector3();
 import { mulberry32, lerp, clamp } from './utils.js';
 
 const MAX_ADD = 1400, MAX_SMOKE = 1600;
@@ -94,6 +97,33 @@ export class Effects {
     this.add = new ParticleLayer(scene, MAX_ADD, THREE.AdditiveBlending, 0.02);
     this.smoke = new ParticleLayer(scene, MAX_SMOKE, THREE.NormalBlending, 0.12);
     this._v = V();
+    this.scene = scene;
+    // shockwave rings: flat expanding circles hugging the sea/ground
+    this.rings = [];
+    this.ringPool = [];
+    const ringGeo = new THREE.RingGeometry(0.86, 1, 48);
+    for (let i = 0; i < 8; i++) {
+      const m = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({
+        color: 0xcfe8ff, transparent: true, opacity: 0, side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      }));
+      m.rotation.x = -Math.PI / 2;
+      m.visible = false;
+      m.frustumCulled = false;
+      scene.add(m);
+      this.ringPool.push(m);
+    }
+    // debris chunks: small dark tumbling tetra shards
+    this.debrisList = [];   // NOT `debris` — that name is the emitter method
+    this.debrisPool = [];
+    const chunkGeo = new THREE.TetrahedronGeometry(0.7);
+    const chunkMat = new THREE.MeshStandardMaterial({ color: 0x2c3036, roughness: 0.9, flatShading: true });
+    for (let i = 0; i < 48; i++) {
+      const m = new THREE.Mesh(chunkGeo, chunkMat);
+      m.visible = false;
+      scene.add(m);
+      this.debrisPool.push(m);
+    }
   }
 
   spawn(layer, o) {
@@ -244,8 +274,70 @@ export class Effects {
     });
   }
 
+  // expanding flat shockwave ring at (sea/ground) level
+  ring(pos, scale = 1) {
+    const m = this.ringPool.find(r => !r.visible);
+    if (!m) return;
+    m.visible = true;
+    m.position.set(pos.x, SEA_LEVEL + 1.2, pos.z);
+    m.scale.setScalar(2);
+    m.material.opacity = 0.65;
+    this.rings.push({ m, t: 0, scale });
+  }
+
+  // debris chunks thrown out of a destruction
+  debris(pos, n = 10) {
+    for (let i = 0; i < n; i++) {
+      const m = this.debrisPool.find(d => !d.visible);
+      if (!m) return;
+      m.visible = true;
+      m.position.copy(pos);
+      const v = new THREE.Vector3(this.rng() - 0.5, this.rng() * 0.8 + 0.2, this.rng() - 0.5)
+        .normalize().multiplyScalar(30 + this.rng() * 80);
+      this.debrisList.push({ m, v, t: 0, life: 1.4 + this.rng() * 0.8, spin: new THREE.Vector3(this.rng() * 8, this.rng() * 8, this.rng() * 8) });
+    }
+  }
+
+  // ocean impact: tall white plume + base ring (no fireball over water)
+  waterColumn(pos, scale = 1) {
+    for (let i = 0; i < 20; i++) {
+      const up = 55 + this.rng() * 90;
+      this.spawn(this.smoke, {
+        pos: _wp.set(pos.x + (this.rng() - 0.5) * 8, SEA_LEVEL + 2, pos.z + (this.rng() - 0.5) * 8),
+        vel: new THREE.Vector3((this.rng() - 0.5) * 16, up * scale, (this.rng() - 0.5) * 16),
+        life: 1.1 + this.rng() * 1.0, drag: 0.965, gravity: -14, turb: 1.6,
+        c0: [0.92, 0.96, 0.98], c1: [0.68, 0.74, 0.78], a0: 0.66, a1: 0,
+        s0: (5 + this.rng() * 7) * scale, s1: (26 + this.rng() * 18) * scale,
+      });
+    }
+    this.spawn(this.add, {
+      pos: _wp.set(pos.x, SEA_LEVEL + 3, pos.z), life: 0.3,
+      c0: [2.2, 2.6, 2.8], c1: [0.8, 1.0, 1.1], s0: 30 * scale, s1: 8 * scale,
+    });
+    this.ring(pos, 1.3 * scale);
+  }
+
   update(dt) {
     this.add.update(dt);
     this.smoke.update(dt);
+    for (let i = this.rings.length - 1; i >= 0; i--) {
+      const r = this.rings[i];
+      r.t += dt / 0.6;
+      if (r.t >= 1) { r.m.visible = false; this.rings.splice(i, 1); continue; }
+      const e = 1 - Math.pow(1 - r.t, 2.4);
+      r.m.scale.setScalar(2 + e * 68 * r.scale);
+      r.m.material.opacity = 0.65 * (1 - r.t);
+    }
+    for (let i = this.debrisList.length - 1; i >= 0; i--) {
+      const d = this.debrisList[i];
+      d.t += dt;
+      if (d.t >= d.life) { d.m.visible = false; this.debrisList.splice(i, 1); continue; }
+      d.v.y -= 60 * dt;
+      d.v.multiplyScalar(Math.pow(0.985, dt * 60));
+      d.m.position.addScaledVector(d.v, dt);
+      d.m.rotation.x += d.spin.x * dt;
+      d.m.rotation.y += d.spin.y * dt;
+      d.m.rotation.z += d.spin.z * dt;
+    }
   }
 }

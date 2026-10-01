@@ -81,6 +81,16 @@
     font-size: 13px; letter-spacing: .15em; }
   .bind-actions span { color: #9fd0ff; cursor: pointer; }
   .bind-actions span:hover { color: #fff; }
+    #go-stats { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; min-width: 240px; }
+    #go-stats .row {
+      display: flex; justify-content: space-between; gap: 30px;
+      font: bold 14px Consolas, "Courier New", monospace; color: #8fe0ff;
+      border-bottom: 1px solid rgba(143,224,255,0.25); padding: 3px 2px;
+      opacity: 0; animation: statRow .5s ease forwards;
+    }
+    #go-stats .row b { color: #ffc866; }
+    @keyframes statRow { from { opacity: 0; transform: translateX(-24px); } to { opacity: 1; transform: none; } }
+
 </style>
 <script type="importmap">
   { "imports": { "three": "./vendor/three.module.js" } }
@@ -126,6 +136,7 @@
     <div class="sub-stat" id="go-sub">机体损毁</div>
     <div class="big-stat" id="go-score">0</div>
     <div class="sub-stat">击落数</div>
+    <div id="go-stats"></div>
     <div class="start-hint">— 按 回车 重新出击 —</div>
   </div>
 

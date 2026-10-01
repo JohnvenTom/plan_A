@@ -134,6 +134,11 @@ export class GameAudio {
     setTimeout(() => this._noise(0.1, 'bandpass', 1800, 400, 0.14, 1.8), 70);
   }
   hitTaken() { this._noise(0.25, 'lowpass', 500, 100, 0.4); }
+  sonicBoom() {
+    this._tone('sine', 90, 32, 0.8, 0.5);
+    this._noise(0.5, 'lowpass', 600, 70, 0.45);
+  }
+  nearMiss() { this._noise(0.3, 'bandpass', 1500, 320, 0.34, 1.2); }
   kill() { this._tone('triangle', 520, 780, 0.28, 0.2); }
 
   update(dt, player, weapons) {

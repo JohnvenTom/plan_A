@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import { clamp, damp } from './utils.js';
 import { GROUND_CLEAR_AGL } from './utils.js';
+import { cornerSpeedKMH } from './flightmodel.js';
 import { buildJet } from './jet.js';
 import { FlightBody } from './flightmodel.js';
 import { terrainHeightAt, SEA_LEVEL } from './terrain.js';
@@ -33,6 +34,7 @@ export class Player {
     this.boosting = false;
     this.aimDir = new THREE.Vector3(0, 0, -1);  // WORLD-ANCHORED aim direction
     this._flAim = new THREE.Vector3(0, 0, -1);  // chase target frozen at C-press
+    this.gGrey = 0;                             // sustained-G grey-out level
     this._flWasHeld = false;
     this.aimLocal = null;
     this._keyOverride = 0; this._keyYaw = 0; this._keyPitch = 0;
@@ -201,6 +203,14 @@ export class Player {
     this.model.group.position.copy(b.pos);
     this.model.group.quaternion.copy(b.quat);
     if (this.model.setControlSurfaces) this.model.setControlSurfaces(b.ctl);
+    // afterburner plume flicker
+    if (this.model.afterburners) {
+      for (const ab of this.model.afterburners) {
+        if (!ab.visible) continue;
+        const f = 0.82 + Math.random() * 0.36;
+        ab.scale.set(f, 0.75 + Math.random() * 0.5, f);
+      }
+    }
 
     // ---- terrain & limits ----
     const ground = Math.max(terrainHeightAt(b.pos.x, b.pos.z), SEA_LEVEL);
@@ -213,6 +223,19 @@ export class Player {
     const r = Math.hypot(b.pos.x, b.pos.z);
     this.outOfArea = r > COMBAT_RADIUS;
     this.outOfAreaTime = this.outOfArea ? this.outOfAreaTime + dt : 0;
+
+    // ---- AC-style pilot body feedback ----
+    // sustained high G: grey-out creeping in from the edges (G-LOC), recovers
+    // quickly once the load comes off
+    this.gGrey = clamp(this.gGrey + ((this.gLoad > 7 ? (this.gLoad - 6) / 5 : -2.2) * dt), 0, 1);
+    // corner-speed airframe buffet: high-frequency flutter in the turn band
+    if (Math.abs(this.speed * 3.6 - cornerSpeedKMH(b.pos.y)) < 40) {
+      this.camShake = Math.max(this.camShake, 0.055);
+    }
+    // afterburner light-up: one-shot FOV punch that decays
+    if (this.boosting && !this._wasBoost) this._abKick = 1;
+    this._wasBoost = this.boosting;
+    this._abKick = Math.max(0, (this._abKick ?? 0) - dt * 1.5);
 
     // ---- afterburner visual ----
     const abVis = this.boosting && b.airspeed > 200;
@@ -305,7 +328,7 @@ export class Player {
     this.camera.up.copy(up);
     this.camLook.copy(this.camPos).addScaledVector(viewDir, 100);
     this.camera.lookAt(this.camLook);
-    const targetFov = this.zoomed ? 22 : this._vFov + clamp((this.body.airspeed - 240) / 480, 0, 1) * 14;
+    const targetFov = this.zoomed ? 22 : this._vFov + clamp((this.body.airspeed - 240) / 480, 0, 1) * 14 + (this._abKick ?? 0) * 9;
     this.camera.fov = damp(this.camera.fov, targetFov, 6, dt);
     this.camera.updateProjectionMatrix();
   }

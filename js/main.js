@@ -66,20 +66,29 @@ const goEl = document.getElementById('gameover');
 
 // ---------- game state ----------
 const G = {
-  state: 'title',           // title | playing | gameover
+  state: 'title',           // title | intro | playing | gameover
   kills: 0, score: 0,
   time: 0, deathTimer: 0, paused: false, menuOpen: false,
   contrailT: 0, smokeT: 0,
+  timeScale: 1,             // kill-cam micro slow-motion
+  introT: 0, introFrom: null,
+  _mach: false,
 };
+const INTRO_INPUT = { down: () => false, pressed: () => false, wheelDelta: 0, aimDX: 0, aimDY: 0 };
+window.__update = update;     // debug hook (kill-chain repro)
+window.__G = G;               // debug hook
 
 const killCtx = {
   effects,
   weapons,
   deployFlares: (owner, n) => weapons.deployFlares(owner, n),
   onKill(enemy, crashed) {
-    G.kills++; G.score += 250 + enemies.wave * 25;
-    hud.announce('摧毁目标', `TARGET DESTROYED  +${250 + enemies.wave * 25}`, 2.2, 'kill');
+    G.kills++; G.score += (250 + enemies.wave * 25) * (enemy.ace ? 2 : 1);
+    hud.announce('摧毁目标', `TARGET DESTROYED  +${(250 + enemies.wave * 25) * (enemy.ace ? 2 : 1)}${enemy.ace ? ' · ACE x2' : ''}`, 2.2, 'kill');
+    hud.destroyed();
     audio.kill();
+    effects.ring?.(enemy.position, 1.3);
+    G.timeScale = 0.25;   // kill-cam micro slow-motion
     flashKill();
   },
   enemyGun: (e, p) => weapons.enemyGun(e, p),
@@ -108,10 +117,15 @@ function resetAll() {
 function startGame() {
   audio.init(); audio.resume(); audio.setRunning(true);
   resetAll();
-  G.state = 'playing';
+  G.state = 'intro';
+  G.introT = 3.2;
+  G.timeScale = 1;
+  // swoop starts ahead-right of the jet and settles into the chase camera
+  G.introFrom = player.body.pos.clone()
+    .add(new THREE.Vector3(-70, 14, 26).applyQuaternion(player.body.quat));
   titleEl.classList.add('hidden');
   goEl.classList.add('hidden');
-  try { canvas.requestPointerLock?.(); } catch (_) { /* fallback: delta mode */ }
+  try { const r = canvas.requestPointerLock?.(); if (r && r.catch) r.catch(() => {}); } catch (_) { /* fallback: delta mode */ }
 }
 
 function setPaused(v) {
@@ -132,6 +146,9 @@ function gameOver() {
   if (document.pointerLockElement) document.exitPointerLock();
   hud.msgQueue.length = 0;
   document.getElementById('go-score').textContent = String(G.kills);
+  document.getElementById('go-stats').innerHTML = [
+    ['击坠', G.kills], ['波次', enemies.wave], ['得分', G.score], ['存活', Math.round(G.time) + ' s'],
+  ].map(([k, v], i) => `<div class="row" style="animation-delay:${0.15 * i}s"><span>${k}</span><b>${v}</b></div>`).join('');
   const win = false;
   document.getElementById('go-title').textContent = 'MISSION FAILED';
   document.getElementById('go-sub').textContent = player.crashed ? '机体触地坠毁' : '机体损毁';
@@ -141,6 +158,29 @@ function gameOver() {
 
 // ---------- environment: 8-minute day/night cycle + dynamic weather ----------
 const DAY_LEN = 1200;                      // seconds for a full day (20 min)
+function introStep(dt) {
+  G.introT -= dt;
+  player.update(dt, INTRO_INPUT);
+  enemies.update(dt, player, { effects });
+  effects.update(dt);
+  sky.update(dt, camera.position);
+  updateEnvironment(dt);
+  ocean.mesh.position.x = camera.position.x;
+  ocean.mesh.position.z = camera.position.z;
+  ocean.mat.uniforms.uCamPos.value.copy(camera.position);
+  ocean.mat.uniforms.uTime.value = G.time;
+  ocean.mat.uniforms.uSunDir.value.copy(sky.sunDir);
+  const k = 1 - Math.max(0, G.introT) / 3.2;
+  const e = 1 - Math.pow(1 - k, 3);
+  camera.position.lerpVectors(G.introFrom, player.camPos, e);
+  camera.up.set(0, 1, 0);
+  camera.lookAt(player.body.pos.x, player.body.pos.y + 4, player.body.pos.z);
+  if (G.introT <= 0) {
+    G.state = 'playing';
+    hud.announce('MISSION START', '任务开始 — 拦截入侵机群', 2.2, 'wave');
+  }
+}
+
 function updateEnvironment(dt) {
   weather.update(dt, camera);
   const day01 = (G.time / DAY_LEN + 0.46) % 1;   // missions start at golden hour
@@ -208,8 +248,21 @@ function update(dt) {
     for (const ev of enemies.events) {
       if (ev.type === 'wave') hud.announce(`WAVE ${ev.wave}`, `敌机接近 — ${ev.count} 机`, 3.0, 'wave');
       else if (ev.type === 'waveClear') hud.announce('WAVE CLEAR', '敌机全灭 — 下一波接近中', 2.6, 'info');
+      else if (ev.type === 'ace') hud.announce('⚠ 王牌机参战', 'ACE — 高机动 · 击坠双倍分', 3.2, 'wave');
     }
     enemies.events.length = 0;
+
+    for (const ev of weapons.events) {
+      if (ev.type === 'nearMiss') {
+        player.camShake = Math.min(1, player.camShake + 0.3);
+        audio.nearMiss();
+      }
+    }
+    // supersonic boom: one-shot ring + thunder when crossing the sound barrier
+    if (player.alive) {
+      if (!G._mach && player.speed > 340) { G._mach = true; effects.ring(player.position, 1.6); audio.sonicBoom(); }
+      else if (G._mach && player.speed < 320) G._mach = false;
+    }
 
     // player contrails + damage smoke
     G.contrailT += dt;
@@ -248,13 +301,14 @@ function update(dt) {
   ocean.mat.uniforms.uSunDir.value.copy(sky.sunDir);
   ocean.mat.uniforms.uFogColor.value.copy(scene.fog.color);
   ocean.mat.uniforms.uFogDensity.value = scene.fog.density;
+  ocean.mat.uniforms.uStorm.value = weather.seaT ?? 0;
 }
 
 function renderHUD() {
   const mins = Math.floor(((G.day01 ?? 0.46) * 24 + 6) % 24 * 60);
   const clock = `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
   hud.draw(G.paused ? 0 : 1 / 60, {
-    state: G.state,
+    state: G.state === 'intro' ? 'playing' : G.state,
     paused: G.paused,
     player, camera,
     enemies: enemies.enemies,
@@ -262,6 +316,7 @@ function renderHUD() {
     kills: G.kills, score: G.score, wave: enemies.wave,
     time: G.time,
     clock, weatherName: weather.name,
+    inCloud: weather.cur.gray > 0.28 && Math.abs(player.position.y - 2750) < 380,
     enemyLock: enemies.enemies.reduce((m, e) => Math.max(m, e.lockT || 0), 0),
     enemyWarm: enemies.enemies.reduce((m, e) => Math.max(m, e.warmT || 0), 0),
     radarThreats: weapons.missiles
@@ -337,6 +392,7 @@ const clock = new THREE.Clock();
 function frame() {
   const dt = Math.min(clock.getDelta(), 0.05);
 
+  try {
   if (G.state === 'title') {
     if (input.pressedRaw('Enter') || input.mousePressed(0)) startGame();
     // idle orbit so the title screen isn't static
@@ -357,7 +413,15 @@ function frame() {
   } else {
     if (G.state === 'gameover' && input.pressedRaw('Enter')) { startGame(); }
     else if (G.state === 'playing' && input.pressed('pause')) setPaused(!G.paused);
-    update(dt);
+    if (G.state === 'intro') {
+      introStep(dt);
+    } else {
+      const sdt = dt * G.timeScale;
+      G.timeScale = Math.min(1, G.timeScale + dt * 1.6);   // slow-mo recovers
+      update(sdt);
+    }
+    camera.zoom = 1 + (1 - G.timeScale) * 0.09;            // slow-mo punch-in
+    camera.updateProjectionMatrix();
     renderer.render(scene, camera);
     renderHUD();
     if (DEBUG) {
@@ -418,6 +482,18 @@ function frame() {
           .filter(o => o.name && o.name.startsWith('surf_'))
           .map(o => o.name.slice(5) + ':' + (Math.round(o.rotation.x * 100) / 100)),
       };
+    }
+  }
+  } catch (err) {
+    // never let one bad frame kill the rAF loop: log it, surface it, move on.
+    // The HUD announce is throttled hard — if the thrower is inside the
+    // message-stack drawing itself, announcing every frame would grow the
+    // queue unboundedly (the freeze-with-sound signature).
+    console.error('frame error:', err);
+    G.lastFrameErrAt = G.lastFrameErrAt ?? -999;
+    if (G.time - G.lastFrameErrAt > 2) {
+      G.lastFrameErrAt = G.time;
+      try { hud.announce('⚠ 系统异常', String(err.message).slice(0, 44), 1.6, 'crit'); } catch (_) {}
     }
   }
   input.endFrame();

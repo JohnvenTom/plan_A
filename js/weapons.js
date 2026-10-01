@@ -80,6 +80,8 @@ export class Weapons {
     this.warm = { state: 'cold', t: 0 };
     this.irSeek = null;        // IR seeker bite: nearest heat source in basket
     this.lockConeDot = null;   // lock target's nose-cone dot (HUD edge warning)
+    this.lastHit = null;       // {dir, age} — where the latest hit on the player came from
+    this.now = 0;              // presentation clock for hit-direction fading
     this.seekConeDot = null;   // IR bite's nose-cone dot
     this.guideConeDot = null;  // current guidance-relevant cone dot (HUD)
     this.hud = null;           // wired by main (transient hint line)
@@ -571,11 +573,13 @@ export class Weapons {
           hit = true;
           if (r.fromPlayer) {
             const killed = t.applyDamage(r.dmg);
+            t.flashT = 0.12;
             effects.hitSpark(r.pos);
             if (killed && !t.dying) effects.explosion(t.position, 1.0);
           } else {
             player.applyDamage(r.dmg);
             effects.hitSpark(r.pos);
+            this.lastHit = { dir: _v3.copy(r.pos).sub(player.position).normalize().clone(), age: 0 };
           }
           break;
         }
@@ -634,9 +638,24 @@ export class Weapons {
     // --- missiles ---
     this.inboundWarning = false;
     this.radarInbound = false;
+    this.now += dt;
+    if (this.lastHit) {
+      this.lastHit.age += dt;
+      if (this.lastHit.age > 2) this.lastHit = null;
+    }
     for (let i = this.missiles.length - 1; i >= 0; i--) {
       const ms = this.missiles[i];
       ms.life += dt;
+      // near-miss: an inbound missile swung past the player inside 70 m
+      // without fusing — one-shot camera whip event
+      if (!ms.fromPlayer && player.alive) {
+        const d2 = ms.pos.distanceTo(player.position);
+        if (d2 < (ms._minD ?? 1e9)) ms._minD = d2;
+        else if (!ms._whipped && ms._minD < 70 && d2 > ms._minD + 6) {
+          ms._whipped = true;
+          this.events.push({ type: 'nearMiss' });
+        }
+      }
       // a missile biting a flare chases it until the flare burns out, then
       // goes decoyed-blind (IR re-acquires after 1.8 s — anyone, any aircraft)
       if (ms.target && ms.target.isFlare && !this.flareList.includes(ms.target)) {
@@ -710,7 +729,9 @@ export class Weapons {
           boom = true;
           if (t === player) {
             player.applyDamage(ms.dmg);
+            this.lastHit = { dir: _v3.copy(ms.pos).sub(player.position).normalize().clone(), age: 0 };
           } else if (ms.fromPlayer) {
+            t.flashT = 0.12;
             const killed = t.applyDamage(ms.dmg);
             if (killed && !t.dying) {
               effects.explosion(t.position, 1.2);
@@ -731,7 +752,9 @@ export class Weapons {
       if (!boom && ms.pos.y < ground) boom = true;
       if (!boom && ms.life > ms.ttl) boom = true;
       if (boom) {
-        effects.explosion(boomPos, 0.8);
+        const overSea = terrainHeightAt(boomPos.x, boomPos.z) < SEA_LEVEL + 1;
+        if (overSea) effects.waterColumn?.(boomPos, 1.2);
+        else effects.explosion?.(boomPos, 0.8);
         this.freeMissile(ms);
         this.missiles.splice(i, 1);
       }

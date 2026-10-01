@@ -13,22 +13,28 @@ const _tmp = new THREE.Vector3();
 const _fwd = new THREE.Vector3();
 
 class Enemy {
-  constructor(scene, spawnPos, heading, wave) {
+  constructor(scene, spawnPos, heading, wave, ace = false) {
     this.scene = scene;
-    this.model = buildJet({ paint: 0x5a5f66, accent: 0x8f3a2e });
+    this.ace = ace;
+    this.model = ace
+      ? buildJet({ paint: 0x2b2f36, accent: 0xd8b23a })   // ace: charcoal + gold trim
+      : buildJet({ paint: 0x5a5f66, accent: 0x8f3a2e });
     scene.add(this.model.group);
+    this._mats = [];                                       // for hit-flash emissive pulse
+    this.model.group.traverse(o => { if (o.material && o.material.emissive) this._mats.push(o.material); });
+    this.flashT = 0;
 
-    const agility = clamp(0.75 + wave * 0.08, 0.75, 1.3);
+    const agility = clamp(0.75 + wave * 0.08, 0.75, 1.3) + (ace ? 0.18 : 0);
     this.body = new FlightBody({ power: agility, thrustMax: 8.2 });
     this.body.setState(spawnPos, heading, 190 + Math.random() * 60);
     this.body.throttle = 0.72;
 
-    this.hp = Math.min(130, 100 + wave * 5);   // one missile (60) leaves it smoking
+    this.hp = ace ? 210 : Math.min(130, 100 + wave * 5);   // one missile (60) leaves it smoking
     this.pilotHit = false;
     this.flareCount = 18;
     this.flareT = 0;
     this.jinkPhase = Math.random() * Math.PI * 2;
-    this.jinkFreq = 1.6 + Math.random() * 1.6;
+    this.jinkFreq = (1.6 + Math.random() * 1.6) * (ace ? 1.35 : 1);
     this.extDir = new THREE.Vector3();
     this.state = 'pursue';
     this.stateTime = 0;
@@ -91,13 +97,31 @@ class Enemy {
       if (ctx && ctx.effects && Math.random() < 0.75) {
         ctx.effects.damageSmoke(b.pos, _tmp.copy(b.vel).multiplyScalar(-0.02), true);
       }
+      // secondary explosions + debris while the wreck falls
+      this.boomT = (this.boomT ?? 0.45) - dt;
+      if (this.boomT <= 0) {
+        this.boomT = 0.5 + Math.random() * 0.4;
+        if (ctx && ctx.effects) {
+          _tmp.set((Math.random() - 0.5) * 8, (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 8).add(b.pos);
+          ctx.effects.explosion?.(_tmp, 0.55);
+          ctx.effects.debris?.(_tmp, 4);
+        }
+      }
       const ground = Math.max(terrainHeightAt(b.pos.x, b.pos.z), SEA_LEVEL);
       if (b.pos.y < ground + GROUND_CLEAR_AGL || this.deadTime > 9) {
         this.dead = true;
-        if (ctx && ctx.effects) ctx.effects.explosion(b.pos, 1.4);
+        if (ctx && ctx.effects) {
+          if (ground <= SEA_LEVEL + 1) {
+            ctx.effects.waterColumn?.(b.pos, 1.6);
+          } else {
+            ctx.effects.explosion?.(b.pos, 1.4);
+            ctx.effects.debris?.(b.pos, 12);
+          }
+          ctx.effects.ring?.(b.pos, 1.4);
+        }
         if (ctx && ctx.onKill) ctx.onKill(this, true);
       }
-      this.syncModel();
+      this.syncModel(dt);
       return;
     }
 
@@ -193,7 +217,7 @@ class Enemy {
     // --- weapons ---
     this.fireCooldown -= dt;
     this.missileCooldown -= dt;
-    if (!player.alive) return this.syncModel();
+    if (!player.alive) return this.syncModel(dt);
     if (this.state === 'pursue' && dist < 1100 && aimDot > 0.988 && this.fireCooldown <= 0) {
       this.gunBurst = 0.5;
       this.fireCooldown = 1.6 + Math.random() * 2.2;
@@ -222,13 +246,17 @@ class Enemy {
       this.warmT = 0;
       if (ctx && ctx.enemyMissile) ctx.enemyMissile(this, player);
     }
-    this.syncModel();
+    this.syncModel(dt);
   }
 
-  syncModel() {
+  syncModel(dt) {
     this.model.group.position.copy(this.body.pos);
     this.model.group.quaternion.copy(this.body.quat);
     if (this.model.setControlSurfaces) this.model.setControlSurfaces(this.body.ctl);
+    // hit flash: white emissive pulse across the airframe
+    if (this.flashT > 0) this.flashT -= dt;
+    const f = Math.max(0, this.flashT / 0.12) * 0.85;
+    for (const m of this._mats) m.emissive.setRGB(f, f, f);
   }
 
   dispose() {
@@ -262,6 +290,7 @@ export class EnemyManager {
   spawnWave(player) {
     this.wave++;
     const count = Math.min(this.wave, 7);   // wave 1: a lone contact, then +1 per wave
+    const aceIdx = this.wave >= 3 && Math.random() < 0.4 ? Math.floor(Math.random() * count) : -1;
     for (let i = 0; i < count; i++) {
       const a = Math.random() * Math.PI * 2;
       const r = 10000 + Math.random() * 3000;   // spawn beyond 10 km: contacts
@@ -270,11 +299,12 @@ export class EnemyManager {
         clamp(player.position.y + (Math.random() - 0.5) * 1200, 1400, 5200),
         player.position.z + Math.sin(a) * r
       );
-      const e = new Enemy(this.scene, pos, Math.random() * Math.PI * 2, this.wave);
+      const e = new Enemy(this.scene, pos, Math.random() * Math.PI * 2, this.wave, i === aceIdx);
       this.enemies.push(e);
     }
     this.waveActive = true;
     this.events.push({ type: 'wave', wave: this.wave, count });
+    if (aceIdx >= 0) this.events.push({ type: 'ace' });
   }
 
   update(dt, player, ctx) {
