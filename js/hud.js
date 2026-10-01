@@ -13,10 +13,10 @@ const RED = '#ff5a4a';
 const AMBER = '#ffc866';
 const _hv = new THREE.Vector3();
 const _hv2 = new THREE.Vector3();
-// 160° front half-cone edge warning: amber past 70° off the nose, flashing
-// red past 76° (lock breaks / launch gate closes at 80°)
-const CONE_WARN = Math.cos(70 * Math.PI / 180);
-const CONE_CRIT = Math.cos(76 * Math.PI / 180);
+// 120° front cone edge warning: amber past 50° off the nose, flashing
+// red past 56° (lock breaks / launch gate closes at 60°)
+const CONE_WARN = Math.cos(50 * Math.PI / 180);
+const CONE_CRIT = Math.cos(56 * Math.PI / 180);
 
 export class HUD {
   constructor(canvas) {
@@ -213,6 +213,7 @@ export class HUD {
 
     this.drawSpeedAlt(dt, S);
     this.drawHeading(S);
+    this.drawEnvelope(S);
     this.drawReticle(S);
     this.drawTargets(S);
     this.drawRadar(S);
@@ -317,6 +318,36 @@ export class HUD {
     this.line(cx, y + 22, cx + 6, y + 30, CYAN, 2);
   }
 
+  // ---- 120° front cone envelope ring (TRUE projection) ----
+  // The circle of directions 60° off the nose, projected to screen with the
+  // current FOV (zoom-aware). Appears only while a launch procedure is live:
+  // seeker warming/hot, or a lock held. In steady flight the edge sits just
+  // outside the screen corners (~3° beyond) — hard maneuvers swing arcs of
+  // the ring into view. Takes the cone-edge warning colors near the boundary.
+  drawEnvelope(S) {
+    const p = S.player, w = S.weapons;
+    const warming = w.warm.state !== 'cold';
+    if (!warming && !w.lockState.locked) return;
+    const np = this.proj(_hv.copy(p.position).addScaledVector(p.forward(_hv2), 2600), S.camera);
+    if (np.behind) return;
+    const halfFov = (S.camera.fov * Math.PI / 180) / 2;
+    const r = (this.h / 2) * Math.tan(60 * Math.PI / 180) / Math.tan(halfFov);
+    const cd = w.guideConeDot;
+    const hasCd = cd !== null && cd !== undefined;
+    let col = 'rgba(159,232,255,0.32)';
+    let lw = 1.25;
+    if (hasCd && cd < CONE_CRIT) col = Math.floor(S.time * 6) % 2 === 0 ? RED : 'rgba(255,90,74,0.3)';
+    else if (hasCd && cd < CONE_WARN) col = AMBER;
+    if (col !== 'rgba(159,232,255,0.32)') lw = 2;
+    this.circle(np.x, np.y, r, col, lw);
+    // label at whichever side intersection is on screen
+    if (np.x + r < this.w - 12 && np.y > 20 && np.y < this.h - 20) {
+      this.text('LIM 120°', np.x + r + 6, np.y, 10, CYAN_DIM, 'left', 3);
+    } else if (np.x - r > 12 && np.y > 20 && np.y < this.h - 20) {
+      this.text('LIM 120°', np.x - r - 6, np.y, 10, CYAN_DIM, 'right', 3);
+    }
+  }
+
   // ---- War Thunder style: aim director circle at the mouse + flight path marker ----
   drawReticle(S) {
     const c = this.ctx;
@@ -381,7 +412,7 @@ export class HUD {
     if (solid) {
       this.circle(ap.x, ap.y, 44, RED, 2.5);
       // marker on the bitten heat source + thin tie line from the reticle;
-      // the diamond doubles as the 160° cone-edge display for the bite
+        // the diamond doubles as the 120° cone-edge display for the bite
       const src = w.irSeek;
       const bp = this.proj(src.position ?? src.pos, S.camera);
       if (!bp.behind) {
@@ -406,9 +437,9 @@ export class HUD {
   }
 
   // ---- target frames: AC7 brackets + RNG, off-screen arrows ----
-  // The guidance target's frame is the 160° cone edge display: normal red
-  // inside the cone, amber past 70° off the nose, flashing red past 76°
-  // (lock breaks / launch gate closes at 80°) + a CONE tag.
+  // The guidance target's frame is the 120° cone edge display: normal red
+  // inside the cone, amber past 50° off the nose, flashing red past 56°
+  // (lock breaks / launch gate closes at 60°) + a CONE tag.
   drawTargets(S) {
     const w = S.weapons;
     const ls = w.lockState;

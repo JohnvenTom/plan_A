@@ -180,7 +180,7 @@ function update(dt) {
       weapons.manualTarget = null;
       weapons.cancelWarm();   // warm state belongs to the selected kind
       hud.announce(weapons.mslKind === 'radar' ? '雷达弹' : '红外弹',
-        weapons.mslKind === 'radar' ? 'RADAR — 10km 即时锁定 · 预热后发射 · 39/箔条可避' : 'IR — 热源导引 · 预热后发射 · 热诱弹可避', 1.2, 'info');
+        weapons.mslKind === 'radar' ? 'RADAR — 20km 即时锁定 · 预热后发射 · 39/箔条可避' : 'IR — 热源导引 · 预热后发射 · 热诱弹可避', 1.2, 'info');
     }
     if (input.pressed('cycleTarget')) weapons.headLockAttempt(player, enemies.enemies);
     weapons.updateFireControl(dt, player, enemies.enemies);

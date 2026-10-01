@@ -15,12 +15,12 @@ const UP = new THREE.Vector3(0, 1, 0);
 // --(auto)--> hot (8 s hold window) --> cold. ALT is the ONLY cancel.
 const MSL_WARM_TIME = 1.0;
 const MSL_HOT_WINDOW = 8.0;
-// 160° front half-cone (±80° off the FUSELAGE axis, not the sight): radar
-// locks hold only inside it, IR shots may only leave the rail inside it.
+// 120° front cone (±60° off the FUSELAGE axis, not the sight): radar locks
+// hold only inside it, IR shots may only leave the rail inside it.
 // Lock/bite ACQUISITION still requires the ±8° head-sight basket.
-const ENV_DOT = Math.cos(80 * Math.PI / 180);
+const ENV_DOT = Math.cos(60 * Math.PI / 180);
 const BASKET_DOT = Math.cos(8 * Math.PI / 180);   // head-sight basket ±8°
-const SEEK_RANGE = { ir: 5200, radar: 10000 };
+const SEEK_RANGE = { ir: 5200, radar: 20000 };
 const AMMO_REGEN = { ir: 5.5, radar: 8 };         // s per missile, per pool
 
 function tracerMaterial() {
@@ -274,7 +274,7 @@ export class Weapons {
     // X with nothing (new) in the basket is a no-op
   }
 
-  // 160° front half-cone: is this world point inside ±80° of the NOSE
+  // 120° front cone: is this world point inside ±60° of the NOSE
   // (the missile leaves the rail along the fuselage axis, not the sight)?
   _inEnvelope(player, pos) {
     _v.copy(pos).sub(player.position);
