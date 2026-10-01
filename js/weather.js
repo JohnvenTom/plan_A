@@ -1,4 +1,4 @@
-// weather.js — five-state weather machine with smooth transitions, camera-
+// weather.js — eight-state weather machine with smooth transitions, camera-
 // wrapped rain streaks, and storm lightning. Applies itself to the sky
 // (cloud coverage/alpha, fog multiplier, light dimming) every frame.
 import * as THREE from 'three';
@@ -10,6 +10,9 @@ const STATES = {
   overcast: { name: '阴',   thresh: 0.40, alpha: 1.00, fogMul: 1.8, dim: 0.78, gray: 0.50, rain: 0.3, wind: 1.9, w: 18 },
   rain:     { name: '雨',   thresh: 0.34, alpha: 1.00, fogMul: 2.4, dim: 0.66, gray: 0.70, rain: 1.0, wind: 2.5, w: 14 },
   storm:    { name: '雷暴', thresh: 0.30, alpha: 1.00, fogMul: 3.0, dim: 0.52, gray: 0.85, rain: 1.0, wind: 3.4, w: 8 },
+  drizzle:  { name: '毛毛雨', thresh: 0.50, alpha: 0.92, fogMul: 2.0, dim: 0.85, gray: 0.40, rain: 0.45, wind: 1.6, w: 12 },
+  fog:      { name: '浓雾', thresh: 0.62, alpha: 0.75, fogMul: 5.5, dim: 0.62, gray: 0.55, rain: 0.0, wind: 0.7, w: 10 },
+  gale:     { name: '狂风', thresh: 0.42, alpha: 0.90, fogMul: 1.5, dim: 0.80, gray: 0.35, rain: 0.35, wind: 6.5, w: 9 },
 };
 const RAIN_COUNT = 700;
 const BOX = { x: 260, y: 150, z: 260 };
@@ -20,6 +23,7 @@ export class Weather {
     this.sky = sky;
     this.renderer = renderer;
     this.keys = Object.keys(STATES);
+    this.onChange = null;   // main wires this to the HUD announcer
     this.state = 'clear';
     this.target = { ...STATES.clear };
     this.cur = { ...STATES.clear };
@@ -78,10 +82,11 @@ export class Weather {
     if (this.timer <= 0) {
       this.state = this.pickNext();
       this.target = { ...STATES[this.state] };
-      this.timer = 60 + Math.random() * 60;
+      this.timer = 90 + Math.random() * 120;
+      if (this.onChange) this.onChange(STATES[this.state].name);
     }
     // smooth transition toward the target parameters
-    const k = 1 - Math.exp(-dt / 6);
+    const k = 1 - Math.exp(-dt / 9);
     for (const p of ['thresh', 'alpha', 'fogMul', 'dim', 'gray', 'rain', 'wind']) {
       this.cur[p] += (this.target[p] - this.cur[p]) * k;
     }

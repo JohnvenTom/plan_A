@@ -54,6 +54,7 @@ window.__weather = weather;   // debug hook
 window.__scene = scene;       // debug hook (screenshot harness: __renderer.render(__scene, __player.camera))
 window.__renderer = renderer; // debug hook
 const audio = new GameAudio();
+weather.onChange = (name) => hud.announce('天气变化', name, 1.6, 'info');
 const input = new Input();
 weapons.playerRef = player;
 weapons.audio = audio;
@@ -139,7 +140,7 @@ function gameOver() {
 
 
 // ---------- environment: 8-minute day/night cycle + dynamic weather ----------
-const DAY_LEN = 480;                       // seconds for a full day
+const DAY_LEN = 1200;                      // seconds for a full day (20 min)
 function updateEnvironment(dt) {
   weather.update(dt, camera);
   const day01 = (G.time / DAY_LEN + 0.46) % 1;   // missions start at golden hour
