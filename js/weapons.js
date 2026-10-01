@@ -268,6 +268,9 @@ export class Weapons {
       const dist = _v.length();
       if (dist > range || dist < 90) continue;
       _v.divideScalar(dist);
+      // the free-look sight may point beyond the envelope, but ACQUIRING a
+      // lock is still gated by the 120° nose cone (锁定只在外圈之内)
+      if (_v.dot(player.forward(_v2)) < ENV_DOT) continue;
       if (_v.dot(aim) > bestDot) { bestDot = _v.dot(aim); best = e; }
     }
     if (best) {

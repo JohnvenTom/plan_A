@@ -141,12 +141,13 @@ export class Player {
     this.boosting = burnerFrac > 0.1;
     if (input.pressed('camera')) this.viewMode = (this.viewMode + 1) % 3;
 
-    // ---- mouse: free look (C held) orbits the camera AND drags the world-
-    //      anchored aim with it — view and sight move together, targets seen
-    //      while looking around can be head-locked, and the jet holds its
-    //      heading instead of chasing the sight (see the ctl block below).
-    //      On release the camera returns to the jet and the nose resumes
-    //      chasing the aim wherever it was left. ----
+    // ---- mouse: free look (C held) orbits the camera, and the world-
+    //      anchored aim is PINNED to the free view's screen center (set in
+    //      the camera block once viewDir is built) — the sight swings
+    //      anywhere the view goes, beyond the 120° envelope included, while
+    //      the jet holds its heading. Locking still requires the target
+    //      inside the envelope (see weapons.headLockAttempt). On release the
+    //      camera returns and the nose resumes chasing the aim. ----
     this._freeLook = input.down('freeLook');
     if (input.pressed('zoom')) this.zoomed = !this.zoomed;
     if (this._freeLook) {
@@ -154,9 +155,10 @@ export class Player {
       this.lookYaw -= input.aimDX * sens;
       // the pitch orbit axis is camera-LEFT (viewDir × up, negated), so the
       // stick sign runs opposite the yaw axis — += keeps mouse-up = look-up
-      this.lookPitch = clamp(this.lookPitch + input.aimDY * sens, -1.1, 1.1);
+      this.lookPitch = clamp(this.lookPitch + input.aimDY * sens, -1.5, 1.5);
+    } else {
+      this.rotateAim(input.aimDX, input.aimDY);
     }
-    this.rotateAim(input.aimDX, input.aimDY);
 
     this._keyOverride = (input.down('rollLeft') ? 1 : 0) - (input.down('rollRight') ? 1 : 0);
     this._keyYaw = (input.down('rudderLeft') ? 1 : 0) - (input.down('rudderRight') ? 1 : 0);
@@ -247,7 +249,9 @@ export class Player {
     }
 
     if (!this._camDirInit) { this.camDir.copy(this.aimDir); this._camDirInit = true; }
-    this.camDir.lerp(this.aimDir, 1 - Math.exp(-6 * dt)).normalize();
+    // frozen while free-looking: the view rides the look offsets alone, so
+    // the pinned aim and the view never feed back into each other
+    if (!this._freeLook) this.camDir.lerp(this.aimDir, 1 - Math.exp(-6 * dt)).normalize();
 
     // view direction = followed aim rotated by the free-look offsets
     const viewDir = this._vTmp.copy(this.camDir);
@@ -260,6 +264,9 @@ export class Player {
       this._qTmp.setFromAxisAngle(this._v2, this.lookPitch);
       viewDir.applyQuaternion(this._qTmp).normalize();
     }
+    // the sight IS the free view's screen center — it may point anywhere,
+    // well outside the 120° envelope; locking stays envelope-gated
+    if (this._freeLook) this.aimDir.copy(viewDir).normalize();
 
     // NOTE: viewDir lives in _vTmp — use _v2 for the desired position so the
     // view direction is not mutated before lookAt uses it.
