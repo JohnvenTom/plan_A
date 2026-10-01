@@ -52,6 +52,7 @@ class Enemy {
     this.isTarget = false;
     this.wp = new THREE.Vector3();
     this.pickWaypoint();
+    this.formSlot = null;   // set by spawnWave: offset from the wave leader
   }
 
   pickWaypoint(playerPos) {
@@ -188,6 +189,17 @@ class Enemy {
       // lead pursuit using the player's true velocity vector
       const tLead = clamp(dist / 800, 0, 2.0);
       _aim.copy(player.position).addScaledVector(player.vel, tLead).sub(b.pos).normalize();
+      // far out with nobody threatened: slot into the leader's echelon —
+      // the wave arrives as a formation (AC style), breaking up on contact
+      if (this.formSlot && dist > 4200 && !inbound) {
+        const lead = (this._leadRef && !this._leadRef.dead && !this._leadRef.dying)
+          ? this._leadRef
+          : (this._leadRef = (ctx && ctx.enemies ? ctx.enemies.find(x => !x.formSlot) : null));
+        if (lead) {
+          _tmp.copy(lead.position).add(this.formSlot);
+          _aim.copy(_tmp).sub(b.pos).normalize();
+        }
+      }
       // jink on the way in: weave, don't charge in a straight line — but
       // stop weaving when lined up, or the pilot breaks their own lock
       if (dist > 700 && dist < 2600 && aimDot < 0.93) {
@@ -300,6 +312,8 @@ export class EnemyManager {
         player.position.z + Math.sin(a) * r
       );
       const e = new Enemy(this.scene, pos, Math.random() * Math.PI * 2, this.wave, i === aceIdx);
+      // echelon-right formation offsets behind the first-spawned leader
+      e.formSlot = i === 0 ? null : new THREE.Vector3(i * 90, -i * 14, i * 110);
       this.enemies.push(e);
     }
     this.waveActive = true;

@@ -11,6 +11,7 @@ import { Weapons } from './weapons.js';
 import { AASites } from './aasites.js';
 import { Effects } from './effects.js';
 import { HUD } from './hud.js';
+import { PostFX } from './postfx.js';
 import { GameAudio } from './audio.js';
 import { clamp, smoothstep } from './utils.js';
 
@@ -54,6 +55,11 @@ window.__weather = weather;   // debug hook
 window.__scene = scene;       // debug hook (screenshot harness: __renderer.render(__scene, __player.camera))
 window.__renderer = renderer; // debug hook
 const audio = new GameAudio();
+// post-processing stack + missile-cam picture-in-picture rig
+const postfx = new PostFX(renderer);
+const mslCam = new THREE.PerspectiveCamera(58, 16 / 9, 2, 72000);
+const mslRT = new THREE.WebGLRenderTarget(480, 270, { type: THREE.HalfFloatType });
+window.__postfx = postfx;   // debug hook
 weather.onChange = (name) => hud.announce('天气变化', name, 1.6, 'info');
 const input = new Input();
 weapons.playerRef = player;
@@ -71,6 +77,13 @@ const G = {
   time: 0, deathTimer: 0, paused: false, menuOpen: false,
   contrailT: 0, smokeT: 0,
   timeScale: 1,             // kill-cam micro slow-motion
+  fxPunch: 0,               // radial-blur punch on our missile launch
+  aceCut: 0,                // ace-intro letterbox timer
+  pipOpen: 0,               // missile-cam CRT open progress
+  pipGlitch: 0,             // missile-cam signal-fault burst
+  pipZoom: 1,               // missile-cam impact zoom
+  pipMsl: null,             // missile the PIP rides
+  exposure: 1,              // smoothed auto-exposure
   introT: 0, introFrom: null,
   _mach: false,
 };
@@ -80,6 +93,7 @@ window.__G = G;               // debug hook
 
 const killCtx = {
   effects,
+  get enemies() { return enemies.enemies; },
   weapons,
   deployFlares: (owner, n) => weapons.deployFlares(owner, n),
   onKill(enemy, crashed) {
@@ -248,7 +262,7 @@ function update(dt) {
     for (const ev of enemies.events) {
       if (ev.type === 'wave') hud.announce(`WAVE ${ev.wave}`, `敌机接近 — ${ev.count} 机`, 3.0, 'wave');
       else if (ev.type === 'waveClear') hud.announce('WAVE CLEAR', '敌机全灭 — 下一波接近中', 2.6, 'info');
-      else if (ev.type === 'ace') hud.announce('⚠ 王牌机参战', 'ACE — 高机动 · 击坠双倍分', 3.2, 'wave');
+      else if (ev.type === 'ace') { hud.announce('⚠ 王牌机参战', 'ACE — 高机动 · 击坠双倍分', 3.2, 'wave'); G.aceCut = 1.6; }
     }
     enemies.events.length = 0;
 
@@ -256,6 +270,8 @@ function update(dt) {
       if (ev.type === 'nearMiss') {
         player.camShake = Math.min(1, player.camShake + 0.3);
         audio.nearMiss();
+      } else if (ev.type === 'hitTing') {
+        audio.hitTing();
       }
     }
     // supersonic boom: one-shot ring + thunder when crossing the sound barrier
@@ -302,9 +318,177 @@ function update(dt) {
   ocean.mat.uniforms.uFogColor.value.copy(scene.fog.color);
   ocean.mat.uniforms.uFogDensity.value = scene.fog.density;
   ocean.mat.uniforms.uStorm.value = weather.seaT ?? 0;
+  // lightning lights the cloud decks from the strike column
+  weather.boltT = Math.max(0, (weather.boltT ?? 0) - dt / 0.22);
+  if (weather.boltT > 0) {
+    for (const m of sky.cloudMats) {
+      m.uniforms.uBoltPos.value.copy(weather.boltPos);
+      m.uniforms.uBoltT.value = weather.boltT;
+    }
+  } else {
+    for (const m of sky.cloudMats) m.uniforms.uBoltT.value = 0;
+  }
 }
 
-function renderHUD() {
+// ---------- post-processing intent + missile-cam PIP ----------
+const _pv = new THREE.Vector3();
+const _pv2 = new THREE.Vector3();
+function renderFrame(dt) {
+  const playingLike = G.state === 'playing' || G.state === 'intro';
+  // --- missile cam: ride the newest live player missile that is guiding ---
+  let pipSrc = null;
+  if (playingLike) {
+    let m = null;
+    for (let i = weapons.missiles.length - 1; i >= 0; i--) {
+      const c = weapons.missiles[i];
+      if (c.fromPlayer && c.target && !c.target.dying) { m = c; break; }
+    }
+    // AC7 fault-open / fault-close: fast CRT expand on launch, glitchy
+    // collapse when the missile (or its target) is gone
+    if (m) {
+      if (!G._pipWasLive) G.pipGlitch = 1;          // opening burst
+      G._pipWasLive = true;
+      G.pipMsl = m;
+      G.pipOpen = Math.min(1, G.pipOpen + dt * 5.5);
+      G.pipGlitch = Math.max(0, G.pipGlitch - dt * 2.2);
+      G.pipZoom = 1;
+    } else {
+      if (G._pipWasLive) G.pipGlitch = 1;           // closing burst
+      G._pipWasLive = false;
+      G.pipOpen = Math.max(0, G.pipOpen - dt * 3.2);
+      G.pipGlitch = Math.max(0, G.pipGlitch - dt * 2.6);
+      G.pipZoom = Math.min(1.15, G.pipZoom + dt * 0.9);
+    }
+    // ride only a LIVE missile that still has a target — decoyed missiles
+    // null their target and freed missiles may already be recycled
+    const mm = G.pipMsl;
+    if (G.pipOpen > 0.01 && mm && weapons.missiles.includes(mm) && mm.target) {
+      _pv.copy(mm.vel).normalize();
+      mslCam.position.copy(mm.pos).addScaledVector(_pv, 7.5).add(_pv2.set(0, 1.1, 0));
+      _pv2.copy(mm.target.position ?? mm.target.pos);
+      if (_pv2.distanceToSquared(mslCam.position) < 1) _pv2.copy(mslCam.position).addScaledVector(_pv, 100);
+      mslCam.up.set(0, 1, 0);
+      mslCam.lookAt(_pv2);
+      renderer.setRenderTarget(mslRT);
+      renderer.clear();
+      renderer.render(scene, mslCam);
+      renderer.setRenderTarget(null);
+      pipSrc = mslRT;
+    }
+  } else {
+    G.pipOpen = 0;
+  }
+
+  // --- auto exposure (smoothed): sun-facing / in-cloud / night ---
+  let exT = 1.0;
+  if (playingLike) {
+    camera.getWorldDirection(_pv);
+    const sunDot = _pv.dot(sky.sunDir);
+    const inCloud = weather.cur.gray > 0.28 && Math.abs(camera.position.y - 2750) < 380;
+    exT = 1.0 + Math.max(0, sunDot - 0.55) * 0.55 + (inCloud ? 0.3 : 0) + (G.night01 ?? 0) * 0.18;
+  }
+  G.exposure += (exT - G.exposure) * 0.045;
+
+  // --- grading: golden-hour warm / night cool / storm desaturated ---
+  const day01 = G.day01 ?? 0.46;
+  const elev = Math.sin(day01 * Math.PI * 2);
+  const golden = Math.max(0, 1 - Math.abs(elev) * 3.2) * (1 - (G.night01 ?? 0));
+  const warm = [
+    1 + golden * 0.10,
+    1 + golden * 0.01,
+    1 - golden * 0.14 + (G.night01 ?? 0) * 0.06,
+  ];
+  const sat = 1 - weather.cur.gray * 0.28 - (G.night01 ?? 0) * 0.12;
+
+  // --- radial speed blur: hard turns + our launch punch ---
+  const omega = player.body ? player.body.omega.length() : 0;
+  weapons.fxPunch = Math.max(0, (weapons.fxPunch ?? 0) - 0.02);
+  const radial = playingLike
+    ? Math.min(0.85, Math.max(0, (omega - 0.9) * 0.33) + (weapons.fxPunch ?? 0))
+    : 0;
+
+  // --- motion smear direction from roll/pitch rates ---
+  const motionAmt = playingLike ? Math.min(0.5, Math.max(0, omega - 1.4) * 0.16) : 0;
+  const motionDir = [
+    Math.max(-1, Math.min(1, player.body.omega.y * 0.6)),
+    Math.max(-1, Math.min(1, -player.body.omega.x * 0.6)),
+  ];
+
+  // --- sun screen position + visibility (god rays + HUD flare share it) ---
+  _pv.copy(camera.position).addScaledVector(sky.sunDir, 30000);
+  _pv.project(camera);
+  const sunUV = [(_pv.x * 0.5 + 0.5), (-_pv.y * 0.5 + 0.5)];
+  camera.getWorldDirection(_pv2);
+  const sunVis = _pv2.dot(sky.sunDir) > 0.25 && sky.sunDir.y > -0.05 && weather.cur.gray < 0.55
+    ? Math.min(1, (_pv2.dot(sky.sunDir) - 0.25) * 2.4) * (1 - weather.cur.gray)
+    : 0;
+
+  // --- heat shimmer: player afterburner + freshest own missile exhaust ---
+  const heat = [];
+  if (playingLike && player.boosting && player.alive) {
+    player.model.anchors.tail.getWorldPosition(_pv);
+    _pv.project(camera);
+    if (_pv.z < 1) heat.push([_pv.x * 0.5 + 0.5, -_pv.y * 0.5 + 0.5, 0.06, 0.6]);
+  }
+  for (let i = weapons.missiles.length - 1; i >= 0 && heat.length < 2; i--) {
+    const c = weapons.missiles[i];
+    if (!c.fromPlayer || c.life > 2.2) continue;
+    _pv.copy(c.pos).project(camera);
+    if (_pv.z < 1) heat.push([_pv.x * 0.5 + 0.5, -_pv.y * 0.5 + 0.5, 0.035, 0.45]);
+  }
+
+  // --- cinematic DOF: only during kill-cam slow-mo / intro / ace cut ---
+  let dofAmt = 0, dofFocus = 900;
+  if (G.timeScale < 0.95 || G.state === 'intro' || G.aceCut > 0) {
+    dofAmt = 0.34;
+    let best = 1e9;
+    for (const e of enemies.enemies) {
+      const d = e.position.distanceTo(camera.position);
+      if (d < best) best = d;
+    }
+    dofFocus = best < 1e8 ? best : 900;
+  }
+
+  postfx.setState({
+    exposure: G.exposure,
+    bloom: 0.6 + (G.night01 ?? 0) * 0.35 + weather.cur.gray * 0.1,
+    radial, radialC: [0.5, 0.52],
+    sunUV, sunVis, godray: 0.85,
+    motionDir, motionAmt,
+    dofAmt, dofFocus,
+    warm, sat,
+    vignette: 0.4 + (player.gGrey ?? 0) * 0.35,
+    flash: (weather.flash ?? 0) * 0.5,
+    heat,
+  });
+
+  postfx.beginScene();
+  renderer.render(scene, camera);
+  postfx.setPipSource(pipSrc);
+  // PIP box: 24% of screen width, TRUE 16:9 by pixels (not screen
+  // fractions) so the seeker image is never stretched; top-right corner
+  const PIP_W = 0.155;
+  const PIP_H = (PIP_W * innerWidth * 9 / 16) / innerHeight;
+  const PIP_CX = 1 - PIP_W / 2 - 0.025;
+  const PIP_CY = PIP_H / 2 + 0.30;
+  if (pipSrc) {
+    postfx.setPip(G.pipOpen, G.pipZoom, G.pipGlitch ?? 0);
+    postfx.setPipRect(PIP_CX * 2 - 1, 1 - PIP_CY * 2, PIP_W * 2, PIP_H * 2);
+  }
+  postfx.composite();
+
+  // PIP border rect for the HUD canvas (pixels), same fractions
+  const rect = pipSrc ? {
+    x: (PIP_CX - PIP_W / 2) * innerWidth,
+    y: (PIP_CY - PIP_H / 2) * innerHeight,
+    w: PIP_W * innerWidth,
+    h: PIP_H * innerHeight,
+  } : null;
+  window.__pipRect = rect;
+  return rect;
+}
+
+function renderHUD(pipRect) {
   const mins = Math.floor(((G.day01 ?? 0.46) * 24 + 6) % 24 * 60);
   const clock = `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
   hud.draw(G.paused ? 0 : 1 / 60, {
@@ -316,7 +500,12 @@ function renderHUD() {
     kills: G.kills, score: G.score, wave: enemies.wave,
     time: G.time,
     clock, weatherName: weather.name,
+    rain: weather.cur.rain,
     inCloud: weather.cur.gray > 0.28 && Math.abs(player.position.y - 2750) < 380,
+    pipRect, pipOn: !!pipRect,
+    sunUV: (() => { _pv.copy(camera.position).addScaledVector(sky.sunDir, 30000).project(camera); return [_pv.x * 0.5 + 0.5, -_pv.y * 0.5 + 0.5]; })(),
+    sunVis: (() => { camera.getWorldDirection(_pv2); return _pv2.dot(sky.sunDir) > 0.3 && sky.sunDir.y > 0 ? Math.min(1, _pv2.dot(sky.sunDir)) : 0; })(),
+    aceCut: G.aceCut > 0,
     enemyLock: enemies.enemies.reduce((m, e) => Math.max(m, e.lockT || 0), 0),
     enemyWarm: enemies.enemies.reduce((m, e) => Math.max(m, e.warmT || 0), 0),
     radarThreats: weapons.missiles
@@ -409,6 +598,11 @@ function frame() {
     ocean.mat.uniforms.uTime.value = G.time;
     ocean.mat.uniforms.uSunDir.value.copy(sky.sunDir);
     effects.update(dt);
+    postfx.setState({ exposure: 1.05, bloom: 0.55, radial: 0, godray: 0, motionAmt: 0, dofAmt: 0, sunVis: 0, flash: 0, heat: [], vignette: 0.35 });
+    postfx.beginScene();
+    renderer.render(scene, camera);
+    postfx.setPipSource(null);
+    postfx.composite();
     hud.draw(dt, { state: 'title' });
   } else {
     if (G.state === 'gameover' && input.pressedRaw('Enter')) { startGame(); }
@@ -420,10 +614,12 @@ function frame() {
       G.timeScale = Math.min(1, G.timeScale + dt * 1.6);   // slow-mo recovers
       update(sdt);
     }
+    if (!player.alive) player.updateDeathCam(dt);           // falling-jet orbit
     camera.zoom = 1 + (1 - G.timeScale) * 0.09;            // slow-mo punch-in
     camera.updateProjectionMatrix();
-    renderer.render(scene, camera);
-    renderHUD();
+    G.aceCut = Math.max(0, G.aceCut - dt);
+    const pipRect = renderFrame(dt);
+    renderHUD(pipRect);
     if (DEBUG) {
       window.__game = {
         time: G.time, state: G.state, kills: G.kills, alive: player.alive,
@@ -575,6 +771,7 @@ addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
+  postfx.setSize(innerWidth, innerHeight);
 });
 
 if (FREEZE_T !== null) {

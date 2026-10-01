@@ -89,6 +89,9 @@ uniform float uThreshold;
 uniform float uDrift;
 uniform float uNight;   // 0 day .. 1 night: clouds go moonlit-dark
 uniform float uAlpha;   // overall deck presence (weather)
+uniform vec3 uSunDir;   // light direction for the puff tops
+uniform vec3 uBoltPos;  // world position of the latest lightning strike
+uniform float uBoltT;   // 1 at strike, decays to 0
 
 float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float noise(vec2 p){
@@ -111,8 +114,21 @@ void main() {
   // soft border fade so the deck has no visible edge
   vec2 c = vUv - 0.5;
   float border = smoothstep(0.5, 0.32, max(abs(c.x), abs(c.y)));
-  vec3 col = mix(uColorShade, uColorLit, clamp(0.35 + n2 * 0.9, 0.0, 1.0));
+  // pseudo-volumetric puffs: sample the density field slightly toward the
+  // sun — if that neighbor is DENSER, this pixel is a self-shadowed base;
+  // if thinner, it's a sunlit crest. Cheap 2-tap fake of volume lighting.
+  vec2 sunOff = -normalize(uSunDir.xz + vec2(1e-4)) * 0.012;
+  float nSun = fbm((vUv + sunOff) * uScale + vec2(uTime * uDrift, uTime * uDrift * 0.22) * 0.0 + 4.7);
+  nSun = nSun * 0.72 + fbm((vUv + sunOff) * uScale * 1.9 + 9.3) * 0.28;
+  float crest = clamp((n * 0.72 + n2 * 0.28) - nSun + 0.22, 0.0, 1.0);
+  vec3 col = mix(uColorShade, uColorLit, clamp(0.3 + n2 * 0.7 + crest * 0.85, 0.0, 1.2));
   col *= 1.0 - uNight * 0.78;
+  // lightning: near clouds flash toward the strike column
+  if (uBoltT > 0.001) {
+    vec2 bw = (vUv - 0.5) * 44000.0;
+    float d = length(bw - uBoltPos.xz);
+    col += uBoltT * vec3(0.85, 0.9, 1.0) * exp(-d / 2600.0) * 1.6;
+  }
   gl_FragColor = vec4(col, a * border * uAlpha);
 }`;
 
@@ -161,6 +177,9 @@ export class Sky {
           uColorShade: { value: new THREE.Color(...shade) },
           uNight: { value: 0 },
           uAlpha: { value: 0.85 * opacityMul },
+          uSunDir: { value: this.sunDir },
+          uBoltPos: { value: new THREE.Vector3() },
+          uBoltT: { value: 0 },
         },
       });
       const mesh = new THREE.Mesh(new THREE.PlaneGeometry(44000, 44000), mat);

@@ -86,6 +86,8 @@ export class Weather {
     const top = 1500;
     let x = camera.position.x + (Math.random() - 0.5) * 1400;
     let z = camera.position.z + (Math.random() - 0.5) * 1400;
+    this.boltPos = new THREE.Vector3(x, 0, z);   // world strike column
+    this.boltT = 1;
     for (let i = 0; i < 10; i++) {
       const k = i / 9;
       pos.setXYZ(i, x, top * (1 - k), z);

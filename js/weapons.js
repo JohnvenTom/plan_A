@@ -98,7 +98,7 @@ export class Weapons {
 
     // tracer pool
     this.tracerPool = [];
-    const tracerGeo = new THREE.BoxGeometry(0.24, 0.24, 10);
+    const tracerGeo = new THREE.BoxGeometry(0.30, 0.30, 16);
     this.tracerMatP = tracerMaterial();
     this.tracerMatE = tracerMaterial(); this.tracerMatE.color.setHex(0xff7040);
     for (let i = 0; i < 90; i++) {
@@ -501,6 +501,7 @@ export class Weapons {
     this.launchMissile(origin, player.quaternion, true, target, player, kind);
     this.ammo[kind]--;
     this.cancelWarm();   // the warmed missile is gone; the next one is cold
+    this.fxPunch = 0.55; // radial speed-blur punch on launch
     return true;
   }
 
@@ -574,6 +575,7 @@ export class Weapons {
           if (r.fromPlayer) {
             const killed = t.applyDamage(r.dmg);
             t.flashT = 0.12;
+            this.events.push({ type: 'hitTing' });
             effects.hitSpark(r.pos);
             if (killed && !t.dying) effects.explosion(t.position, 1.0);
           } else {
@@ -732,6 +734,7 @@ export class Weapons {
             this.lastHit = { dir: _v3.copy(ms.pos).sub(player.position).normalize().clone(), age: 0 };
           } else if (ms.fromPlayer) {
             t.flashT = 0.12;
+            this.events.push({ type: 'hitTing' });
             const killed = t.applyDamage(ms.dmg);
             if (killed && !t.dying) {
               effects.explosion(t.position, 1.2);

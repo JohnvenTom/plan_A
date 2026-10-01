@@ -139,6 +139,11 @@ export class GameAudio {
     this._noise(0.5, 'lowpass', 600, 70, 0.45);
   }
   nearMiss() { this._noise(0.3, 'bandpass', 1500, 320, 0.34, 1.2); }
+  // AC7 hit-confirm: bright metallic ting layered over the impact noise
+  hitTing() {
+    this._tone('triangle', 2093, 2093, 0.09, 0.10);
+    this._tone('sine', 3136, 3136, 0.05, 0.035);
+  }
   kill() { this._tone('triangle', 520, 780, 0.28, 0.2); }
 
   update(dt, player, weapons) {

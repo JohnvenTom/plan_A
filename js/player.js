@@ -104,6 +104,21 @@ export class Player {
   forward(out) { return this.body.forward(out); }
   upVec(out) { return this.body.upVec(out); }
 
+  // AC-style death cam: after being shot down the camera detaches and
+  // slowly orbits the wreck's last position until the gameover screen
+  updateDeathCam(dt) {
+    this._deathAng = (this._deathAng ?? 0.9) + dt * 0.5;
+    const p = this.body.pos;
+    const r = 30;
+    this.camera.position.set(
+      p.x + Math.cos(this._deathAng) * r,
+      p.y + 7,
+      p.z + Math.sin(this._deathAng) * r,
+    );
+    this.camera.up.set(0, 1, 0);
+    this.camera.lookAt(p.x, p.y - 2, p.z);
+  }
+
   applyDamage(amount) {
     if (!this.alive) return;
     this.hp -= amount;

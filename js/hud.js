@@ -34,6 +34,9 @@ export class HUD {
     this._lockScreen = null;    // last frame's lock bracket screen pos
     this._lockFly = null;       // {from:{x,y}, t}
     this._banner = null;        // DESTROYED sweep {t}
+    this._mslKindSeen = null;   // weapon-switch slide animation
+    this._mslSlide = 0;
+    this._rainSeeds = Array.from({ length: 90 }, () => [Math.random(), Math.random(), Math.random()]);
   }
 
   resize() {
@@ -227,6 +230,15 @@ export class HUD {
     c.clearRect(0, 0, this.w, this.h);
     if (S.state !== 'playing') return;
 
+    // weapon-switch slide: cards dart in from the side on kind change
+    const kindNow = S.weapons.mslKind;
+    if (kindNow !== this._mslKindSeen) {
+      if (this._mslKindSeen !== null) this._mslSlide = 1;
+      this._mslKindSeen = kindNow;
+    }
+    this._mslSlide = Math.max(0, this._mslSlide - dt * 3.4);
+    S.mslSlide = this._mslSlide;
+
     this.drawSpeedAlt(dt, S);
     this.drawHeading(S);
     this.drawEnvelope(S);
@@ -240,6 +252,11 @@ export class HUD {
     this.drawAlerts(dt, S);
     this.drawHint(dt);
     this.drawBanner(dt);
+    this.drawCanopy(S);
+    this.drawRain(dt, S);
+    this.drawFlare(S);
+    this.drawPipFrame(S);
+    this.drawLetterbox(S);
     this.vignette(S);
   }
 
@@ -745,7 +762,15 @@ export class HUD {
     c.fillRect(x + 2, y + 12, Math.max(0, (hpw - 4) * p.hp / 100), 8);
     c.shadowBlur = 0;
     this.text(`${Math.round(p.hp)}`, x + hpw + 10, y + 16, 13, hpcol);
-    // missile loadout cards: one row per pool, the selected kind framed
+    // missile loadout cards: one row per pool, the selected kind framed.
+    // R-switch slides the whole block in from the left with a soft fade.
+    const slide = S.mslSlide ?? 0;
+    c.save();
+    if (slide > 0) {
+      const e = 1 - Math.pow(1 - (1 - slide), 3);   // ease-out
+      c.globalAlpha = 1 - slide * 0.65;
+      c.translate(-(1 - e) * 46, 0);
+    }
     this.text('MSL', x, y + 42, 12, CYAN_DIM);
     const rows = [['ir', 'IR', AMBER], ['radar', 'RDR', RED]];
     let yy = y + 66;
@@ -781,6 +806,7 @@ export class HUD {
       this.text('COLD', x, yy + 2, 12, CYAN_DIM);
     }
     if (w.mslKind === 'ir' && w.irSeek) this.text('SEEK LOCK', x + 130, yy + 2, 12, RED, 'left', 5);
+    c.restore();
     // countermeasure stock + gun heat
     this.text(`CM ${Math.floor(w.flares)}`, x, yy + 28, 12, w.flares >= 10 ? CYAN_DIM : AMBER);
     this.text('GUN', x, yy + 52, 12, CYAN_DIM);
@@ -889,6 +915,112 @@ export class HUD {
     c.globalAlpha = a;
     this.text(m.text, this.w / 2, this.h / 2 + 120, 15, AMBER, 'center', 6);
     c.globalAlpha = 1;
+  }
+
+  // ---- canopy: AC7 chase-cam glass frame + reflection streaks ----
+  drawCanopy(S) {
+    const c = this.ctx;
+    const g = Math.min(1, (S.player.gLoad ?? 1) / 9);
+    c.save();
+    // dark curved frame bows in from the corners
+    c.strokeStyle = 'rgba(6,10,16,0.42)';
+    c.lineWidth = 26 + g * 10;
+    c.shadowColor = 'rgba(6,10,16,0.6)'; c.shadowBlur = 22;
+    c.beginPath();
+    c.moveTo(0, this.h);
+    c.quadraticCurveTo(this.w * 0.18, this.h * (0.72 - g * 0.05), this.w * 0.30, this.h * 0.46);
+    c.stroke();
+    c.beginPath();
+    c.moveTo(this.w, this.h);
+    c.quadraticCurveTo(this.w * 0.82, this.h * (0.72 - g * 0.05), this.w * 0.70, this.h * 0.46);
+    c.stroke();
+    c.shadowBlur = 0;
+    // faint glass reflection streaks
+    c.globalAlpha = 0.05 + g * 0.03;
+    c.strokeStyle = '#dff2ff';
+    c.lineWidth = 9;
+    for (let i = 0; i < 2; i++) {
+      c.beginPath();
+      const x = this.w * (0.6 + i * 0.16);
+      c.moveTo(x + 60, 0);
+      c.quadraticCurveTo(x - 40, this.h * 0.3, x + 90, this.h * 0.62);
+      c.stroke();
+    }
+    c.restore();
+    c.globalAlpha = 1;
+  }
+
+  // ---- rain streaks sweeping across the canopy glass ----
+  drawRain(dt, S) {
+    const rain = S.rain ?? 0;
+    if (rain < 0.25) return;
+    const c = this.ctx;
+    const speed = S.player.speed ?? 300;
+    c.save();
+    c.strokeStyle = `rgba(200,220,235,${0.16 * rain})`;
+    c.lineWidth = 1.4;
+    for (const sd of this._rainSeeds) {
+      sd[1] = (sd[1] + dt * (0.9 + sd[2] * 0.7)) % 1;
+      const x = sd[0] * this.w + sd[1] * speed * 0.9;
+      const y = sd[1] * this.h;
+      const len = 14 + sd[2] * 26;
+      c.beginPath();
+      c.moveTo(x, y);
+      c.lineTo(x - len * 0.55, y + len);
+      c.stroke();
+    }
+    c.restore();
+  }
+
+  // ---- sun lens flare on the HUD glass (source pos shared with god rays) ----
+  drawFlare(S) {
+    const vis = S.sunVis ?? 0;
+    if (vis <= 0.03) return;
+    const [ux, uy] = S.sunUV;
+    if (ux < -0.1 || ux > 1.1 || uy < -0.1 || uy > 1.1) return;
+    const c = this.ctx;
+    const cx = ux * this.w, cy = uy * this.h;
+    const fx = this.w - cx, fy = this.h - cy;   // ghost mirror through center
+    c.save();
+    c.globalCompositeOperation = 'lighter';
+    for (const [t, r, col] of [[0, 90, 'rgba(255,225,180,0.30)'], [0.35, 26, 'rgba(255,200,140,0.22)'], [0.62, 44, 'rgba(160,220,255,0.14)'], [0.85, 14, 'rgba(255,255,230,0.20)']]) {
+      const gx = cx + fx * 2 * (t - 0.5);
+      const gy = cy + fy * 2 * (t - 0.5);
+      const g = c.createRadialGradient(gx, gy, 0, gx, gy, r);
+      g.addColorStop(0, col);
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      c.fillStyle = g;
+      c.beginPath(); c.arc(gx, gy, r, 0, Math.PI * 2); c.fill();
+    }
+    // anamorphic streak
+    const st = c.createLinearGradient(cx - 200, cy, cx + 200, cy);
+    st.addColorStop(0, 'rgba(120,180,255,0)');
+    st.addColorStop(0.5, `rgba(170,210,255,${0.16 * vis})`);
+    st.addColorStop(1, 'rgba(120,180,255,0)');
+    c.fillStyle = st;
+    c.fillRect(cx - 200, cy - 2.5, 400, 5);
+    c.restore();
+  }
+
+  // ---- missile-cam PIP label only: the frame itself is drawn INSIDE the
+  // WebGL quad's shader, so border and picture are the same object and can
+  // never disagree in size ----
+  drawPipFrame(S) {
+    const r = S.pipRect;
+    if (!r || !S.pipOn) return;
+    this.text('MSL CAM', r.x + 10, r.y + 13, 11, 'rgba(159,232,255,0.9)', 'left', 4);
+  }
+
+  // ---- cinematic letterbox for the ace-intro cut ----
+  drawLetterbox(S) {
+    if (!S.aceCut) return;
+    const c = this.ctx;
+    const k = Math.min(1, (S.time * 6) % 2);   // subtle idle; height fixed
+    const bh = this.h * 0.11;
+    c.fillStyle = 'rgba(2,4,8,0.92)';
+    c.fillRect(0, 0, this.w, bh);
+    c.fillRect(0, this.h - bh, this.w, bh);
+    this.text('ACE APPROACHING', this.w / 2, this.h - bh / 2, 20, RED, 'center', 10);
   }
 
   vignette(S) {
