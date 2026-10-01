@@ -191,7 +191,7 @@ function update(dt) {
 
     // world
     enemies.update(dt, player, player.alive ? killCtx : { effects });
-    aaSites.update(dt, player, weapons);
+    aaSites.update(dt, player, weapons, effects);
     weapons.update(dt, player, enemies.enemies, effects);
 
     // weapon feedback events (crit hits) -> animated HUD stack
