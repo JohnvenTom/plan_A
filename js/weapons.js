@@ -15,9 +15,10 @@ const UP = new THREE.Vector3(0, 1, 0);
 // --(auto)--> hot (8 s hold window) --> cold. ALT is the ONLY cancel.
 const MSL_WARM_TIME = 1.0;
 const MSL_HOT_WINDOW = 8.0;
-// 80° nose envelope (±40° off the FUSELAGE axis, not the sight): radar locks
-// hold only inside it, IR shots may only leave the rail inside it
-const ENV_DOT = Math.cos(40 * Math.PI / 180);
+// 160° front half-cone (±80° off the FUSELAGE axis, not the sight): radar
+// locks hold only inside it, IR shots may only leave the rail inside it.
+// Lock/bite ACQUISITION still requires the ±8° head-sight basket.
+const ENV_DOT = Math.cos(80 * Math.PI / 180);
 const BASKET_DOT = Math.cos(8 * Math.PI / 180);   // head-sight basket ±8°
 const SEEK_RANGE = { ir: 5200, radar: 10000 };
 const AMMO_REGEN = { ir: 5.5, radar: 8 };         // s per missile, per pool
@@ -75,6 +76,8 @@ export class Weapons {
     this.warm = { state: 'cold', t: 0 };
     this.irSeek = null;        // IR seeker bite: nearest heat source in basket
     this.lockConeDot = null;   // lock target's nose-cone dot (HUD edge warning)
+    this.seekConeDot = null;   // IR bite's nose-cone dot
+    this.guideConeDot = null;  // current guidance-relevant cone dot (HUD)
     this.hud = null;           // wired by main (transient hint line)
     this.flares = 90;          // regenerating countermeasure stock
     this.flareRegenT = 0;
@@ -116,6 +119,8 @@ export class Weapons {
     this.warm = { state: 'cold', t: 0 };
     this.irSeek = null;
     this.lockConeDot = null;
+    this.seekConeDot = null;
+    this.guideConeDot = null;
     for (const k of Object.keys(this.ammo)) {
       this.ammo[k] = this.ammoMax[k];
       this.ammoRegen[k] = 0;
@@ -269,7 +274,7 @@ export class Weapons {
     // X with nothing (new) in the basket is a no-op
   }
 
-  // 80° launch/hold envelope: is this world point inside ±40° of the NOSE
+  // 160° front half-cone: is this world point inside ±80° of the NOSE
   // (the missile leaves the rail along the fuselage axis, not the sight)?
   _inEnvelope(player, pos) {
     _v.copy(pos).sub(player.position);
@@ -390,15 +395,16 @@ export class Weapons {
     this.irSeek = null;
     if (this.mslKind !== 'ir' || this.warm.state === 'cold') return;
     const aim = player.aimDir;
-    let best = null, bestDist = Infinity;
+    let best = null, bestDist = Infinity, bestCone = null;
     const consider = (pos, src) => {
       _v.copy(pos).sub(player.position);
       const d = _v.length();
       if (d > SEEK_RANGE.ir || d < 60) return;
       _v.divideScalar(d);
       if (_v.dot(aim) < BASKET_DOT) return;
-      if (_v.dot(player.forward(_v2)) < ENV_DOT) return;
-      if (d < bestDist) { bestDist = d; best = src; }
+      const cone = _v.dot(player.forward(_v2));
+      if (cone < ENV_DOT) return;
+      if (d < bestDist) { bestDist = d; best = src; bestCone = cone; }
     };
     for (const e of enemies) {
       if (e.dying || e.alive === false) continue;
@@ -406,6 +412,7 @@ export class Weapons {
     }
     for (const f of this.flareList) consider(f.pos, f);
     this.irSeek = best;
+    this.seekConeDot = best ? bestCone : null;
     if (best && best !== prev && this.audio) this.audio.seekBite();
   }
 
@@ -414,6 +421,11 @@ export class Weapons {
     this.updateLock(dt, player, enemies);
     this._updateWarm(dt);
     this._updateSeeker(player, enemies);
+    // the cone dot of whatever would actually guide a shot right now —
+    // the HUD paints the edge warning on THIS target
+    this.guideConeDot = this.mslKind === 'ir'
+      ? (this.irSeek ? this.seekConeDot : this.lockConeDot)
+      : this.lockConeDot;
   }
 
   // ---------- missiles ----------

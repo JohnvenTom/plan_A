@@ -13,8 +13,10 @@ const RED = '#ff5a4a';
 const AMBER = '#ffc866';
 const _hv = new THREE.Vector3();
 const _hv2 = new THREE.Vector3();
-const ENV_DOT_WARN = Math.cos(36 * Math.PI / 180);   // inside 4° of the 80° edge
-const ENV_DOT_WARN2 = Math.cos(32 * Math.PI / 180);
+// 160° front half-cone edge warning: amber past 70° off the nose, flashing
+// red past 76° (lock breaks / launch gate closes at 80°)
+const CONE_WARN = Math.cos(70 * Math.PI / 180);
+const CONE_CRIT = Math.cos(76 * Math.PI / 180);
 
 export class HUD {
   constructor(canvas) {
@@ -211,7 +213,6 @@ export class HUD {
 
     this.drawSpeedAlt(dt, S);
     this.drawHeading(S);
-    this.drawEnvelope(S);
     this.drawReticle(S);
     this.drawTargets(S);
     this.drawRadar(S);
@@ -316,33 +317,6 @@ export class HUD {
     this.line(cx, y + 22, cx + 6, y + 30, CYAN, 2);
   }
 
-  // ---- 80° nose envelope ring (±40° off the fuselage axis) ----
-  // Anchored to the NOSE direction projection: during hard maneuvers the ring
-  // lags behind the aim circle — you can see the nose hasn't caught up. Locks
-  // hold and IR shots leave the rail only inside this circle.
-  drawEnvelope(S) {
-    const p = S.player, w = S.weapons;
-    const np = this.proj(_hv.copy(p.position).addScaledVector(p.forward(_hv2), 2600), S.camera);
-    if (np.behind) return;
-    const halfFov = (S.camera.fov * Math.PI / 180) / 2;
-    const r = (this.h / 2) * Math.tan(40 * Math.PI / 180) / Math.tan(halfFov);
-    let col = 'rgba(159,232,255,0.3)';
-    let lw = 1.25;
-    if (w.lockConeDot !== null && w.lockConeDot !== undefined) {
-      const blink = Math.floor(S.time * 6) % 2 === 0;
-      if (w.lockConeDot < ENV_DOT_WARN2) col = blink ? RED : 'rgba(255,90,74,0.35)';
-      else if (w.lockConeDot < ENV_DOT_WARN) col = AMBER;
-      if (col === RED || col === AMBER) lw = 2;
-    }
-    this.circle(np.x, np.y, r, col, lw);
-    // small label at whichever side intersection is on screen
-    if (np.x + r < this.w - 12 && np.y - 20 > 0 && np.y + 20 < this.h) {
-      this.text('MSL LIM 80°', np.x + r + 6, np.y, 10, CYAN_DIM, 'left', 3);
-    } else if (np.x - r > 12 && np.y - 20 > 0 && np.y + 20 < this.h) {
-      this.text('MSL LIM 80°', np.x - r - 6, np.y, 10, CYAN_DIM, 'right', 3);
-    }
-  }
-
   // ---- War Thunder style: aim director circle at the mouse + flight path marker ----
   drawReticle(S) {
     const c = this.ctx;
@@ -406,12 +380,19 @@ export class HUD {
     const solid = w.warm.state === 'hot' && w.irSeek;
     if (solid) {
       this.circle(ap.x, ap.y, 44, RED, 2.5);
-      // marker on the bitten heat source + thin tie line from the reticle
+      // marker on the bitten heat source + thin tie line from the reticle;
+      // the diamond doubles as the 160° cone-edge display for the bite
       const src = w.irSeek;
       const bp = this.proj(src.position ?? src.pos, S.camera);
       if (!bp.behind) {
         this.line(ap.x, ap.y, bp.x, bp.y, 'rgba(255,90,74,0.4)', 1);
-        this._diamond(bp.x, bp.y, 9, RED, false);
+        const cd = w.guideConeDot;
+        const hasCd = cd !== null && cd !== undefined;
+        const blink = Math.floor(S.time * 6) % 2 === 0;
+        const dcol = hasCd && cd < CONE_CRIT ? (blink ? RED : 'rgba(255,90,74,0.3)')
+          : hasCd && cd < CONE_WARN ? AMBER : RED;
+        this._diamond(bp.x, bp.y, 9, dcol, false);
+        if (dcol !== RED) this.text('CONE', bp.x, bp.y + 22, 11, dcol, 'center', 4);
       }
     } else {
       if (blink) this.circle(ap.x, ap.y, 44, RED, 2);
@@ -425,22 +406,33 @@ export class HUD {
   }
 
   // ---- target frames: AC7 brackets + RNG, off-screen arrows ----
+  // The guidance target's frame is the 160° cone edge display: normal red
+  // inside the cone, amber past 70° off the nose, flashing red past 76°
+  // (lock breaks / launch gate closes at 80°) + a CONE tag.
   drawTargets(S) {
     const w = S.weapons;
     const ls = w.lockState;
+    const cd = w.guideConeDot;
+    const hasCd = cd !== null && cd !== undefined;
+    const nearEdge = hasCd && cd < CONE_WARN;
+    const atEdge = hasCd && cd < CONE_CRIT;
+    const blink = Math.floor(S.time * 6) % 2 === 0;
+    const edgeCol = atEdge ? (blink ? RED : 'rgba(255,90,74,0.3)') : AMBER;
     for (const e of S.enemies) {
       if (e.dying) continue;
       const s = this.proj(e.position, S.camera);
       const dist = e.position.distanceTo(S.player.position);
       const onScreen = !s.behind && s.x > 30 && s.x < this.w - 30 && s.y > 30 && s.y < this.h - 30;
       const isLock = ls.target === e;
+      const isGuide = isLock && nearEdge;   // this frame shows the edge state
+      const col = isGuide ? edgeCol : (isLock ? RED : CYAN_DIM);
       if (onScreen) {
         const size = clamp(4200 / dist, 18, 66);
-        const col = isLock ? RED : CYAN_DIM;
         this._brackets(s.x, s.y, size, col, isLock ? 2 : 1.25);
         if (isLock) {
-          this._diamond(s.x, s.y, 5, RED, true);
-          this.text('LOCK', s.x + size / 2 + 8, s.y - size / 2 - 9, 12, RED, 'left', 4);
+          this._diamond(s.x, s.y, 5, col, true);
+          this.text('LOCK', s.x + size / 2 + 8, s.y - size / 2 - 9, 12, col, 'left', 4);
+          if (isGuide) this.text(atEdge ? 'CONE — 即将断锁' : 'CONE', s.x + size / 2 + 8, s.y - size / 2 + 22, 11, edgeCol, 'left', 4);
         }
         this.text(`RNG ${(dist / 1000).toFixed(1)}`, s.x + size / 2 + 8, s.y - size / 2 + 7, 11, col, 'left', 3);
         if (e.hp < 42) this.text('DMG', s.x + size / 2 + 8, s.y + size / 2 - 5, 11, AMBER, 'left', 3);
@@ -455,11 +447,12 @@ export class HUD {
         c.save();
         c.translate(ax, ay);
         c.rotate(ang);
-        c.fillStyle = isLock ? RED : CYAN_DIM;
+        c.fillStyle = col;
         c.shadowColor = c.fillStyle; c.shadowBlur = 6;
         c.beginPath(); c.moveTo(12, 0); c.lineTo(-6, -7); c.lineTo(-6, 7); c.closePath(); c.fill();
         c.restore();
         c.shadowBlur = 0;
+        if (isGuide) this.text('CONE', ax - Math.cos(ang) * 26, ay - Math.sin(ang) * 26, 11, edgeCol, 'center', 4);
       }
     }
     // radar seeker warmup arc around the locked target:
