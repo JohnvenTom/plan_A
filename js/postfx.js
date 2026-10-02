@@ -179,6 +179,148 @@ void main() {
   gl_FragColor = vec4(col, 1.0);
 }`;
 
+// ---- TRUE volumetric clouds: half-res raymarch through two slabs
+// (cumulus 2350-3220 m with a vertical billow profile + cirrus veil
+// 4050-4560 m with stretched streak noise). Depth-aware - terrain and sea
+// correctly occlude the march; silver lining via Henyey-Greenstein phase;
+// two shadow taps toward the sun; coverage/darkness driven by weather.
+const CLOUD_FRAG = /* glsl */`
+precision highp float;
+varying vec2 vUv;
+uniform vec3 uCamPos;
+uniform mat4 uInvVP;
+uniform vec3 uSunDir;
+uniform float uTime;
+uniform float uCoverage;   // weather: 0 scattered .. 1 thick overcast
+uniform float uDark;       // storm blackening
+uniform float uNight;
+uniform sampler2D tDepth;
+uniform float uNear, uFar;
+
+float hash3(vec3 p){ return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+float noise3(vec3 p){
+  vec3 i = floor(p), f = fract(p);
+  vec3 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(hash3(i), hash3(i + vec3(1,0,0)), u.x),
+                 mix(hash3(i + vec3(0,1,0)), hash3(i + vec3(1,1,0)), u.x), u.y),
+             mix(mix(hash3(i + vec3(0,0,1)), hash3(i + vec3(1,0,1)), u.x),
+                 mix(hash3(i + vec3(0,1,1)), hash3(i + vec3(1,1,1)), u.x), u.y), u.z);
+}
+float fbm3(vec3 p){
+  float v = 0.0, a = 0.55;
+  for (int i = 0; i < 3; i++){ v += a * noise3(p); p = p * 2.07 + 13.7; a *= 0.5; }
+  return v;
+}
+
+// clouds live ONLY over the island chain (full within 9 km of world center,
+// gone past 12 km): the open sea keeps a clean sky, and the horizon can
+// never cut the layer — the density is already zero at the mesh-edge zone
+float islandMask(vec3 p) {
+  return smoothstep(13000.0, 8000.0, length(p.xz));
+}
+
+float slab(vec3 p, out float hn) {
+  float d = 0.0;
+  hn = -1.0;
+  float im = islandMask(p);
+  if (p.y > 2330.0 && p.y < 3220.0) {
+    float h = (p.y - 2330.0) / 890.0;
+    vec3 q = vec3(p.x + uTime * 6.0, p.y, p.z + uTime * 1.5) * 0.00042;
+    float n = fbm3(q) * 0.75 + fbm3(q * 3.1 + 31.0) * 0.25;
+    float prof = smoothstep(0.0, 0.24, h) * smoothstep(1.0, 0.66, h);
+    d += smoothstep(0.74 - uCoverage * 0.48, 0.74 - uCoverage * 0.48 + 0.34, n) * prof * im;
+    hn = h;
+  }
+  if (p.y > 4050.0 && p.y < 4560.0) {
+    vec3 q = vec3(p.x * 0.00009 + uTime * 0.004, p.y * 0.004, p.z * 0.00013);
+    float n = fbm3(q);
+    d += smoothstep(0.72 - uCoverage * 0.4, 0.72 - uCoverage * 0.4 + 0.18, n) * 0.38 * im;
+  }
+  return d;
+}
+
+float sceneDepth() {
+  float z = texture2D(tDepth, vUv).x;
+  float ndc = z * 2.0 - 1.0;
+  return (2.0 * uNear * uFar) / (uFar + uNear - ndc * (uFar - uNear));
+}
+
+void main() {
+  if (uCoverage < 0.02) { gl_FragColor = vec4(0.0); return; }
+  vec4 farP = uInvVP * vec4(vUv * 2.0 - 1.0, 1.0, 1.0);
+  farP /= farP.w;
+  vec3 rd = normalize(farP.xyz - uCamPos);
+  float maxD = min(sceneDepth(), 34000.0) - 30.0;
+  float t0 = 1e9, t1 = -1e9;
+  if (abs(rd.y) > 0.001) {
+    for (float yb = 2300.0; yb <= 4600.0; yb += 1150.0) {
+      float t = (yb - uCamPos.y) / rd.y;
+      if (t < 0.0) continue;
+      t0 = min(t0, t); t1 = max(t1, t);
+    }
+    if (uCamPos.y > 2300.0 && uCamPos.y < 4600.0) t0 = 0.0;
+  }
+  t0 = max(t0, 0.0);
+  t1 = min(t1, maxD);
+  if (t1 <= t0) { gl_FragColor = vec4(0.0); return; }
+  // NOTE: no binary island-zone cull anymore — the cliff between "marched"
+  // and "skipped" pixels read as a seam cutting the layer when viewed edge-on.
+  // The soft world-space mask below (plus the haze melt) carries it alone.
+
+  const int N = 34;
+  float stepLen = (t1 - t0) / float(N);
+  float jitter = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+  float t = t0 + stepLen * jitter;
+  float mu = dot(rd, uSunDir);
+  float hg = 0.72 * (1.0 - 0.2025) / (4.0 * 3.14159 * pow(1.2025 - 0.9 * mu, 1.5))
+           + 0.28 * 0.25;
+  vec3 sunCol = mix(vec3(1.3, 1.12, 0.95), vec3(0.25, 0.3, 0.42), uNight);
+  vec3 amb = mix(vec3(0.52, 0.56, 0.64), vec3(0.08, 0.1, 0.15), uNight);
+  vec3 acc = vec3(0.0);
+  float T = 1.0;
+  for (int i = 0; i < N; i++) {
+    vec3 p = uCamPos + rd * t;
+    float hn;
+    float d = slab(p, hn);
+    if (d > 0.003) {
+      float sh = 1.0;
+      float hnx;
+      sh -= clamp(slab(p + uSunDir * 150.0, hnx), 0.0, 1.0) * 0.42;
+      sh -= clamp(slab(p + uSunDir * 360.0, hnx), 0.0, 1.0) * 0.3;
+      vec3 lum = sunCol * max(sh, 0.05) * (hg * 2.2 + 0.32) + amb * (0.55 + max(hn, 0.0) * 0.5);
+      lum = mix(lum, lum * vec3(0.42, 0.44, 0.5), uDark);
+      float a = 1.0 - exp(-d * stepLen * 0.011);
+      acc += T * a * lum;
+      T *= 1.0 - a;
+      if (T < 0.05) break;
+    }
+    t += stepLen;
+  }
+  // horizon fog, PROPER: the window must FINISH before the island-zone
+  // boundary (13 km) — a horizontal world-space edge viewed edge-on
+  // compresses to ~2 px no matter how soft it is in world space, so the
+  // only line-proof arrangement is: fog fully dissolves the layer BEFORE
+  // the density edge can arrive. 6→14 km, alpha leads the color.
+  float fog = smoothstep(5500.0, 12500.0, t0);   // fully fogged BEFORE the 13 km zone edge
+  vec3 haze = mix(vec3(0.62, 0.66, 0.73), vec3(0.07, 0.09, 0.13), uNight);
+  haze = mix(haze, haze * vec3(0.5, 0.52, 0.58), uDark);
+  acc = mix(acc, haze, fog * 0.45);
+  float alpha = (1.0 - T) * (1.0 - fog);          // fog=1 -> fully transparent
+  gl_FragColor = vec4(acc, alpha);
+}`;
+
+// blend pass: volumetrics composite over the scene
+const BLEND_FRAG = /* glsl */`
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D tScene;
+uniform sampler2D tCloud;
+void main() {
+  vec3 s = texture2D(tScene, vUv).rgb;
+  vec4 c = texture2D(tCloud, vUv);
+  gl_FragColor = vec4(mix(s, c.rgb, clamp(c.a, 0.0, 1.0)), 1.0);
+}`;
+
 // missile-cam picture-in-picture: draws the missile RT on screen over
 // everything, AC7-style top-right corner box
 const PIP_FRAG = /* glsl */`
@@ -230,6 +372,8 @@ void main() {
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }`;
 
+const _pm4 = new THREE.Matrix4();
+
 function makePass(frag, uniforms, vert = QUAD_VERT) {
   const mat = new THREE.ShaderMaterial({
     vertexShader: vert,
@@ -259,6 +403,8 @@ export class PostFX {
 
     this.bloomA = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: false });
     this.bloomB = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: false });
+    this.sceneRT2 = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: false });
+    this.cloudRT = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: false });
 
     this.brightPass = makePass(BRIGHT_FRAG, {
       tScene: { value: null }, uThreshold: { value: 0.82 },
@@ -282,6 +428,20 @@ export class PostFX {
       uCloud: { value: 0 },
       uTime: { value: 0 },
     });
+    this.cloudPass = makePass(CLOUD_FRAG, {
+      uCamPos: { value: new THREE.Vector3() },
+      uInvVP: { value: new THREE.Matrix4() },
+      uSunDir: { value: new THREE.Vector3(0, 1, 0) },
+      uTime: { value: 0 },
+      uCoverage: { value: 0 },
+      uDark: { value: 0 },
+      uNight: { value: 0 },
+      tDepth: { value: null },
+      uNear: { value: 2.5 }, uFar: { value: 72000 },
+    });
+    this.blendPass = makePass(BLEND_FRAG, {
+      tScene: { value: null }, tCloud: { value: null },
+    });
     this.pipPass = makePass(PIP_FRAG, {
       tSrc: { value: null }, uOpen: { value: 0 }, uGlitch: { value: 0 },
       uZoom: { value: 1 }, uTime: { value: 0 },
@@ -297,8 +457,10 @@ export class PostFX {
     const dpr = Math.min(devicePixelRatio || 1, 1.5);
     const rw = Math.max(2, Math.floor(w * dpr)), rh = Math.max(2, Math.floor(h * dpr));
     this.sceneRT.setSize(rw, rh);
+    this.sceneRT2.setSize(rw, rh);
     this.bloomA.setSize(rw >> 1, rh >> 1);
     this.bloomB.setSize(rw >> 1, rh >> 1);
+    this.cloudRT.setSize(Math.max(2, rw >> 1), Math.max(2, rh >> 1));   // half-res march
     this.compPass.mat.uniforms.uRes.value.set(rw, rh);
   }
 
@@ -322,6 +484,17 @@ export class PostFX {
     if (s.flash !== undefined) u.uFlash.value = s.flash;
     if (s.cloud !== undefined) u.uCloud.value = s.cloud;
     u.uTime.value = performance.now() / 1000;
+    if (!s.cloudState) this.cloudPass.mat.uniforms.uCoverage.value = 0;
+    if (s.cloudState) {
+      const cu = this.cloudPass.mat.uniforms;
+      cu.uCamPos.value.copy(s.cloudState.camPos);
+      cu.uInvVP.value.copy(s.cloudState.invVP);
+      cu.uSunDir.value.copy(s.cloudState.sunDir);
+      cu.uCoverage.value = s.cloudState.coverage;
+      cu.uDark.value = s.cloudState.dark;
+      cu.uNight.value = s.cloudState.night;
+      cu.tDepth.value = this.sceneRT.depthTexture;
+    }
     if (s.heat) {
       for (let i = 0; i < 2; i++) {
         const hv = s.heat[i] || [0, 0, 0, 0];
@@ -338,6 +511,33 @@ export class PostFX {
 
   // missile-cam PIP texture source (set externally)
   setPipSource(rt) { this.pipPass.mat.uniforms.tSrc.value = rt?.texture ?? null; }
+
+  // march + blend volumetric clouds into an EXTERNAL render target using an
+  // arbitrary camera (the missile seeker). Saves/restores the main-camera
+  // uniforms. Returns false when coverage is zero (caller keeps srcRT).
+  renderPipClouds(srcRT, dstRT, camera) {
+    const cu = this.cloudPass.mat.uniforms;
+    if (!cu.uCoverage.value || cu.uCoverage.value <= 0.02) return false;
+    const keepPos = cu.uCamPos.value.clone();
+    const keepVP = cu.uInvVP.value.clone();
+    const keepDepth = cu.tDepth.value;
+    try {
+      cu.uCamPos.value.copy(camera.position);
+      cu.uInvVP.value.copy(_pm4.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse).invert());
+      cu.tDepth.value = srcRT.depthTexture;
+      this.r.setRenderTarget(this.cloudRT);
+      this.r.render(this.cloudPass.scene, this.cloudPass.cam);
+      this.blendPass.mat.uniforms.tScene.value = srcRT.texture;
+      this.blendPass.mat.uniforms.tCloud.value = this.cloudRT.texture;
+      this.r.setRenderTarget(dstRT);
+      this.r.render(this.blendPass.scene, this.blendPass.cam);
+      return true;
+    } finally {
+      cu.uCamPos.value.copy(keepPos);
+      cu.uInvVP.value.copy(keepVP);
+      cu.tDepth.value = keepDepth;
+    }
+  }
   setPip(open, zoom, glitch) {
     const u = this.pipPass.mat.uniforms;
     u.uOpen.value = open;
@@ -365,8 +565,19 @@ export class PostFX {
   // run the chain to the screen (PIP last, if tSrc bound)
   composite() {
     const r = this.r;
+    // volumetric clouds: march at half res, blend over the scene (full res)
+    const work = (this.cloudPass.mat.uniforms.uCoverage.value > 0.02) ? this.sceneRT2 : this.sceneRT;
+    if (work === this.sceneRT2) {
+      this.cloudPass.mat.uniforms.uTime.value = performance.now() / 1000;
+      r.setRenderTarget(this.cloudRT);
+      r.render(this.cloudPass.scene, this.cloudPass.cam);
+      this.blendPass.mat.uniforms.tScene.value = this.sceneRT.texture;
+      this.blendPass.mat.uniforms.tCloud.value = this.cloudRT.texture;
+      r.setRenderTarget(this.sceneRT2);
+      r.render(this.blendPass.scene, this.blendPass.cam);
+    }
     // bright extract
-    this.brightPass.mat.uniforms.tScene.value = this.sceneRT.texture;
+    this.brightPass.mat.uniforms.tScene.value = work.texture;
     r.setRenderTarget(this.bloomA);
     r.render(this.brightPass.scene, this.brightPass.cam);
     // two blur iterations (H+V) at half res
@@ -383,7 +594,7 @@ export class PostFX {
     }
     // composite to screen
     const cu = this.compPass.mat.uniforms;
-    cu.tScene.value = this.sceneRT.texture;
+    cu.tScene.value = work.texture;
     cu.tBloom.value = this.bloomA.texture;
     cu.tDepth.value = this.sceneRT.depthTexture;
     r.setRenderTarget(null);

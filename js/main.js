@@ -59,6 +59,9 @@ const audio = new GameAudio();
 const postfx = new PostFX(renderer);
 const mslCam = new THREE.PerspectiveCamera(58, 16 / 9, 2, 72000);
 const mslRT = new THREE.WebGLRenderTarget(480, 270, { type: THREE.HalfFloatType });
+mslRT.depthTexture = new THREE.DepthTexture(480, 270);
+mslRT.depthTexture.type = THREE.UnsignedIntType;
+const mslRT2 = new THREE.WebGLRenderTarget(480, 270, { type: THREE.HalfFloatType, depthBuffer: false });
 window.__postfx = postfx;   // debug hook
 weather.onChange = (name) => hud.announce('天气变化', name, 1.6, 'info');
 const input = new Input();
@@ -342,8 +345,9 @@ function update(dt) {
 // ---------- post-processing intent + missile-cam PIP ----------
 const _pv = new THREE.Vector3();
 const _pv2 = new THREE.Vector3();
+const _pm = new THREE.Matrix4();   // scratch for view-projection inverses
 function renderFrame(dt) {
-  const playingLike = G.state === 'playing' || G.state === 'intro';
+  const playingLike = G.state === 'playing' || G.state === 'intro' || G.state === 'gameover';
   // --- missile cam: ride the newest live player missile that is guiding ---
   let pipSrc = null;
   if (playingLike) {
@@ -382,7 +386,8 @@ function renderFrame(dt) {
       renderer.clear();
       renderer.render(scene, mslCam);
       renderer.setRenderTarget(null);
-      pipSrc = mslRT;
+      // seeker view gets the same volumetric sky (cheap at 480x270)
+      pipSrc = postfx.renderPipClouds(mslRT, mslRT2, mslCam) ? mslRT2 : mslRT;
     }
   } else {
     G.pipOpen = 0;
@@ -394,9 +399,10 @@ function renderFrame(dt) {
   if (playingLike) {
     const y = camera.position.y;
     const dens = clamp(0.25 + weather.cur.gray * 1.4 + (weather.cur.alpha - 0.85) * 1.5, 0, 1);
-    for (const [cy, half] of [[2750, 420], [4200, 520]]) {
+    // cumulus slab dominates the whiteout; the cirrus veil is thin: halved
+    for (const [cy, half, w] of [[2775, 445, 1], [4305, 255, 0.45]]) {
       const k = 1 - Math.abs(y - cy) / half;
-      if (k > 0) immerse = Math.max(immerse, k * dens);
+      if (k > 0) immerse = Math.max(immerse, k * dens * w);
     }
   }
   G.cloud = immerse;
@@ -471,7 +477,17 @@ function renderFrame(dt) {
     dofFocus = best < 1e8 ? best : 900;
   }
 
+  // volumetric cloud uniforms: camera, sun, weather coverage
+  _pm.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse).invert();
   postfx.setState({
+    cloudState: playingLike ? {
+      camPos: camera.position,
+      invVP: _pm,
+      sunDir: sky.sunDir,
+      coverage: clamp(0.52 + weather.cur.gray * 0.85 + (weather.cur.alpha - 0.82) * 0.6, 0.2, 1),
+      dark: weather.cur.gray,
+      night: G.night01 ?? 0,
+    } : null,
     exposure: G.exposure,
     bloom: 0.6 + (G.night01 ?? 0) * 0.35 + weather.cur.gray * 0.1,
     radial, radialC: [0.5, 0.52],
@@ -621,7 +637,16 @@ function frame() {
     ocean.mat.uniforms.uTime.value = G.time;
     ocean.mat.uniforms.uSunDir.value.copy(sky.sunDir);
     effects.update(dt);
-    postfx.setState({ exposure: 1.05, bloom: 0.55, radial: 0, godray: 0, motionAmt: 0, dofAmt: 0, sunVis: 0, flash: 0, heat: [], vignette: 0.35 });
+    camera.updateMatrixWorld();
+    _pm.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse).invert();
+    postfx.setState({
+      cloudState: {
+        camPos: camera.position, invVP: _pm, sunDir: sky.sunDir,
+        coverage: clamp(0.52 + weather.cur.gray * 0.85 + (weather.cur.alpha - 0.82) * 0.6, 0.2, 1),
+        dark: weather.cur.gray, night: G.night01 ?? 0,
+      },
+      exposure: 1.05, bloom: 0.55, radial: 0, godray: 0, motionAmt: 0, dofAmt: 0, sunVis: 0, flash: 0, heat: [], vignette: 0.35,
+    });
     postfx.beginScene();
     renderer.render(scene, camera);
     postfx.setPipSource(null);

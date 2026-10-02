@@ -312,10 +312,12 @@ export class Sky {
       this.cloudMats.push(mat);
       return mesh;
     };
-    // decks demoted to a distant haze backdrop — the puffs carry the volume
-    this.cloudLow = deck(2750, 7.0, 0.52, 0.0035, [1.35, 1.18, 1.02], [0.52, 0.50, 0.55], 0.4);
-    this.cloudHigh = deck(4200, 4.2, 0.58, 0.0021, [1.45, 1.32, 1.20], [0.62, 0.62, 0.70], 0.3);
-    this.cloudField = buildCloudField(scene, this.sunDir);
+    // flat decks and billboard puffs RETIRED: clouds are raymarched
+    // volumetrics in the postfx chain now. Keep cloudMats empty — weather
+    // and the bolt-lighting hooks guard on it.
+    this.cloudMats = [];
+    this.cloudLow = null;
+    this.cloudHigh = null;
 
     // --- lighting: sun + sky hemisphere, one shared direction ---
     this.sun = new THREE.DirectionalLight(0xffd9a8, 2.9);
@@ -358,7 +360,7 @@ export class Sky {
     }
     this.hemi.intensity = (1.3 * dayF + 0.42 * night01) * dim;
     for (const m of this.cloudMats) m.uniforms.uNight.value = night01;
-    this.cloudField.mat.uniforms.uNight.value = night01;
+    if (this.cloudField) this.cloudField.mat.uniforms.uNight.value = night01;
 
     // fog follows the sun height, the night, and the weather graying
     const fc = this.scene.fog.color;
@@ -375,17 +377,18 @@ export class Sky {
     for (const m of this.cloudMats) m.uniforms.uTime.value = this.cloudTime;
     // dome + cloud decks ride with the camera (x,z only for clouds -> parallax against terrain)
     this.dome.position.copy(cameraPos);
-    this.cloudField.mat.uniforms.uCamPos.value.copy(cameraPos);
-    this.cloudLow.position.x = cameraPos.x;
-    this.cloudLow.position.z = cameraPos.z;
-    this.cloudHigh.position.x = cameraPos.x;
-    this.cloudHigh.position.z = cameraPos.z;
+    if (this.cloudLow) {
+      this.cloudLow.position.x = cameraPos.x;
+      this.cloudLow.position.z = cameraPos.z;
+      this.cloudHigh.position.x = cameraPos.x;
+      this.cloudHigh.position.z = cameraPos.z;
+    }
   }
 
   dispose() {
     this.dome.geometry.dispose(); this.domeMat.dispose();
     for (const m of this.cloudMats) { /* geometries shared per-mesh */ }
-    this.cloudLow.geometry.dispose(); this.cloudHigh.geometry.dispose();
+    if (this.cloudLow) { this.cloudLow.geometry.dispose(); this.cloudHigh.geometry.dispose(); }
     this.cloudMats.forEach(m => m.dispose());
   }
 }

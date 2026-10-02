@@ -187,7 +187,7 @@ export function buildOcean(scene) {
       uFogDensity: { value: 0.000034 },
     },
   });
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(46000, 46000), mat);
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(92000, 92000), mat);
   mesh.rotation.x = -Math.PI / 2;
   mesh.position.y = SEA_LEVEL - 0.2;   // small bias below the terrain zero
   mesh.frustumCulled = false;
