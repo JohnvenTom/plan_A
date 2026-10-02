@@ -132,6 +132,127 @@ void main() {
   gl_FragColor = vec4(col, a * border * uAlpha);
 }`;
 
+// ---- volumetric-feel cloud field: ~500 billboarded puff clusters in the
+// deck altitude bands. One InstancedMesh = one draw call; instances wrap
+// around the camera on the GPU (mod-cell trick), so a 26 km field follows
+// the player forever without CPU updates. Weather scales density/darkness.
+const PUFF_VERT = /* glsl */`
+attribute float aSeed;
+uniform vec3 uCamPos;
+uniform float uCell;
+varying vec2 vUv;
+varying float vSeed;
+varying float vDist;
+varying float vTop;
+void main() {
+  vUv = uv;
+  vSeed = aSeed;
+  vec4 wp = instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+  vec3 c = mod(wp.xyz - uCamPos + uCell * 0.5, uCell) - uCell * 0.5 + uCamPos;
+  float sx = length(vec3(instanceMatrix[0].xyz));
+  vec3 right = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
+  vec3 up    = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
+  vec3 world = c + (position.x * right + position.y * up) * sx;
+  vec4 mv = viewMatrix * vec4(world, 1.0);
+  vDist = -mv.z;
+  vTop = position.y + 0.5;   // 0 bottom .. 1 top of the billboard
+  gl_Position = projectionMatrix * mv;
+}`;
+
+const PUFF_FRAG = /* glsl */`
+precision highp float;
+varying vec2 vUv;
+varying float vSeed;
+varying float vDist;
+varying float vTop;
+uniform vec3 uSunDir;
+uniform float uDensity;   // weather alpha 0..1
+uniform float uDark;      // weather gray 0..1
+uniform float uNight;
+
+float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float noise(vec2 p){
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x),
+             mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
+}
+void main() {
+  // puffy silhouette: fbm blob inside a soft radial mask
+  vec2 p = vUv * 2.1 + vec2(vSeed * 37.0, vSeed * 91.0);
+  float n = noise(p) * 0.68 + noise(p * 1.9 + 7.7) * 0.32;
+  vec2 q = vUv - 0.5;
+  float mask = smoothstep(0.52, 0.16, length(q * vec2(1.0, 0.9)));
+  float a = smoothstep(0.3, 0.5, n) * mask * uDensity;
+  if (a < 0.004) discard;
+  // lighting: sunlit crests (high noise) + brighter tops, dark storm base
+  float crest = smoothstep(0.55, 0.8, n);
+  vec3 lit = mix(vec3(0.62, 0.64, 0.70), vec3(1.38, 1.30, 1.18), crest);
+  vec3 col = mix(vec3(0.44, 0.46, 0.52), lit, clamp(0.3 + vTop * 0.55 + crest * 0.35, 0.0, 1.0));
+  col = mix(col, col * vec3(0.42, 0.44, 0.5), uDark);          // storm darkening
+  col *= 1.0 - uNight * 0.75;
+  // distance fade + slight haze toward the horizon
+  float fade = smoothstep(24000.0, 13000.0, vDist);
+  a *= fade;
+  gl_FragColor = vec4(col, a * 0.92);
+}`;
+
+function buildCloudField(scene, sunDir) {
+  const CELL = 19000;
+  const CLUSTERS = 220;
+  const perCluster = 7;
+  const N = CLUSTERS * perCluster;
+  const geo = new THREE.InstancedBufferGeometry();
+  const quad = new THREE.PlaneGeometry(1, 1);
+  geo.index = quad.index;
+  geo.attributes.position = quad.attributes.position;
+  geo.attributes.uv = quad.attributes.uv;
+  const seeds = new Float32Array(N);
+  for (let i = 0; i < N; i++) seeds[i] = Math.random() * 100;
+  geo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seeds, 1));
+  const mat = new THREE.ShaderMaterial({
+    vertexShader: PUFF_VERT,
+    fragmentShader: PUFF_FRAG,
+    transparent: true, depthWrite: false, fog: false,
+    side: THREE.DoubleSide,
+    uniforms: {
+      uCamPos: { value: new THREE.Vector3() },
+      uCell: { value: CELL },
+      uSunDir: { value: sunDir },
+      uDensity: { value: 0.8 },
+      uDark: { value: 0 },
+      uNight: { value: 0 },
+    },
+  });
+  const mesh = new THREE.InstancedMesh(geo, mat, N);
+  mesh.frustumCulled = false;
+  mesh.renderOrder = -4;
+  const m4 = new THREE.Matrix4();
+  let k = 0;
+  for (let c = 0; c < CLUSTERS; c++) {
+    // 70% low band, 30% high band — matches the whiteout altitude bands
+    const low = Math.random() < 0.7;
+    const cy = low ? 2750 : 4200;
+    const half = low ? 380 : 460;
+    const cx = (Math.random() - 0.5) * CELL;
+    const cz = (Math.random() - 0.5) * CELL;
+    // one MASS: 600–1400 m wide, stacked tall — a chunky volumetric bank
+    const size = 650 + Math.random() * 750;
+    for (let j = 0; j < perCluster; j++, k++) {
+      const s = size * (0.6 + Math.random() * 0.4);
+      m4.makeScale(s, s * (0.62 + Math.random() * 0.3), 1);
+      m4.setPosition(
+        cx + (Math.random() - 0.5) * size * 1.1,
+        cy + (Math.random() - 0.5) * half * 2.1,
+        cz + (Math.random() - 0.5) * size * 1.1,
+      );
+      mesh.setMatrixAt(k, m4);
+    }
+  }
+  scene.add(mesh);
+  return { mesh, mat, cell: CELL };
+}
+
 export class Sky {
   constructor(scene) {
     this.scene = scene;
@@ -191,8 +312,10 @@ export class Sky {
       this.cloudMats.push(mat);
       return mesh;
     };
-    this.cloudLow = deck(2750, 7.0, 0.52, 0.0035, [1.35, 1.18, 1.02], [0.52, 0.50, 0.55], 1.0);
-    this.cloudHigh = deck(4200, 4.2, 0.58, 0.0021, [1.45, 1.32, 1.20], [0.62, 0.62, 0.70], 0.7);
+    // decks demoted to a distant haze backdrop — the puffs carry the volume
+    this.cloudLow = deck(2750, 7.0, 0.52, 0.0035, [1.35, 1.18, 1.02], [0.52, 0.50, 0.55], 0.4);
+    this.cloudHigh = deck(4200, 4.2, 0.58, 0.0021, [1.45, 1.32, 1.20], [0.62, 0.62, 0.70], 0.3);
+    this.cloudField = buildCloudField(scene, this.sunDir);
 
     // --- lighting: sun + sky hemisphere, one shared direction ---
     this.sun = new THREE.DirectionalLight(0xffd9a8, 2.9);
@@ -235,6 +358,7 @@ export class Sky {
     }
     this.hemi.intensity = (1.3 * dayF + 0.42 * night01) * dim;
     for (const m of this.cloudMats) m.uniforms.uNight.value = night01;
+    this.cloudField.mat.uniforms.uNight.value = night01;
 
     // fog follows the sun height, the night, and the weather graying
     const fc = this.scene.fog.color;
@@ -251,6 +375,7 @@ export class Sky {
     for (const m of this.cloudMats) m.uniforms.uTime.value = this.cloudTime;
     // dome + cloud decks ride with the camera (x,z only for clouds -> parallax against terrain)
     this.dome.position.copy(cameraPos);
+    this.cloudField.mat.uniforms.uCamPos.value.copy(cameraPos);
     this.cloudLow.position.x = cameraPos.x;
     this.cloudLow.position.z = cameraPos.z;
     this.cloudHigh.position.x = cameraPos.x;

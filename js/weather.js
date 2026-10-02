@@ -135,6 +135,11 @@ export class Weather {
         m.uniforms.uDrift.value = 0.0035 * this.cur.wind;
       }
     }
+    // puff field: density follows cloud cover, storm darkness follows gray
+    if (sm.cloudField) {
+      sm.cloudField.mat.uniforms.uDensity.value = clamp(this.cur.alpha * 1.15, 0, 1);
+      sm.cloudField.mat.uniforms.uDark.value = this.cur.gray;
+    }
     // sky.setCycle reads this object as "weather"
     sm.weatherParams = this.cur;
     // storm sea state: wave choppiness follows the wind past gale force

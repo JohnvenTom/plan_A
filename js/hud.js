@@ -10,6 +10,7 @@ import { cornerSpeedKMH } from './flightmodel.js';
 const CYAN = '#9fe8ff';
 const CYAN_DIM = 'rgba(159,232,255,0.5)';
 const RED = '#ff5a4a';
+const COMBAT_RADIUS_M = 14000;    // keep in sync with player.js
 const AMBER = '#ffc866';
 const _hv = new THREE.Vector3();
 const _hv2 = new THREE.Vector3();
@@ -700,13 +701,16 @@ export class HUD {
       const spin = S.time * 3.2;
       if (!s.behind && s.x > 24 && s.x < this.w - 24 && s.y > 24 && s.y < this.h - 24) {
         this._diamond(s.x, s.y, r, RED, false, spin);
+        this.text(`${(dist / 1000).toFixed(1)}km`, s.x, s.y + r + 13, 11, RED, 'center', 4);
       } else {
         const dx = s.behind ? this.w / 2 - s.x : s.x - this.w / 2;
         const dy = s.behind ? this.h / 2 - s.y : s.y - this.h / 2;
         const ang = Math.atan2(dy, dx);
         const rx = this.w / 2 - 56, ry = this.h / 2 - 56;
         const t = 1 / Math.max(Math.abs(Math.cos(ang)) / rx, Math.abs(Math.sin(ang)) / ry);
-        this._diamond(this.w / 2 + Math.cos(ang) * t, this.h / 2 + Math.sin(ang) * t, r * 0.8, RED, false, spin);
+        const ex = this.w / 2 + Math.cos(ang) * t, ey = this.h / 2 + Math.sin(ang) * t;
+        this._diamond(ex, ey, r * 0.8, RED, false, spin);
+        this.text(`${(dist / 1000).toFixed(1)}km`, ex, ey + r * 0.8 + 12, 11, RED, 'center', 4);
       }
     }
   }
@@ -851,6 +855,12 @@ export class HUD {
     // low hp
     if (S.player.hp <= 30 && blink) {
       this.text('DAMAGE CRITICAL', cx, this.h / 2 + 180, 18, RED, 'center');
+    }
+    // approaching the map rim: amber heads-up BEFORE the batteries open up
+    if (!S.player.outOfArea && S.player.edgeDist < COMBAT_RADIUS_M * 0.15) {
+      const d = Math.max(0, S.player.edgeDist);
+      if (blink) this.text('接近战区边界 — 建议转向', cx, 120, 17, AMBER, 'center', 8);
+      this.text(`EDGE ${Math.round(d / 100) * 100}m`, cx, 146, 13, AMBER, 'center', 6);
     }
     // out of area
     if (S.player.outOfArea) {

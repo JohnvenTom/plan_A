@@ -12,6 +12,8 @@ import * as THREE from 'three';
 import { terrainHeightAt, SEA_LEVEL } from './terrain.js';
 
 const COMBAT_RADIUS = 14000;          // keep in sync with player.js
+const FIRE_MARGIN = 800;              // leniency: batteries hold fire until
+                                      // the intruder is THIS deep past the rim
 const SALVO = 5;                      // missiles per group
 const SALVO_GAP = 1.0;                // one launch per second inside a group
 const RELOAD = 4.0;                   // pause between groups
@@ -254,7 +256,8 @@ export class AASites {
     // the battery nearest the intruder engages; already-launched rounds keep
     // chasing even if the player ducks back inside
     let near = null;
-    if (player.alive && player.outOfArea) {
+    const rr = Math.hypot(player.position.x, player.position.z);
+    if (player.alive && rr > COMBAT_RADIUS + FIRE_MARGIN) {
       near = this.sites[0];
       for (const s of this.sites) {
         if (s.pos.distanceToSquared(player.position) < near.pos.distanceToSquared(player.position)) near = s;

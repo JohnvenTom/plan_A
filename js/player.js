@@ -127,6 +127,11 @@ export class Player {
     if (this.hp <= 0) { this.hp = 0; this.alive = false; }
   }
 
+  // meters from the combat-area rim (negative = already outside)
+  get edgeDist() {
+    return COMBAT_RADIUS - Math.hypot(this.body.pos.x, this.body.pos.z);
+  }
+
   get aimPoint() {
     return this._v2.copy(this.aimDir).multiplyScalar(AIM_DIST).add(this.body.pos);
   }
