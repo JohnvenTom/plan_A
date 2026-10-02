@@ -23,6 +23,7 @@ varying vec3 vDir;
 uniform vec3 uSunDir;
 uniform float uSunElev; // sin(elevation), used to warm the horizon as the sun lowers
 uniform float uNight;   // 0 day .. 1 full night
+uniform vec3 uFogColor; // live scene-fog color: the far haze everything fades into
 
 float hash21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 
@@ -53,9 +54,6 @@ void main() {
   float disc = smoothstep(0.99988, 0.99994, cosA);
   col += vec3(46.0, 33.0, 20.0) * disc;
 
-  // below-horizon fade into sea haze so the dome meets the ocean cleanly
-  col = mix(col, vec3(0.36, 0.40, 0.47), smoothstep(0.0, -0.14, h));
-
   // night blend: dark blue gradient with a faint horizon airglow, then stars
   vec3 nightCol = mix(vec3(0.015, 0.025, 0.06), vec3(0.05, 0.07, 0.12), hz);
   col = mix(col, nightCol, uNight);
@@ -67,6 +65,12 @@ void main() {
     float star = step(0.992, h1) * smoothstep(0.0, 0.12, sd.y) * uNight;
     col += vec3(0.72, 0.78, 0.95) * star * 1.5;
   }
+
+  // below-horizon the dome IS the far haze past the ocean's edge: the LIVE
+  // fog color the ocean fades into (already night/weather-adjusted), reached
+  // fully just under the horizon so the sea/sky junction can never read as a
+  // line — applied last, after the night blend, so it owns the under-horizon
+  col = mix(col, uFogColor, smoothstep(0.015, -0.01, h));
 
   gl_FragColor = vec4(col, 1.0);
 }`;
@@ -274,6 +278,7 @@ export class Sky {
         uSunDir: { value: this.sunDir },
         uSunElev: { value: this.sunElevSin },
         uNight: { value: 0 },
+        uFogColor: { value: new THREE.Color(0.70, 0.56, 0.42) },
       },
     });
     this.dome = new THREE.Mesh(new THREE.SphereGeometry(30000, 48, 24), this.domeMat);
@@ -369,7 +374,10 @@ export class Sky {
       fc.lerp(_gc.setRGB(0.42, 0.44, 0.47).multiplyScalar(1 - night01 * 0.85), weather.gray);
       fc.multiplyScalar(dim);
     }
-    this.scene.fog.density = 0.000034 * (weather ? weather.fogMul : 1);
+    // base calibrated for the layered haze: clear under ~8 km, silhouettes
+    // barely readable at the map diagonal (~34 km), ocean edge fully haze
+    this.scene.fog.density = 0.000055 * (weather ? weather.fogMul : 1);
+    this.domeMat.uniforms.uFogColor.value.copy(fc);
   }
 
   update(dt, cameraPos) {
@@ -377,6 +385,7 @@ export class Sky {
     for (const m of this.cloudMats) m.uniforms.uTime.value = this.cloudTime;
     // dome + cloud decks ride with the camera (x,z only for clouds -> parallax against terrain)
     this.dome.position.copy(cameraPos);
+    this.domeMat.uniforms.uFogColor.value.copy(this.scene.fog.color);
     if (this.cloudLow) {
       this.cloudLow.position.x = cameraPos.x;
       this.cloudLow.position.z = cameraPos.z;

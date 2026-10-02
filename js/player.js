@@ -104,6 +104,13 @@ export class Player {
   forward(out) { return this.body.forward(out); }
   upVec(out) { return this.body.upVec(out); }
 
+  // near-miss whip: one-shot rotational kick AWAY from the passing
+  // missile, cubic decay — a fluid jolt, not a random shake
+  applyWhip(dirWorld) {
+    this._whipT = 1;
+    this._whipDir = dirWorld.clone().normalize();
+  }
+
   // AC-style death cam: after being shot down the camera detaches and
   // slowly orbits the wreck's last position until the gameover screen
   updateDeathCam(dt) {
@@ -247,7 +254,9 @@ export class Player {
     // ---- AC-style pilot body feedback ----
     // sustained high G: grey-out creeping in from the edges (G-LOC), recovers
     // quickly once the load comes off
-    this.gGrey = clamp(this.gGrey + ((this.gLoad > 7 ? (this.gLoad - 6) / 5 : -2.2) * dt), 0, 1);
+    // onset only past 9 G, slow creep in, HALF the old recovery rate — a
+    // proper sustained grey-out that lingers after the pull relaxes
+    this.gGrey = clamp(this.gGrey + ((this.gLoad > 9 ? (this.gLoad - 8) / 4 : -1.0) * dt), 0, 1);
     // corner-speed airframe buffet: high-frequency flutter in the turn band
     if (Math.abs(this.speed * 3.6 - cornerSpeedKMH(b.pos.y)) < 40) {
       this.camShake = Math.max(this.camShake, 0.055);
@@ -348,6 +357,13 @@ export class Player {
     this.camera.up.copy(up);
     this.camLook.copy(this.camPos).addScaledVector(viewDir, 100);
     this.camera.lookAt(this.camLook);
+    // apply the near-miss whip AFTER lookAt so it survives the frame
+    if ((this._whipT ?? 0) > 0) {
+      this._whipT -= dt * 2.4;
+      const k = Math.pow(Math.max(0, this._whipT), 3) * 0.085;   // ~4.9 deg peak
+      this._vTmp.crossVectors(this._whipDir, viewDir).normalize();
+      this.camera.rotateOnWorldAxis(this._vTmp, k);
+    }
     const targetFov = this.zoomed ? 22 : this._vFov + clamp((this.body.airspeed - 240) / 480, 0, 1) * 14 + (this._abKick ?? 0) * 9;
     this.camera.fov = damp(this.camera.fov, targetFov, 6, dt);
     this.camera.updateProjectionMatrix();

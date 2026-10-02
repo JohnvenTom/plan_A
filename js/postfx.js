@@ -71,6 +71,8 @@ uniform float uVignette;      // vignette strength
 uniform vec4 uHeat[2];        // xy screen pos, z radius(uv), w strength
 uniform float uFlash;         // lightning white flash
 uniform float uCloud;         // cloud immersion 0..1 — AC7 whiteout
+uniform float uRain;          // lens rain droplet amount
+uniform float uDropT;         // droplet animation clock
 
 float linDepth(vec2 uv) {
   float z = texture2D(tDepth, uv).x;
@@ -79,8 +81,66 @@ float linDepth(vec2 uv) {
   return lin;   // view-space meters
 }
 
+float dhash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+vec2 dhash2(vec2 p){ return vec2(dhash(p), dhash(p + 31.7)); }
+
+// ---- REFRACTING lens droplets: each bead is a tiny ball lens that pulls
+// its pixels from further out (minified, flipped feel) + a soft specular
+// dot. Jittered 3x3 grid, per-cell life cycle so beads form and dry.
+// Screen center stays near-dry so the sight area reads.
+// Returns warped uv; spec lands in .z ----
+vec3 dropletWarp(vec2 uv, out float spec, out float rim) {
+  spec = 0.0;
+  rim = 0.0;
+  vec2 warped = uv;
+  if (uRain < 0.22) return vec3(warped, 0.0);
+  const float CELL = 52.0;                       // px per droplet cell
+  vec2 g = uv * uRes / CELL;
+  vec2 cell = floor(g);
+  vec2 f = fract(g) - 0.5;
+  vec2 acc = vec2(0.0);
+  float amp = smoothstep(0.22, 0.75, uRain);
+  // dry center: the middle of the screen (sight/HUD zone) stays readable
+  float ctr = length((uv - vec2(0.5, 0.54)) * vec2(1.12, 1.0));
+  float open = smoothstep(0.10, 0.32, ctr);
+  for (int j = -1; j <= 1; j++) {
+    for (int i = -1; i <= 1; i++) {
+      vec2 o = vec2(float(i), float(j));
+      vec2 h = dhash2(cell + o);
+      // sparser + fainter toward the screen center
+      float alive = step(0.55 + (1.0 - open) * 0.38, h.x);
+      float life = fract(uDropT * 0.22 + h.y * 9.17);
+      float fade = smoothstep(0.0, 0.1, life) * smoothstep(1.0, 0.82, life);
+      vec2 center = (o + (h - 0.5) * 0.72);
+      vec2 d = f - center;
+      // droplets cling slightly elongated against the airstream (up-screen)
+      d.y *= 0.82;
+      float r = 0.075 + h.y * 0.085;
+      float m = length(d) / r;
+      if (m < 1.0 && alive > 0.5) {
+        // BALL-LENS refraction at real strength: the sample displacement
+        // approaches the drop's own radius (a lens-ball inverts & minifies
+        // the world inside it) — a 2-3 px warp reads as nothing
+        float lens = (0.35 + 0.65 * (1.0 - m)) * (1.0 - m * m);
+        acc += normalize(d + 1e-5) * lens * r * 2.6 * amp * fade * (0.25 + 0.75 * open);
+        // rim shading: the bead edge catches a darker meniscus
+        spec = max(spec, smoothstep(0.42, 0.0, length(d + vec2(-r * 0.34, r * 0.34)) / r) * fade * amp * (0.3 + 0.7 * open));
+        rim = max(rim, smoothstep(0.62, 1.0, m) * 0.5 * fade * amp * (0.3 + 0.7 * open));
+      }
+    }
+  }
+  warped += acc * CELL / uRes;
+  return vec3(warped, spec);
+}
+
 void main() {
   vec2 uv = vUv;
+
+  // --- refracting rain droplets on the lens (distorts the sampled scene) ---
+  float dropSpec = 0.0;
+  float dropRim = 0.0;
+  vec3 dw = dropletWarp(uv, dropSpec, dropRim);
+  uv = dw.xy;
 
   // --- heat shimmer: distort UVs near engine/missile exhaust points ---
   for (int i = 0; i < 2; i++) {
@@ -170,6 +230,10 @@ void main() {
     float gust = 0.94 + 0.06 * sin(vUv.y * 21.0 + uTime * 2.0);
     col = mix(col, vec3(0.86, 0.88, 0.92) * gust * edge, clamp(cl * 1.04, 0.0, 0.985));
   }
+
+  // droplet specular sparkle + meniscus rim on top of everything
+  col += dropSpec * 0.26 * vec3(0.9, 0.97, 1.0);
+  col *= 1.0 - dropRim * 0.4;
 
   // --- vignette ---
   vec2 q = vUv - 0.5;
@@ -426,6 +490,7 @@ export class PostFX {
       uHeat: { value: [new THREE.Vector4(), new THREE.Vector4()] },
       uFlash: { value: 0 },
       uCloud: { value: 0 },
+      uRain: { value: 0 }, uDropT: { value: 0 },
       uTime: { value: 0 },
     });
     this.cloudPass = makePass(CLOUD_FRAG, {
@@ -483,6 +548,8 @@ export class PostFX {
     if (s.vignette !== undefined) u.uVignette.value = s.vignette;
     if (s.flash !== undefined) u.uFlash.value = s.flash;
     if (s.cloud !== undefined) u.uCloud.value = s.cloud;
+    if (s.rain !== undefined) u.uRain.value = s.rain;
+    u.uDropT.value = performance.now() / 1000;
     u.uTime.value = performance.now() / 1000;
     if (!s.cloudState) this.cloudPass.mat.uniforms.uCoverage.value = 0;
     if (s.cloudState) {
@@ -559,7 +626,7 @@ export class PostFX {
     this.pipPass.mesh.position.set(x, y, 0);
     const pxW = Math.max(2, w * 0.5 * (innerWidth || 1));
     const pxH = Math.max(2, h * 0.5 * (innerHeight || 1));
-    this.pipPass.mat.uniforms.uBorderUV.value.set(4 / pxW, 2 / pxH);
+    this.pipPass.mat.uniforms.uBorderUV.value.set(1.6 / pxW, 1.1 / pxH);   // ultra-thin
   }
 
   // run the chain to the screen (PIP last, if tSrc bound)

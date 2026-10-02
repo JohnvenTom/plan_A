@@ -34,7 +34,7 @@ const camera = new THREE.PerspectiveCamera(66, innerWidth / innerHeight, 2.5, 72
 
 const sky = new Sky(scene);
 const weather = new Weather(scene, sky, renderer);
-buildTerrain(scene);
+const terrain = buildTerrain(scene);
 const ocean = buildOcean(scene);
 const effects = new Effects(scene);
 const player = new Player(scene, camera);
@@ -245,6 +245,13 @@ function update(dt) {
         weapons.mslKind === 'radar' ? 'RADAR — 20km 即时锁定 · 预热后发射 · 39/箔条可避' : 'IR — 热源导引 · 预热后发射 · 热诱弹可避', 1.2, 'info');
     }
     if (input.pressed('cycleTarget')) weapons.headLockAttempt(player, enemies.enemies);
+    if (input.pressed('debugWeather')) {
+      G._wxIdx = ((G._wxIdx ?? -1) + 1) % ['晴', '多云', '阴', '毛毛雨', '雨', '雷暴', '浓雾', '狂风'].length;
+      const names = ['晴', '多云', '阴', '毛毛雨', '雨', '雷暴', '浓雾', '狂风'];
+      const keys = ['clear', 'cloudy', 'overcast', 'drizzle', 'rain', 'storm', 'fog', 'gale'];
+      weather.force(keys[G._wxIdx]);
+      hud.announce('天气切换', names[G._wxIdx] + '（调试）', 1.2, 'info');
+    }
     weapons.updateFireControl(dt, player, enemies.enemies);
 
     // world
@@ -271,8 +278,10 @@ function update(dt) {
 
     for (const ev of weapons.events) {
       if (ev.type === 'nearMiss') {
-        player.camShake = Math.min(1, player.camShake + 0.3);
+        player.applyWhip(ev.dir);
+        player.camShake = Math.min(1, player.camShake + 0.22);
         audio.nearMiss();
+        G.cineT = 1.15;            // letterbox rises for the whip moment
       } else if (ev.type === 'hitTing') {
         audio.hitTing();
       }
@@ -305,6 +314,12 @@ function update(dt) {
       }
     }
 
+    // cinematic letterbox: animated rise/fall shared by ACE cut + near-miss
+    G.cineT = Math.max(0, (G.cineT ?? 0) - dt);
+    const barsTarget = (G.aceCut > 0 || G.cineT > 0) ? 1 : 0;
+    const rate = barsTarget > (G.cineBars ?? 0) ? 4.2 : 2.6;   // rise fast, fall slower
+    G.cineBars = (G.cineBars ?? 0) + clamp(barsTarget - (G.cineBars ?? 0), -rate * dt, rate * dt);
+
     // rain streaks sweeping off the airframe
     if (player.alive && weather.cur.rain > 0.25) {
       effects.rainOnAirframe(player.model.anchors, player.vel, weather.cur.rain);
@@ -328,6 +343,7 @@ function update(dt) {
   ocean.mat.uniforms.uSunDir.value.copy(sky.sunDir);
   ocean.mat.uniforms.uFogColor.value.copy(scene.fog.color);
   ocean.mat.uniforms.uFogDensity.value = scene.fog.density;
+  terrain.userData.fogTime.value = G.time;   // drifting valley-mist band
   ocean.mat.uniforms.uStorm.value = weather.seaT ?? 0;
   ocean.mat.uniforms.uRain.value = weather.cur.rain;
   // lightning lights the cloud decks from the strike column
@@ -412,7 +428,9 @@ function renderFrame(dt) {
   if (playingLike) {
     camera.getWorldDirection(_pv);
     const sunDot = _pv.dot(sky.sunDir);
-    exT = 1.0 + Math.max(0, sunDot - 0.55) * 0.55 + immerse * 0.35 + (G.night01 ?? 0) * 0.18;
+    // facing the sun the eye STOPS DOWN (whole frame dims, sun itself
+    // blooms) — the old positive boost blew the sky out
+    exT = 1.0 - Math.max(0, sunDot - 0.3) * 0.34 + immerse * 0.35 + (G.night01 ?? 0) * 0.18;
   }
   G.exposure += (exT - G.exposure) * 0.045;
 
@@ -499,6 +517,7 @@ function renderFrame(dt) {
     flash: (weather.flash ?? 0) * 0.5,
     heat,
     cloud: G.cloud ?? 0,
+    rain: weather.cur.rain,
   });
 
   postfx.beginScene();
@@ -506,10 +525,12 @@ function renderFrame(dt) {
   postfx.setPipSource(pipSrc);
   // PIP box: 24% of screen width, TRUE 16:9 by pixels (not screen
   // fractions) so the seeker image is never stretched; top-right corner
-  const PIP_W = 0.155;
-  const PIP_H = (PIP_W * innerWidth * 9 / 16) / innerHeight;
+  // ultra-thin frame + hard viewport-safety: the box ALWAYS lands fully
+  // inside the browser window at any aspect ratio
+  const PIP_W = Math.min(0.155, (innerWidth - 40) / innerWidth);
+  const PIP_H = Math.min((PIP_W * innerWidth * 9 / 16) / innerHeight, 0.2);
   const PIP_CX = 1 - PIP_W / 2 - 0.025;
-  const PIP_CY = PIP_H / 2 + 0.30;
+  const PIP_CY = Math.min(PIP_H / 2 + 0.30, 1 - PIP_H / 2 - 0.05);
   if (pipSrc) {
     postfx.setPip(G.pipOpen, G.pipZoom, G.pipGlitch ?? 0);
     postfx.setPipRect(PIP_CX * 2 - 1, 1 - PIP_CY * 2, PIP_W * 2, PIP_H * 2);
@@ -545,6 +566,7 @@ function renderHUD(pipRect) {
     sunUV: (() => { _pv.copy(camera.position).addScaledVector(sky.sunDir, 30000).project(camera); return [_pv.x * 0.5 + 0.5, -_pv.y * 0.5 + 0.5]; })(),
     sunVis: (() => { camera.getWorldDirection(_pv2); return _pv2.dot(sky.sunDir) > 0.3 && sky.sunDir.y > 0 ? Math.min(1, _pv2.dot(sky.sunDir)) : 0; })(),
     aceCut: G.aceCut > 0,
+    cineBars: G.cineBars ?? 0,
     enemyLock: enemies.enemies.reduce((m, e) => Math.max(m, e.lockT || 0), 0),
     enemyWarm: enemies.enemies.reduce((m, e) => Math.max(m, e.warmT || 0), 0),
     radarThreats: weapons.missiles

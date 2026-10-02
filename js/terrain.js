@@ -106,8 +106,43 @@ export function buildTerrain(scene) {
   const mat = new THREE.MeshStandardMaterial({
     vertexColors: true, flatShading: true, roughness: 0.96, metalness: 0.0,
   });
+  // the land runs the SAME layered haze as the ocean (see OCEAN_FRAG): we
+  // swap the built-in fog chunk for the two-tone + low-altitude band version
+  // so coastlines never show a haze seam between land and sea
+  const fogTime = { value: 0 };   // shared clock for the drifting mist band
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uTime = fogTime;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;')
+      .replace('#include <fog_vertex>', '#include <fog_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+varying vec3 vWPos;
+uniform float uTime;
+float thash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float tnoise(vec2 p){
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(thash(i), thash(i + vec2(1, 0)), u.x),
+             mix(thash(i + vec2(0, 1)), thash(i + vec2(1, 1)), u.x), u.y);
+}`)
+      .replace('#include <fog_fragment>', `
+  {
+    float dist = length(cameraPosition - vWPos);
+    float f = 1.0 - exp(-fogDensity * fogDensity * dist * dist);
+    f = max(f, smoothstep(22000.0, 34000.0, dist) * 0.96);
+    vec3 hazeCol = mix(fogColor * vec3(0.68, 0.84, 1.28), fogColor,
+                       smoothstep(7000.0, 16000.0, dist));
+    float band = exp(-max(vWPos.y, 0.0) / 420.0);
+    float mist = tnoise(vWPos.xz * 0.00045 + uTime * vec2(0.006, 0.004));
+    mist = band * smoothstep(0.35, 0.75, mist) * smoothstep(2500.0, 9000.0, dist);
+    f = 1.0 - (1.0 - clamp(f, 0.0, 1.0)) * (1.0 - mist * 0.62);
+    gl_FragColor.rgb = mix(gl_FragColor.rgb, hazeCol, f);
+  }`);
+  };
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = false;
+  mesh.userData.fogTime = fogTime;   // main.js feeds the mist drift clock
   scene.add(mesh);
   return mesh;
 }
@@ -161,10 +196,20 @@ void main() {
   float spec = pow(clamp(dot(R, uSunDir), 0.0, 1.0), 240.0);
   col += vec3(1.6, 1.0, 0.55) * spec * 2.2;
 
-  // manual exp2 haze to match scene fog
+  // layered distance haze (identical constants to the land shader + scene fog):
+  // exp2 body -> far ramp that swallows the horizon into the fog color,
+  // two-tone (blue-gray mid range -> warm horizon far) + a drifting
+  // low-altitude mist band that keeps the far sea slightly patchy
   float dist = length(uCamPos - vWorld);
   float f = 1.0 - exp(-uFogDensity * uFogDensity * dist * dist);
-  col = mix(col, uFogColor, clamp(f, 0.0, 1.0));
+  f = max(f, smoothstep(22000.0, 34000.0, dist) * 0.96);
+  vec3 hazeCol = mix(uFogColor * vec3(0.68, 0.84, 1.28), uFogColor,
+                     smoothstep(7000.0, 16000.0, dist));
+  float band = exp(-max(vWorld.y, 0.0) / 420.0);
+  float mist = noise(vWorld.xz * 0.00045 + uTime * vec2(0.006, 0.004));
+  mist = band * smoothstep(0.35, 0.75, mist) * smoothstep(2500.0, 9000.0, dist);
+  f = 1.0 - (1.0 - clamp(f, 0.0, 1.0)) * (1.0 - mist * 0.62);
+  col = mix(col, hazeCol, f);
   gl_FragColor = vec4(col, 1.0);
 }`;
 

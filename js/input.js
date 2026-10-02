@@ -21,6 +21,7 @@ export const DEFAULT_BINDINGS = {
   camera: 'KeyV',          // 切换视角档位
   zoom: 'KeyZ',            // 放大
   pause: 'KeyP',
+  debugWeather: 'KeyK',   // 调试:循环切换天气
 };
 
 export const ACTION_LABELS = {
@@ -32,7 +33,7 @@ export const ACTION_LABELS = {
   flares: '干扰弹(诱弹/箔条)',
   cycleMissile: '切换弹种(红外/雷达)', cycleTarget: '头瞄锁定/取消',
   freeLook: '自由视角(长按)', camera: '切换视角档位', zoom: '放大',
-  pause: '暂停',
+  pause: '暂停', debugWeather: '切换天气(调试)',
 };
 
 const STORE_KEY = 'skybaro_bindings';

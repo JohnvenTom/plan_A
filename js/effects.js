@@ -242,9 +242,11 @@ export class Effects {
   }
 
   gunTrailAir(pos) {   // airburst puff for missed gun rounds
+    // rounds die 1.5-2 km out where a 1.5 m puff is sub-pixel — start big
+    // enough that the miss cue actually reads at range
     this.spawn(this.smoke, {
       pos, life: 0.5, c0: [0.6, 0.6, 0.62], c1: [0.5, 0.5, 0.52], a0: 0.25, a1: 0,
-      s0: 1.5, s1: 5,
+      s0: 3.5, s1: 11,
     });
   }
 

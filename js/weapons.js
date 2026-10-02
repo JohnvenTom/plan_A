@@ -96,11 +96,17 @@ export class Weapons {
     this.inboundWarning = false;
     this.inboundDir = new THREE.Vector3();
 
-    // tracer pool
+    // tracer pool — 0.42 m core is sub-pixel past ~300 m at 1080p, which
+    // reads as rounds hitting an invisible wall; the update loop widens the
+    // cross-section with distance so the stream stays visible out to burnout
     this.tracerPool = [];
-    const tracerGeo = new THREE.BoxGeometry(0.30, 0.30, 16);
+    const tracerGeo = new THREE.BoxGeometry(0.42, 0.42, 17);
     this.tracerMatP = tracerMaterial();
     this.tracerMatE = tracerMaterial(); this.tracerMatE.color.setHex(0xff7040);
+    // push both over 1.0 so the bloom pass catches them (distant rounds glow
+    // instead of aliasing away to nothing)
+    this.tracerMatP.color.multiplyScalar(1.7);
+    this.tracerMatE.color.multiplyScalar(1.7);
     for (let i = 0; i < 90; i++) {
       const m = new THREE.Mesh(tracerGeo, this.tracerMatP);
       m.visible = false;
@@ -138,8 +144,8 @@ export class Weapons {
     this.events.length = 0;
   }
 
-  freeTracer(mesh) { mesh.visible = false; }
-  freeMissile(ms) { ms.mesh.visible = false; }
+  freeTracer(mesh) { mesh.visible = false; mesh.scale.set(1, 1, 1); }
+  freeMissile(ms) { ms.mesh.visible = false; ms.mesh.scale.setScalar(1); }
 
   // ---------- guns ----------
   fireGun(origin, dir, speed, fromPlayer, dmg, spread) {
@@ -559,6 +565,10 @@ export class Weapons {
       _m.lookAt(r.pos, _v2.copy(r.pos).add(_v), UP);
       r.mesh.quaternion.setFromRotationMatrix(_m);
       r.mesh.position.copy(r.pos);
+      // apparent-width compensation: widen the cross-section with range so
+      // distant rounds keep ~1.5-2 px instead of dropping under a pixel
+      const wScale = Math.min(4, Math.max(1, r.pos.distanceTo(player.position) / 350));
+      r.mesh.scale.set(wScale, wScale, 1);
 
       let hit = false;
       const targets = r.fromPlayer ? enemies : (player.alive ? [player] : []);
@@ -655,7 +665,7 @@ export class Weapons {
         if (d2 < (ms._minD ?? 1e9)) ms._minD = d2;
         else if (!ms._whipped && ms._minD < 70 && d2 > ms._minD + 6) {
           ms._whipped = true;
-          this.events.push({ type: 'nearMiss' });
+          this.events.push({ type: 'nearMiss', dir: _v3.copy(ms.pos).sub(player.position).normalize().clone() });
         }
       }
       // a missile biting a flare chases it until the flare burns out, then
@@ -706,6 +716,9 @@ export class Weapons {
       this.steerMissile(ms, dt);
       ms.mesh.position.copy(ms.pos);
       ms.mesh.quaternion.copy(ms.quat);
+      // same sub-pixel cure as tracers: a 0.16 m fuselage vanishes past
+      // ~1.5 km; grow it mildly with range (PIP rides close, stays ~1x)
+      ms.mesh.scale.setScalar(Math.min(2.6, Math.max(1, ms.pos.distanceTo(player.position) / 900)));
       ms.smokeT += dt;
       if (ms.smokeT > 0.016) {
         ms.smokeT = 0;

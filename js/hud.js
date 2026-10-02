@@ -215,7 +215,7 @@ export class HUD {
     for (const t of threats) {
       let rel = (t.brg - hdg) % (Math.PI * 2);
       const rr = R * clamp(t.dist / 12000, 0.2, 1);
-      const px = cx - Math.sin(rel) * rr;   // screen-x: bearing right of nose plots right
+      const px = cx + Math.sin(rel) * rr;   // bearing right of nose plots RIGHT
       const py = cy - Math.cos(rel) * rr * 0.9;
       c.fillStyle = RED; c.shadowColor = RED; c.shadowBlur = 8;
       c.beginPath(); c.arc(px, py, 4, 0, Math.PI * 2); c.fill();
@@ -253,7 +253,6 @@ export class HUD {
     this.drawAlerts(dt, S);
     this.drawHint(dt);
     this.drawBanner(dt);
-    this.drawCanopy(S);
     this.drawRain(dt, S);
     this.drawFlare(S);
     this.drawPipFrame(S);
@@ -927,32 +926,8 @@ export class HUD {
     c.globalAlpha = 1;
   }
 
-  // ---- canopy: AC7 chase-cam frame, G-GATED — steady flight shows
-  // nothing; only hard pulls breathe a faint frame bow in from the corners
-  // (the reflection streaks were cut: they read as artifacts, not glass) ----
-  drawCanopy(S) {
-    const gLoad = S.player.gLoad ?? 1;
-    const g = Math.max(0, Math.min(1, (gLoad - 3.2) / 6));   // fades in past 3.2 G
-    if (g <= 0.02) return;
-    const c = this.ctx;
-    c.save();
-    c.globalAlpha = 0.16 * g;
-    c.strokeStyle = 'rgba(6,10,16,0.9)';
-    c.lineWidth = 14;
-    c.shadowColor = 'rgba(6,10,16,0.5)'; c.shadowBlur = 10;
-    c.beginPath();
-    c.moveTo(0, this.h);
-    c.quadraticCurveTo(this.w * 0.14, this.h * 0.74, this.w * 0.26, this.h * 0.5);
-    c.stroke();
-    c.beginPath();
-    c.moveTo(this.w, this.h);
-    c.quadraticCurveTo(this.w * 0.86, this.h * 0.74, this.w * 0.74, this.h * 0.5);
-    c.stroke();
-    c.restore();
-    c.globalAlpha = 1;
-  }
-
-  // ---- rain streaks sweeping across the canopy glass ----
+  // ---- rain on the glass: streaking sheets + droplets that hit the LENS,
+  // quiver, then get blown up-screen by the airstream ----
   drawRain(dt, S) {
     const rain = S.rain ?? 0;
     if (rain < 0.25) return;
@@ -972,35 +947,64 @@ export class HUD {
       c.stroke();
     }
     c.restore();
+    // refracting droplets live in the postfx composite now (real light warp)
   }
 
-  // ---- sun lens flare on the HUD glass (source pos shared with god rays) ----
+  // ---- sun lens flare on the HUD glass: cinematic anamorphic kit —
+  // big warm halo at the sun, chromatic ghost chain through the center,
+  // wide blue horizontal streak with a secondary feather ----
   drawFlare(S) {
     const vis = S.sunVis ?? 0;
     if (vis <= 0.03) return;
     const [ux, uy] = S.sunUV;
-    if (ux < -0.1 || ux > 1.1 || uy < -0.1 || uy > 1.1) return;
+    if (ux < -0.15 || ux > 1.15 || uy < -0.15 || uy > 1.15) return;
     const c = this.ctx;
     const cx = ux * this.w, cy = uy * this.h;
-    const fx = this.w - cx, fy = this.h - cy;   // ghost mirror through center
+    const fx = this.w - cx, fy = this.h - cy;
+    const V = Math.min(1, vis);
     c.save();
     c.globalCompositeOperation = 'lighter';
-    for (const [t, r, col] of [[0, 90, 'rgba(255,225,180,0.30)'], [0.35, 26, 'rgba(255,200,140,0.22)'], [0.62, 44, 'rgba(160,220,255,0.14)'], [0.85, 14, 'rgba(255,255,230,0.20)']]) {
-      const gx = cx + fx * 2 * (t - 0.5);
-      const gy = cy + fy * 2 * (t - 0.5);
+    // sun-side halo: warm core + wide amber bloom
+    const halo = c.createRadialGradient(cx, cy, 0, cx, cy, 150);
+    halo.addColorStop(0, `rgba(255,235,200,${0.5 * V})`);
+    halo.addColorStop(0.25, `rgba(255,200,140,${0.22 * V})`);
+    halo.addColorStop(1, 'rgba(0,0,0,0)');
+    c.fillStyle = halo;
+    c.beginPath(); c.arc(cx, cy, 150, 0, Math.PI * 2); c.fill();
+    // chromatic ghost chain mirrored through the screen center
+    const ghosts = [
+      [0.30, 20, 255, 170, 110, 0.30],   // warm amber
+      [0.48, 34, 190, 255, 210, 0.20],   // mint
+      [0.66, 52, 140, 200, 255, 0.16],   // cyan ring-ish
+      [0.82, 16, 255, 240, 190, 0.26],   // pale gold
+      [1.06, 40, 255, 130, 130, 0.10],   // faint red far ghost
+    ];
+    for (const [t, r, cr, cg, cb, a] of ghosts) {
+      const gx = cx + fx * 2 * (t - 0.5) * 0.5;
+      const gy = cy + fy * 2 * (t - 0.5) * 0.5;
       const g = c.createRadialGradient(gx, gy, 0, gx, gy, r);
-      g.addColorStop(0, col);
+      g.addColorStop(0, `rgba(${cr},${cg},${cb},${a * V})`);
+      g.addColorStop(0.8, `rgba(${cr},${cg},${cb},${a * 0.35 * V})`);
       g.addColorStop(1, 'rgba(0,0,0,0)');
       c.fillStyle = g;
       c.beginPath(); c.arc(gx, gy, r, 0, Math.PI * 2); c.fill();
     }
-    // anamorphic streak
-    const st = c.createLinearGradient(cx - 200, cy, cx + 200, cy);
-    st.addColorStop(0, 'rgba(120,180,255,0)');
-    st.addColorStop(0.5, `rgba(170,210,255,${0.16 * vis})`);
-    st.addColorStop(1, 'rgba(120,180,255,0)');
+    // primary anamorphic streak (wide, bright)
+    const st = c.createLinearGradient(cx - this.w * 0.34, cy, cx + this.w * 0.34, cy);
+    st.addColorStop(0, 'rgba(110,170,255,0)');
+    st.addColorStop(0.42, `rgba(150,200,255,${0.20 * V})`);
+    st.addColorStop(0.5, `rgba(210,235,255,${0.34 * V})`);
+    st.addColorStop(0.58, `rgba(150,200,255,${0.20 * V})`);
+    st.addColorStop(1, 'rgba(110,170,255,0)');
     c.fillStyle = st;
-    c.fillRect(cx - 200, cy - 2.5, 400, 5);
+    c.fillRect(cx - this.w * 0.34, cy - 3, this.w * 0.68, 6);
+    // secondary feather streak
+    const st2 = c.createLinearGradient(cx - this.w * 0.2, cy, cx + this.w * 0.2, cy);
+    st2.addColorStop(0, 'rgba(120,180,255,0)');
+    st2.addColorStop(0.5, `rgba(160,210,255,${0.12 * V})`);
+    st2.addColorStop(1, 'rgba(120,180,255,0)');
+    c.fillStyle = st2;
+    c.fillRect(cx - this.w * 0.2, cy - 8, this.w * 0.4, 16);
     c.restore();
   }
 
@@ -1013,16 +1017,17 @@ export class HUD {
     this.text('MSL CAM', r.x + 10, r.y + 13, 11, 'rgba(159,232,255,0.9)', 'left', 4);
   }
 
-  // ---- cinematic letterbox for the ace-intro cut ----
+  // ---- cinematic letterbox: animated rise/fall (ACE cut, near-miss whip) ----
   drawLetterbox(S) {
-    if (!S.aceCut) return;
+    const k = S.cineBars ?? 0;
+    if (k <= 0.01) return;
     const c = this.ctx;
-    const k = Math.min(1, (S.time * 6) % 2);   // subtle idle; height fixed
-    const bh = this.h * 0.11;
-    c.fillStyle = 'rgba(2,4,8,0.92)';
+    const e = 1 - Math.pow(1 - k, 3);          // ease-out as it rises
+    const bh = this.h * 0.11 * e;
+    c.fillStyle = 'rgba(2,4,8,0.94)';
     c.fillRect(0, 0, this.w, bh);
     c.fillRect(0, this.h - bh, this.w, bh);
-    this.text('ACE APPROACHING', this.w / 2, this.h - bh / 2, 20, RED, 'center', 10);
+    if (S.aceCut && k > 0.85) this.text('ACE APPROACHING', this.w / 2, this.h - bh / 2, 20, RED, 'center', 10);
   }
 
   vignette(S) {
