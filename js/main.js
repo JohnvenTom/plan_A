@@ -302,7 +302,15 @@ function update(dt) {
       }
     }
 
-    audio.update(dt, player, weapons);
+    // rain streaks sweeping off the airframe
+    if (player.alive && weather.cur.rain > 0.25) {
+      effects.rainOnAirframe(player.model.anchors, player.vel, weather.cur.rain);
+    }
+    // cloud-pass buffet: light turbulence shake scaling with immersion
+    if ((G.cloud ?? 0) > 0.25 && player.alive) {
+      player.camShake = Math.max(player.camShake, (G.cloud - 0.25) * 0.12);
+    }
+    audio.update(dt, player, weapons, G.cloud ?? 0);
   }
 
   effects.update(dt);
@@ -318,6 +326,7 @@ function update(dt) {
   ocean.mat.uniforms.uFogColor.value.copy(scene.fog.color);
   ocean.mat.uniforms.uFogDensity.value = scene.fog.density;
   ocean.mat.uniforms.uStorm.value = weather.seaT ?? 0;
+  ocean.mat.uniforms.uRain.value = weather.cur.rain;
   // lightning lights the cloud decks from the strike column
   weather.boltT = Math.max(0, (weather.boltT ?? 0) - dt / 0.22);
   if (weather.boltT > 0) {
@@ -379,13 +388,25 @@ function renderFrame(dt) {
     G.pipOpen = 0;
   }
 
+  // --- cloud immersion: depth inside either deck (low 2750 / high 4200),
+  // scaled by how much cloud the weather actually has ---
+  let immerse = 0;
+  if (playingLike) {
+    const y = camera.position.y;
+    const dens = clamp(0.25 + weather.cur.gray * 1.4 + (weather.cur.alpha - 0.85) * 1.5, 0, 1);
+    for (const [cy, half] of [[2750, 420], [4200, 520]]) {
+      const k = 1 - Math.abs(y - cy) / half;
+      if (k > 0) immerse = Math.max(immerse, k * dens);
+    }
+  }
+  G.cloud = immerse;
+
   // --- auto exposure (smoothed): sun-facing / in-cloud / night ---
   let exT = 1.0;
   if (playingLike) {
     camera.getWorldDirection(_pv);
     const sunDot = _pv.dot(sky.sunDir);
-    const inCloud = weather.cur.gray > 0.28 && Math.abs(camera.position.y - 2750) < 380;
-    exT = 1.0 + Math.max(0, sunDot - 0.55) * 0.55 + (inCloud ? 0.3 : 0) + (G.night01 ?? 0) * 0.18;
+    exT = 1.0 + Math.max(0, sunDot - 0.55) * 0.55 + immerse * 0.35 + (G.night01 ?? 0) * 0.18;
   }
   G.exposure += (exT - G.exposure) * 0.045;
 
@@ -403,12 +424,13 @@ function renderFrame(dt) {
   // --- radial speed blur: hard turns + our launch punch ---
   const omega = player.body ? player.body.omega.length() : 0;
   weapons.fxPunch = Math.max(0, (weapons.fxPunch ?? 0) - 0.02);
+  // gentled: radial only on genuinely hard maneuvers, launch punch intact
   const radial = playingLike
-    ? Math.min(0.85, Math.max(0, (omega - 0.9) * 0.33) + (weapons.fxPunch ?? 0))
+    ? Math.min(0.5, Math.max(0, (omega - 1.3) * 0.22) + (weapons.fxPunch ?? 0))
     : 0;
 
-  // --- motion smear direction from roll/pitch rates ---
-  const motionAmt = playingLike ? Math.min(0.5, Math.max(0, omega - 1.4) * 0.16) : 0;
+  // --- motion smear direction from roll/pitch rates (heavy maneuvers only) ---
+  const motionAmt = playingLike ? Math.min(0.35, Math.max(0, omega - 2.2) * 0.09) : 0;
   const motionDir = [
     Math.max(-1, Math.min(1, player.body.omega.y * 0.6)),
     Math.max(-1, Math.min(1, -player.body.omega.x * 0.6)),
@@ -460,6 +482,7 @@ function renderFrame(dt) {
     vignette: 0.4 + (player.gGrey ?? 0) * 0.35,
     flash: (weather.flash ?? 0) * 0.5,
     heat,
+    cloud: G.cloud ?? 0,
   });
 
   postfx.beginScene();

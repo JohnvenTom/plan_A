@@ -917,35 +917,27 @@ export class HUD {
     c.globalAlpha = 1;
   }
 
-  // ---- canopy: AC7 chase-cam glass frame + reflection streaks ----
+  // ---- canopy: AC7 chase-cam frame, G-GATED — steady flight shows
+  // nothing; only hard pulls breathe a faint frame bow in from the corners
+  // (the reflection streaks were cut: they read as artifacts, not glass) ----
   drawCanopy(S) {
+    const gLoad = S.player.gLoad ?? 1;
+    const g = Math.max(0, Math.min(1, (gLoad - 3.2) / 6));   // fades in past 3.2 G
+    if (g <= 0.02) return;
     const c = this.ctx;
-    const g = Math.min(1, (S.player.gLoad ?? 1) / 9);
     c.save();
-    // dark curved frame bows in from the corners
-    c.strokeStyle = 'rgba(6,10,16,0.42)';
-    c.lineWidth = 26 + g * 10;
-    c.shadowColor = 'rgba(6,10,16,0.6)'; c.shadowBlur = 22;
+    c.globalAlpha = 0.16 * g;
+    c.strokeStyle = 'rgba(6,10,16,0.9)';
+    c.lineWidth = 14;
+    c.shadowColor = 'rgba(6,10,16,0.5)'; c.shadowBlur = 10;
     c.beginPath();
     c.moveTo(0, this.h);
-    c.quadraticCurveTo(this.w * 0.18, this.h * (0.72 - g * 0.05), this.w * 0.30, this.h * 0.46);
+    c.quadraticCurveTo(this.w * 0.14, this.h * 0.74, this.w * 0.26, this.h * 0.5);
     c.stroke();
     c.beginPath();
     c.moveTo(this.w, this.h);
-    c.quadraticCurveTo(this.w * 0.82, this.h * (0.72 - g * 0.05), this.w * 0.70, this.h * 0.46);
+    c.quadraticCurveTo(this.w * 0.86, this.h * 0.74, this.w * 0.74, this.h * 0.5);
     c.stroke();
-    c.shadowBlur = 0;
-    // faint glass reflection streaks
-    c.globalAlpha = 0.05 + g * 0.03;
-    c.strokeStyle = '#dff2ff';
-    c.lineWidth = 9;
-    for (let i = 0; i < 2; i++) {
-      c.beginPath();
-      const x = this.w * (0.6 + i * 0.16);
-      c.moveTo(x + 60, 0);
-      c.quadraticCurveTo(x - 40, this.h * 0.3, x + 90, this.h * 0.62);
-      c.stroke();
-    }
     c.restore();
     c.globalAlpha = 1;
   }
@@ -1034,12 +1026,7 @@ export class HUD {
       c.fillStyle = g;
       c.fillRect(0, 0, this.w, this.h);
     }
-    // flying inside a cloud deck: milky white-out pulse
-    if (S.inCloud) {
-      const a = 0.16 + Math.sin(S.time * 2.2) * 0.06;
-      c.fillStyle = `rgba(210,218,226,${a})`;
-      c.fillRect(0, 0, this.w, this.h);
-    }
+
     // inbound missile: red edge pulse (AC-style warning glow)
     if (S.weapons && (S.weapons.inboundWarning || S.weapons.radarInbound)) {
       const pulse = 0.22 + Math.sin(S.time * 6) * 0.1;

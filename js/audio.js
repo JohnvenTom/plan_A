@@ -19,8 +19,13 @@ export class GameAudio {
     this.duck = ctx.createGain();
     this.duck.gain.value = 1;
     const comp = ctx.createDynamicsCompressor();
+    // muffle: lowpass between duck and comp — cloud pass / G-LOC pushes the
+    // whole world behind a wool filter, AC7 style
+    this.muffle = ctx.createBiquadFilter();
+    this.muffle.type = 'lowpass';
+    this.muffle.frequency.value = 20000;
     this.master.connect(this.duck);
-    this.duck.connect(comp).connect(ctx.destination);
+    this.duck.connect(this.muffle).connect(comp).connect(ctx.destination);
 
     // engine: two detuned saws through a lowpass
     this.engGain = ctx.createGain(); this.engGain.gain.value = 0;
@@ -146,7 +151,7 @@ export class GameAudio {
   }
   kill() { this._tone('triangle', 520, 780, 0.28, 0.2); }
 
-  update(dt, player, weapons) {
+  update(dt, player, weapons, cloud = 0) {
     if (!this.ctx || !this.enabled) return;
     // engine follows speed & throttle
     const s = Math.min(player.speed / 600, 1);
@@ -157,7 +162,10 @@ export class GameAudio {
     this.engFilter.frequency.value = 260 + s * 900 + (boosting ? 500 : 0);
     this.engGain.gain.value = 0.05 + player.throttle * 0.075 + (boosting ? 0.05 : 0);
     this.windFilter.frequency.value = 500 + s * 1400;
-    this.windGain.gain.value = 0.02 + s * s * 0.14;
+    this.windGain.gain.value = 0.02 + s * s * 0.14 + cloud * cloud * 0.5;   // cloud-pass roar
+    // world muffled while inside a deck
+    const mufT = cloud > 0.05 ? 20000 - Math.pow(cloud, 1.2) * 15000 : 20000;
+    this.muffle.frequency.value += (mufT - this.muffle.frequency.value) * Math.min(1, dt * 5);
 
     // inbound alert tones (locks are instant now — no acquisition beeping)
     if (weapons) {

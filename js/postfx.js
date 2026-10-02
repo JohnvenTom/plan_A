@@ -64,11 +64,13 @@ uniform vec2 uMotionDir;      // motion-blur smear dir (uv/tx)
 uniform float uMotionAmt;     // smear amount
 uniform float uDofAmt;        // depth-of-field strength (cine only)
 uniform float uDofFocus;      // focus distance (m, view space)
+uniform float uTime;
 uniform vec3 uWarm;           // grading: warm/cool tint
 uniform float uSat;           // grading: saturation
 uniform float uVignette;      // vignette strength
 uniform vec4 uHeat[2];        // xy screen pos, z radius(uv), w strength
 uniform float uFlash;         // lightning white flash
+uniform float uCloud;         // cloud immersion 0..1 — AC7 whiteout
 
 float linDepth(vec2 uv) {
   float z = texture2D(tDepth, uv).x;
@@ -102,31 +104,35 @@ void main() {
       // radial blur: samples pulled toward the speed center
       vec2 ruv = mix(uv, uRadialC, t * 0.16 * radial);
       rc += texture2D(tScene, ruv).rgb;
-      // god rays: samples along the sun direction, decay with distance
+      // god rays: samples along the sun direction, decay with distance;
+      // DEPTH-OCCLUDED — terrain and sea write depth and swallow the shafts,
+      // the sky dome (far clear depth) passes them: real Tyndall behavior
       vec2 guv = mix(uSunUV, uv, 1.0 - t * 0.85);
       vec3 g = texture2D(tScene, guv).rgb;
+      float gd = linDepth(guv);
+      float occ = smoothstep(8000.0, 24000.0, gd);
       float lum = dot(g, vec3(0.3333));
-      gc += g * smoothstep(0.55, 1.0, lum) * (1.0 - t);
+      gc += g * smoothstep(0.55, 1.0, lum) * (1.0 - t) * occ;
     }
     rc /= float(N);
     float gw = 0.0;
     for (int i = 1; i < N; i++) gw += (1.0 - float(i) / float(N - 1));
     gc /= max(gw, 0.001) * float(N) / float(N);   // ~normalized
     col = mix(texture2D(tScene, uv).rgb, rc, clamp(radial * 0.85, 0.0, 0.9));
-    col += gc * god * 0.09 * vec3(1.15, 1.0, 0.72);
+    col += gc * god * 0.11 * vec3(1.15, 1.0, 0.72);
   } else {
     col = texture2D(tScene, uv).rgb;
   }
 
-  // --- motion smear: short directional average along camera rotation ---
+  // --- motion smear: subtle pixel-level ghosting along camera rotation ---
   if (uMotionAmt > 0.001) {
     vec3 m = col;
     for (int i = 1; i <= 3; i++) {
-      float o = float(i) * uMotionAmt;
+      float o = float(i) * uMotionAmt * 0.004;   // ~px offsets, not screen-width
       m += texture2D(tScene, uv + uMotionDir * o).rgb;
       m += texture2D(tScene, uv - uMotionDir * o).rgb;
     }
-    col = mix(col, m / 7.0, clamp(uMotionAmt * 24.0, 0.0, 0.55));
+    col = mix(col, m / 7.0, clamp(uMotionAmt * 10.0, 0.0, 0.4));
   }
 
   // --- cinematic DOF: blur where |depth - focus| is large (kill-cam etc) ---
@@ -154,6 +160,16 @@ void main() {
   float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
   col = mix(vec3(lum), col, uSat);
   col += uFlash * vec3(0.55, 0.6, 0.7);
+
+  // --- cloud immersion: the AC7 whiteout — inside a deck the world melts
+  // into wind-blown milk; geometry vanishes, only motion remains ---
+  if (uCloud > 0.003) {
+    float cl = uCloud * uCloud;
+    vec2 q2 = vUv - 0.5;
+    float edge = 1.0 - dot(q2, q2) * 0.9;          // slightly less at corners
+    float gust = 0.94 + 0.06 * sin(vUv.y * 21.0 + uTime * 2.0);
+    col = mix(col, vec3(0.86, 0.88, 0.92) * gust * edge, clamp(cl * 1.04, 0.0, 0.985));
+  }
 
   // --- vignette ---
   vec2 q = vUv - 0.5;
@@ -263,6 +279,8 @@ export class PostFX {
       uVignette: { value: 0.5 },
       uHeat: { value: [new THREE.Vector4(), new THREE.Vector4()] },
       uFlash: { value: 0 },
+      uCloud: { value: 0 },
+      uTime: { value: 0 },
     });
     this.pipPass = makePass(PIP_FRAG, {
       tSrc: { value: null }, uOpen: { value: 0 }, uGlitch: { value: 0 },
@@ -302,6 +320,8 @@ export class PostFX {
     if (s.sat !== undefined) u.uSat.value = s.sat;
     if (s.vignette !== undefined) u.uVignette.value = s.vignette;
     if (s.flash !== undefined) u.uFlash.value = s.flash;
+    if (s.cloud !== undefined) u.uCloud.value = s.cloud;
+    u.uTime.value = performance.now() / 1000;
     if (s.heat) {
       for (let i = 0; i < 2; i++) {
         const hv = s.heat[i] || [0, 0, 0, 0];

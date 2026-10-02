@@ -5,6 +5,8 @@ import * as THREE from 'three';
 import { SEA_LEVEL } from './terrain.js';
 
 const _wp = new THREE.Vector3();
+const _rp = new THREE.Vector3();
+const _rv = new THREE.Vector3();
 import { mulberry32, lerp, clamp } from './utils.js';
 
 const MAX_ADD = 1400, MAX_SMOKE = 1600;
@@ -201,6 +203,31 @@ export class Effects {
       c0: dark ? [0.08, 0.08, 0.08] : [0.2, 0.19, 0.18], c1: [0.3, 0.3, 0.3], a0: 0.55, a1: 0,
       s0: 2.5, s1: 16,
     });
+  }
+
+  // rain on the airframe: droplet streaks born across the lift surfaces and
+  // swept aft along the relative wind — AC7 chase-cam rain flight feel
+  rainOnAirframe(anchors, airVel, rain) {
+    if (rain < 0.25) return;
+    const pts = [anchors.nose, anchors.wingL, anchors.wingR, anchors.tail];
+    const n = Math.min(10, Math.floor(rain * 10));
+    for (let i = 0; i < n; i++) {
+      const a = pts[(this.rng() * pts.length) | 0];
+      if (!a) continue;
+      a.getWorldPosition(_rp);
+      _rp.x += (this.rng() - 0.5) * 7;
+      _rp.y += (this.rng() - 0.5) * 1.6 + 0.5;
+      _rp.z += (this.rng() - 0.5) * 7;
+      // streak velocity: mostly the relative wind, slightly outward
+      const back = _rv.copy(airVel).multiplyScalar(-0.55);
+      back.y += 4;
+      this.spawn(this.add, {
+        pos: _rp, vel: back,
+        life: 0.1 + this.rng() * 0.08, drag: 1, gravity: 0,
+        c0: [0.75, 0.85, 0.95], c1: [0.4, 0.5, 0.62], a0: 0.5, a1: 0,
+        s0: 1.1, s1: 0.35,
+      });
+    }
   }
 
   hitSpark(pos) {

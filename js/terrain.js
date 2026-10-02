@@ -130,6 +130,7 @@ uniform float uTime;
 uniform vec3 uFogColor;
 uniform float uFogDensity;
 uniform float uStorm;
+uniform float uRain;
 
 float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float noise(vec2 p){
@@ -143,11 +144,13 @@ void main() {
   vec2 w = vWorld.xz;
   float n1 = noise(w * 0.012 + uTime * 0.35);
   float n2 = noise(w * 0.045 - uTime * 0.6);
-  vec3 N = normalize(vec3((n1 - 0.5) * (0.22 + uStorm * 0.5), 1.0, (n2 - 0.5) * (0.22 + uStorm * 0.5)));
+  // rain: fine high-frequency dimple noise riding the swell
+  float rr = (noise(w * 0.9 + uTime * 2.2) - 0.5) * uRain * 0.16;
+  vec3 N = normalize(vec3((n1 - 0.5) * (0.22 + uStorm * 0.5) + rr, 1.0, (n2 - 0.5) * (0.22 + uStorm * 0.5) + rr));
   vec3 V = normalize(uCamPos - vWorld);
 
   float fres = pow(1.0 - clamp(dot(V, N), 0.0, 1.0), 3.0);
-  vec3 deep = mix(vec3(0.015, 0.075, 0.115), vec3(0.008, 0.045, 0.07), uStorm);
+  vec3 deep = mix(mix(vec3(0.015, 0.075, 0.115), vec3(0.008, 0.045, 0.07), uStorm), vec3(0.01, 0.05, 0.075), uRain * 0.55);
   vec3 skyRef = vec3(0.36, 0.44, 0.55);
   vec3 warm = vec3(0.55, 0.38, 0.24);
   // reflectance warms toward the low sun azimuth
@@ -178,6 +181,7 @@ export function buildOcean(scene) {
       uCamPos: { value: new THREE.Vector3() },
       uTime: { value: 0 },
       uStorm: { value: 0 },
+      uRain: { value: 0 },
       uNight: { value: 0 },
       uFogColor: { value: new THREE.Color(0.70, 0.56, 0.42) },
       uFogDensity: { value: 0.000034 },
