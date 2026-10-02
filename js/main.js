@@ -220,6 +220,7 @@ function update(dt) {
     if (!player.alive) {
       if (G.deathTimer === 0) {
         effects.explosion(player.position, 2.2);
+        effects.wreckBurst?.(player.position, player.body.vel, 2.0);
         audio.explosion(1);
         audio.setRunning(false, 1.6);   // engine fades under the death boom
         player.model.group.visible = false;
@@ -259,11 +260,23 @@ function update(dt) {
     aaSites.update(dt, player, weapons, effects);
     weapons.update(dt, player, enemies.enemies, effects);
 
-    // weapon feedback events (crit hits) -> animated HUD stack
+    // weapon feedback events -> HUD stack / camera / audio (ONE drain: an
+    // earlier blanket clear here silently ate the nearMiss/hitTing events)
     for (const ev of weapons.events) {
       if (ev.type === 'crit') {
         hud.announce('致命攻击', 'CRITICAL HIT — 目标冒烟', 1.5, 'crit');
         audio.crit();
+      } else if (ev.type === 'nearMiss') {
+        // the whip + letterbox are optional (settings panel); the whoosh,
+        // shake and threat feel stay on regardless
+        if (settings.nearMissWhip) {
+          player.applyWhip(ev.dir);
+          G.cineT = 1.15;            // letterbox rises for the whip moment
+        }
+        player.camShake = Math.min(1, player.camShake + 0.22);
+        audio.nearMiss();
+      } else if (ev.type === 'hitTing') {
+        audio.hitTing();
       }
     }
     weapons.events.length = 0;
@@ -276,16 +289,6 @@ function update(dt) {
     }
     enemies.events.length = 0;
 
-    for (const ev of weapons.events) {
-      if (ev.type === 'nearMiss') {
-        player.applyWhip(ev.dir);
-        player.camShake = Math.min(1, player.camShake + 0.22);
-        audio.nearMiss();
-        G.cineT = 1.15;            // letterbox rises for the whip moment
-      } else if (ev.type === 'hitTing') {
-        audio.hitTing();
-      }
-    }
     // supersonic boom: one-shot ring + thunder when crossing the sound barrier
     if (player.alive) {
       if (!G._mach && player.speed > 340) { G._mach = true; effects.ring(player.position, 1.6); audio.sonicBoom(); }
@@ -781,6 +784,63 @@ canvas.addEventListener('click', () => {
 const bindEl = document.getElementById('bindings');
 const bindRows = document.getElementById('bind-rows');
 
+// ---------- gameplay options (settings section of the same panel) ----------
+// toggle: { key, label, on, off }  |  slider: { key, label, kind: 'slider', min, max, step, fmt }
+const OPTIONS = [
+  { key: 'nearMissWhip', label: '近失弹甩镜 — 导弹掠过时镜头甩动+黑边', on: '开启', off: '关闭' },
+  { key: 'volMaster', label: '总音量', kind: 'slider', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
+  { key: 'volSfx', label: '音效 — 武器/爆炸/警报', kind: 'slider', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
+  { key: 'volEngine', label: '引擎与风声', kind: 'slider', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
+];
+const settings = { nearMissWhip: true, volMaster: 1, volSfx: 1, volEngine: 1 };      // defaults
+try { Object.assign(settings, JSON.parse(localStorage.getItem('sb_opts') || '{}')); } catch { /* fresh start */ }
+const saveSettings = () => { try { localStorage.setItem('sb_opts', JSON.stringify(settings)); } catch { /* private mode */ } };
+window.__settings = settings;                 // debug hook
+
+// settings -> live systems (audio inits on first gesture; applyVolumes is
+// safe to call before and after)
+const applyAudioSettings = () => {
+  try { audio.applyVolumes({ master: settings.volMaster, sfx: settings.volSfx, engine: settings.volEngine }); }
+  catch { /* audio not ready yet */ }
+};
+
+const optRows = document.getElementById('opt-rows');
+function renderOptions() {
+  optRows.innerHTML = '';
+  for (const o of OPTIONS) {
+    const row = document.createElement('div');
+    row.className = 'opt-row' + (o.kind === 'slider' ? ' slider' : '');
+    const name = document.createElement('span');
+    name.textContent = o.label;
+    row.appendChild(name);
+    if (o.kind === 'slider') {
+      const val = document.createElement('span');
+      val.className = 'val';
+      val.textContent = o.fmt(settings[o.key]);
+      const sld = document.createElement('input');
+      sld.type = 'range';
+      sld.min = o.min; sld.max = o.max; sld.step = o.step;
+      sld.value = settings[o.key];
+      sld.oninput = () => {
+        settings[o.key] = parseFloat(sld.value);
+        val.textContent = o.fmt(settings[o.key]);
+        saveSettings();
+        applyAudioSettings();
+      };
+      row.appendChild(sld);
+      row.appendChild(val);
+    } else {
+      const tog = document.createElement('span');
+      tog.className = 'tog' + (settings[o.key] ? '' : ' off');
+      tog.textContent = settings[o.key] ? o.on : o.off;
+      tog.onclick = () => { settings[o.key] = !settings[o.key]; saveSettings(); renderOptions(); };
+      row.appendChild(tog);
+    }
+    optRows.appendChild(row);
+  }
+}
+applyAudioSettings();   // restore persisted volumes (safe pre-gesture: init() reads them)
+
 function renderBindings() {
   bindRows.innerHTML = '';
   for (const [action, label] of Object.entries(ACTION_LABELS)) {
@@ -813,6 +873,7 @@ function openMenu() {
   if (G.state === 'playing' && !G.paused) setPaused(true);
   bindEl.classList.remove('hidden');
   renderBindings();
+  renderOptions();
 }
 
 function closeMenu() {

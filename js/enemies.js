@@ -75,7 +75,8 @@ class Enemy {
     if (this.dying) return false;
     this.hp -= n;
     if (this.hp <= 0) {
-      this.dying = Math.random() < 0.55;
+      // 70% detonate on the spot, 30% fall out of the fireball in a spin
+      this.dying = Math.random() < 0.30;
       if (!this.dying) this.dead = true;
       return true;
     }
@@ -92,11 +93,23 @@ class Enemy {
 
     if (this.dying) {
       this.deadTime += dt;
+      // the kill is credited the moment the fatal hit lands: a plane falling
+      // in flames has lost the fight — no waiting for the ground impact
+      if (!this.killCredited && ctx && ctx.onKill) {
+        this.killCredited = true;
+        ctx.onKill(this, true);
+      }
       b.ctl.pitch = -0.55; b.ctl.roll = 1; b.ctl.yaw = 0.35;
       b.throttle = 1;
       b.update(dt);
       if (ctx && ctx.effects && Math.random() < 0.75) {
         ctx.effects.damageSmoke(b.pos, _tmp.copy(b.vel).multiplyScalar(-0.02), true);
+        // the wreck BURNS: licking flame rides the black smoke trail
+        // (fresh vector: spawn() keeps vel by reference, shared temps alias)
+        if (Math.random() < 0.55) {
+          ctx.effects.wreckFire?.(b.pos,
+            new THREE.Vector3(b.vel.x * -0.015, b.vel.y * -0.015 + 3, b.vel.z * -0.015));
+        }
       }
       // secondary explosions + debris while the wreck falls
       this.boomT = (this.boomT ?? 0.45) - dt;
@@ -114,13 +127,17 @@ class Enemy {
         if (ctx && ctx.effects) {
           if (ground <= SEA_LEVEL + 1) {
             ctx.effects.waterColumn?.(b.pos, 1.6);
+            // fuel keeps burning on the sea: a floating slick fire
+            ctx.effects.groundFire?.(b.pos, true, 1.0);
           } else {
             ctx.effects.explosion?.(b.pos, 1.4);
             ctx.effects.debris?.(b.pos, 12);
+            // crash site burns on: flame pillar + black column
+            ctx.effects.groundFire?.(b.pos, false, 1.3);
           }
           ctx.effects.ring?.(b.pos, 1.4);
         }
-        if (ctx && ctx.onKill) ctx.onKill(this, true);
+        // (kill credit already fired at the fatal hit — impact is pure fx)
       }
       this.syncModel(dt);
       return;

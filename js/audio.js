@@ -5,6 +5,19 @@ export class GameAudio {
     this.enabled = true;
     this._lockBeepT = 0;
     this._alertT = 0;
+    // volume factors from the settings panel (0..1); applied at every node
+    // that can carry sound so master/sfx/engine scale independently
+    this.volMaster = 1;
+    this.volSfx = 1;
+    this.volEngine = 1;
+  }
+
+  // settings panel hookup: { master?, sfx?, engine? } in 0..1
+  applyVolumes(o = {}) {
+    if (o.master !== undefined) this.volMaster = Math.min(1, Math.max(0, o.master));
+    if (o.sfx !== undefined) this.volSfx = Math.min(1, Math.max(0, o.sfx));
+    if (o.engine !== undefined) this.volEngine = Math.min(1, Math.max(0, o.engine));
+    if (this.master) this.master.gain.value = 0.5 * this.volMaster;
   }
 
   init() {
@@ -13,7 +26,7 @@ export class GameAudio {
     if (!AC) return;
     const ctx = this.ctx = new AC();
     this.master = ctx.createGain();
-    this.master.gain.value = 0.5;
+    this.master.gain.value = 0.5 * this.volMaster;
     // final gate: continuous engine/wind layers must fall silent on pause and
     // death even though their gains are only refreshed while playing
     this.duck = ctx.createGain();
@@ -75,7 +88,7 @@ export class GameAudio {
     f.frequency.setValueAtTime(freq0, ctx.currentTime);
     f.frequency.exponentialRampToValueAtTime(Math.max(30, freq1), ctx.currentTime + dur);
     const g = ctx.createGain();
-    g.gain.setValueAtTime(gain, ctx.currentTime);
+    g.gain.setValueAtTime(gain * this.volSfx, ctx.currentTime);
     g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
     src.connect(f).connect(g).connect(this.master);
     src.start();
@@ -90,7 +103,7 @@ export class GameAudio {
     o.frequency.setValueAtTime(f0, ctx.currentTime);
     if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), ctx.currentTime + dur);
     const g = ctx.createGain();
-    g.gain.setValueAtTime(gain, ctx.currentTime);
+    g.gain.setValueAtTime(gain * this.volSfx, ctx.currentTime);
     g.gain.exponentialRampToValueAtTime(0.0008, ctx.currentTime + dur);
     o.connect(g).connect(this.master);
     o.start();
@@ -160,9 +173,9 @@ export class GameAudio {
     this.oscA.frequency.value = rpm;
     this.oscB.frequency.value = rpm * 1.007 + 1.3;
     this.engFilter.frequency.value = 260 + s * 900 + (boosting ? 500 : 0);
-    this.engGain.gain.value = 0.05 + player.throttle * 0.075 + (boosting ? 0.05 : 0);
+    this.engGain.gain.value = (0.05 + player.throttle * 0.075 + (boosting ? 0.05 : 0)) * this.volEngine;
     this.windFilter.frequency.value = 500 + s * 1400;
-    this.windGain.gain.value = 0.02 + s * s * 0.14 + cloud * cloud * 0.5;   // cloud-pass roar
+    this.windGain.gain.value = (0.02 + s * s * 0.14 + cloud * cloud * 0.5) * this.volEngine;   // cloud-pass roar
     // world muffled while inside a deck
     const mufT = cloud > 0.05 ? 20000 - Math.pow(cloud, 1.2) * 15000 : 20000;
     this.muffle.frequency.value += (mufT - this.muffle.frequency.value) * Math.min(1, dt * 5);

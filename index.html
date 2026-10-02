@@ -81,6 +81,29 @@
     font-size: 13px; letter-spacing: .15em; }
   .bind-actions span { color: #9fd0ff; cursor: pointer; }
   .bind-actions span:hover { color: #fff; }
+  .opt-sep { font-family: Consolas, monospace; color: #9fd0ff; letter-spacing: .3em;
+    font-size: 15px; margin: 20px 0 8px; border-top: 1px solid rgba(120, 180, 255, .2);
+    padding-top: 14px; }
+  .opt-row { display: grid; grid-template-columns: 1fr 90px; gap: 10px; align-items: center;
+    padding: 7px 10px; border-radius: 4px; font-size: 14px; color: #cfe3ff; }
+  .opt-row:nth-child(odd) { background: rgba(120, 180, 255, .06); }
+  .opt-row .tog { font-family: Consolas, monospace; text-align: center; color: #b8ffcf;
+    border: 1px solid rgba(120, 255, 160, .35); border-radius: 4px; padding: 3px 0;
+    cursor: pointer; }
+  .opt-row .tog.off { color: #8fa5bd; border-color: rgba(160, 180, 200, .3); }
+  .opt-row .tog:hover { border-color: #ffe9c4; }
+  .opt-row.slider { grid-template-columns: 1fr 150px 48px; }
+  .opt-row.slider input[type="range"] {
+    width: 100%; height: 4px; appearance: none; -webkit-appearance: none;
+    background: rgba(120, 180, 255, .25); border-radius: 2px; outline: none; cursor: pointer;
+  }
+  .opt-row.slider input[type="range"]::-webkit-slider-thumb {
+    appearance: none; -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%;
+    background: #ffe9c4; border: 1px solid rgba(255, 200, 102, .6);
+  }
+  .opt-row.slider .val {
+    font-family: Consolas, monospace; text-align: right; color: #ffe9c4; font-size: 13px;
+  }
     #go-stats { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; min-width: 240px; }
     #go-stats .row {
       display: flex; justify-content: space-between; gap: 30px;
@@ -100,13 +123,15 @@
   <canvas id="gl"></canvas>
   <canvas id="hud"></canvas>
   <div class="screen-flash" id="flash"></div>
-  <div id="bind-entry">键位设置</div>
+  <div id="bind-entry">设 置</div>
 
   <div class="overlay hidden" id="bindings">
     <div class="panel">
       <h2>CONTROLS</h2>
       <div class="hint">键位设置 — 点击按键框后按下新的键或鼠标键 · 鼠标移动/滚轮固定用于瞄准与油门</div>
       <div id="bind-rows"></div>
+      <div class="opt-sep">OPTIONS — 游戏设置</div>
+      <div id="opt-rows"></div>
       <div class="bind-actions">
         <span id="bind-reset">恢复默认</span>
         <span id="bind-close">关闭 (ESC)</span>
@@ -126,7 +151,7 @@
       <span><b>W / S</b> 推杆俯冲 / 拉杆爬升</span><span><b>Shift / Ctrl / 滚轮</b> 油门</span>
       <span><b>A / D</b> 手动横滚(覆盖)</span><span><b>Q / E</b> 方向舵</span>
       <span><b>C 长按</b> 自由视角环视</span><span><b>V</b> 视角档位 · <b>Z</b> 放大</span>
-      <span><b>P / ESC</b> 暂停</span><span>左下角「键位设置」可自定义全部键位</span>
+      <span><b>P / ESC</b> 暂停</span><span>左下角「设置」可自定义键位与游戏选项(近失弹甩镜等)</span>
     </div>
     <div class="start-hint">— 按 回车 或 点击 开始任务 —</div>
   </div>

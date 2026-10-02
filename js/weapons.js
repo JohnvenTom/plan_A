@@ -587,7 +587,7 @@ export class Weapons {
             t.flashT = 0.12;
             this.events.push({ type: 'hitTing' });
             effects.hitSpark(r.pos);
-            if (killed && !t.dying) effects.explosion(t.position, 1.0);
+            if (killed) { effects.explosion(t.position, 1.0); effects.wreckBurst?.(t.position, t.body.vel, 1.0); }   // every kill detonates
           } else {
             player.applyDamage(r.dmg);
             effects.hitSpark(r.pos);
@@ -749,8 +749,11 @@ export class Weapons {
             t.flashT = 0.12;
             this.events.push({ type: 'hitTing' });
             const killed = t.applyDamage(ms.dmg);
-            if (killed && !t.dying) {
+            if (killed) {
+              // EVERY kill detonates — the spiral-fall wrecks (30%) now drop
+              // burning out of the fireball, and the airframe bursts apart
               effects.explosion(t.position, 1.2);
+              effects.wreckBurst?.(t.position, t.body.vel, 1.2);
             } else if (!t.dying) {
               // missile struck the cockpit area but did not destroy it:
               // pilot hit — the plane starts smoking immediately
