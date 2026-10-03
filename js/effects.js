@@ -121,10 +121,12 @@ class ParticleLayer {
 // ribbons share one mesh / one draw call, and the strip is continuous by
 // construction (history points recorded at the wingtip each frame). ---
 const VR_PAIRS = 14;    // player + up to 13 enemies, 2 wingtips each
-const VR_SEG = 56;      // recorded points per ribbon
-const VR_WINDOW = 2.2;  // seconds a recorded point lives
-const VR_MAXLEN = 265;  // meters before the tail is trimmed
+const VR_SEG = 56;      // point budget per ribbon (decimated as the trail ages)
+const VR_WINDOW = 4.0;  // seconds a recorded point lives — the binding lifetime
+const VR_MAXLEN = 800;  // meters before the tail is trimmed
 const VR_FAR2 = 1500 * 1500;  // distance² beyond which ribbons sample every 2nd point
+const VR_DRIFT = 1.1;   // m/s vortex dissipation drift, accelerating with age
+const VR_FADE0 = VR_MAXLEN * 0.72;  // path length where the tail fade begins
 
 const VR_VERT = `
 attribute float aA; attribute float aT; attribute float aU;
@@ -180,13 +182,16 @@ class VortexRibbons {
     scene.add(this.mesh);
     this._t = new THREE.Vector3(); this._s = new THREE.Vector3();
     this._v1 = new THREE.Vector3(); this._v2 = new THREE.Vector3();
+    this._cum = new Float32Array(VR_SEG);
   }
 
   _newRibbon() {
     // ring buffer of recorded wingtip points: pos/intensity/stall/birth time
+    // plus a per-point random drift vector used for dissipation
     return {
       cx: new Float32Array(VR_SEG * 3), a: new Float32Array(VR_SEG),
       st: new Uint8Array(VR_SEG), born: new Float32Array(VR_SEG),
+      dx: new Float32Array(VR_SEG), dy: new Float32Array(VR_SEG), dz: new Float32Array(VR_SEG),
       head: -1, len: 0, attached: false, lastX: 0, lastY: 0, lastZ: 0,
       lastT: -1, ph: this.rngPhase(),
     };
@@ -208,6 +213,26 @@ class VortexRibbons {
     this._feedRibbon(pair.R, tipR, k, stall);
   }
 
+  // point budget full: keep every 2nd point (head-anchored) so the ring
+  // always spans the full lifetime window — resolution halves with age,
+  // which the thin faded tail tolerates perfectly
+  _decimate(rb) {
+    const cp = (src, dst) => {
+      if (src === dst) return;
+      rb.cx[dst * 3] = rb.cx[src * 3]; rb.cx[dst * 3 + 1] = rb.cx[src * 3 + 1]; rb.cx[dst * 3 + 2] = rb.cx[src * 3 + 2];
+      rb.a[dst] = rb.a[src]; rb.st[dst] = rb.st[src]; rb.born[dst] = rb.born[src];
+      rb.dx[dst] = rb.dx[src]; rb.dy[dst] = rb.dy[src]; rb.dz[dst] = rb.dz[src];
+    };
+    let kept = 0;
+    for (let n = 0; n < rb.len; n += 2) {
+      const src = (rb.head - n + VR_SEG * 2) % VR_SEG;
+      const dst = (rb.head - kept + VR_SEG * 2) % VR_SEG;
+      cp(src, dst);
+      kept++;
+    }
+    rb.len = kept;
+  }
+
   _feedRibbon(rb, tip, k, stall) {
     const active = k > 0.05;
     if (!active) { rb.attached = false; return; }
@@ -223,6 +248,7 @@ class VortexRibbons {
       rb.cx[h * 3] = tip.x; rb.cx[h * 3 + 1] = tip.y; rb.cx[h * 3 + 2] = tip.z;
       return;
     }
+    if (rb.len >= VR_SEG) this._decimate(rb);        // make room, keep time span
     // record new head point; stall buffet is baked in as frozen jitter so it
     // stays behind in the air instead of wiggling with the jet
     let x = tip.x, y = tip.y, z = tip.z;
@@ -232,12 +258,27 @@ class VortexRibbons {
       y += Math.sin(w * 2.3 + 1.3) * (0.5 + 1.5 * Math.random());
       z += Math.cos(w * 1.9) * (0.5 + 1.5 * Math.random());
     }
+    // per-point dissipation direction: random unit-ish vector
+    let ux = Math.random() * 2 - 1, uy = Math.random() * 2 - 1, uz = Math.random() * 2 - 1;
+    const ul = Math.sqrt(ux * ux + uy * uy + uz * uz) || 1;
     rb.head = (rb.head + 1) % VR_SEG;
     rb.cx[rb.head * 3] = x; rb.cx[rb.head * 3 + 1] = y; rb.cx[rb.head * 3 + 2] = z;
     rb.a[rb.head] = k; rb.st[rb.head] = stall ? 1 : 0;
     rb.born[rb.head] = this.clock;
-    if (rb.len < VR_SEG) rb.len++;
+    rb.dx[rb.head] = ux / ul; rb.dy[rb.head] = uy / ul; rb.dz[rb.head] = uz / ul;
+    rb.len++;
     rb.lastX = tip.x; rb.lastY = tip.y; rb.lastZ = tip.z; rb.lastT = this.clock;
+  }
+
+  // vortex dissipation: recorded points wander with age, so the trail
+  // slowly dissolves in the air instead of staying a frozen curve
+  _driftRibbon(rb, dt) {
+    for (let n = 0; n < rb.len; n++) {
+      const i = (rb.head - n + VR_SEG * 2) % VR_SEG;
+      const age = Math.min(1, (this.clock - rb.born[i]) / VR_WINDOW);
+      const kk = dt * VR_DRIFT * (0.25 + 0.75 * age);
+      rb.cx[i * 3] += rb.dx[i] * kk; rb.cx[i * 3 + 1] += rb.dy[i] * kk; rb.cx[i * 3 + 2] += rb.dz[i] * kk;
+    }
   }
 
   update(dt, camera) {
@@ -251,6 +292,8 @@ class VortexRibbons {
     }
     const V = this.vpos, A = this.vA, T = this.vT;
     for (const pair of this.pairs.values()) {
+      this._driftRibbon(pair.L, dt);
+      this._driftRibbon(pair.R, dt);
       this._buildRibbon(pair.L, pair.i * 2);
       this._buildRibbon(pair.R, pair.i * 2 + 1);
     }
@@ -266,18 +309,20 @@ class VortexRibbons {
       for (let s = 0; s < VR_SEG * 2; s++) { A[base + s] = 0; T[base + s] = 0; }
       return;
     }
-    // trim tail: trail longer than VR_MAXLEN meters, or oldest point expired
-    if (rb.len > 2) {
-      let plen = 0;
-      for (let n = 1; n < rb.len; n++) {
-        const ia = (rb.head - n + VR_SEG * 2) % VR_SEG;         // tail-ward
-        const ib = (rb.head - n + 1 + VR_SEG * 2) % VR_SEG;     // one newer
-        const dx = rb.cx[ia * 3] - rb.cx[ib * 3], dy = rb.cx[ia * 3 + 1] - rb.cx[ib * 3 + 1], dz = rb.cx[ia * 3 + 2] - rb.cx[ib * 3 + 2];
-        plen += Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (plen > VR_MAXLEN || this.clock - rb.born[ib] > VR_WINDOW) {
-          rb.len = n + 1;
-          break;
-        }
+    // walk tail-ward once: cumulative path length per point (drives the
+    // length-based fade) + trim beyond VR_MAXLEN meters / VR_WINDOW seconds
+    const cum = this._cum;
+    cum[0] = 0;
+    let plen = 0;
+    for (let n = 1; n < rb.len; n++) {
+      const ia = (rb.head - n + VR_SEG * 2) % VR_SEG;         // tail-ward
+      const ib = (rb.head - n + 1 + VR_SEG * 2) % VR_SEG;     // one newer
+      const dx = rb.cx[ia * 3] - rb.cx[ib * 3], dy = rb.cx[ia * 3 + 1] - rb.cx[ib * 3 + 1], dz = rb.cx[ia * 3 + 2] - rb.cx[ib * 3 + 2];
+      plen += Math.sqrt(dx * dx + dy * dy + dz * dz);
+      cum[n] = plen;
+      if (plen > VR_MAXLEN || this.clock - rb.born[ib] > VR_WINDOW) {
+        rb.len = n + 1;
+        break;
       }
     }
     const t = this._t, side = this._s, view = this._v1;
@@ -286,27 +331,45 @@ class VortexRibbons {
     const hx = rb.cx[rb.head * 3], hy = rb.cx[rb.head * 3 + 1], hz = rb.cx[rb.head * 3 + 2];
     const camD2 = (hx - this.camPos.x) ** 2 + (hy - this.camPos.y) ** 2 + (hz - this.camPos.z) ** 2;
     const stride = camD2 > VR_FAR2 ? 2 : 1;
-    let j = 0;
+    let j = 0, px = 0, py = 0, pz = 0;             // previous side, for coherence
     for (let n = 0; n < rb.len; n += stride) {
       const i = (rb.head - n + VR_SEG * 2) % VR_SEG;
       const age = Math.min(1, (this.clock - rb.born[i]) / VR_WINDOW);
       const a = rb.a[i], st = rb.st[i];
-      // hybrid width: thin filament at light intensity, fog band at full pull
-      const w = (0.35 + Math.pow(a, 1.3) * (2.2 + st * 1.6)) * (0.5 + 1.5 * age) * 0.5;
-      // tangent from the next sampled neighbor: older normally, newer at the tail
-      let n0;
-      if (n + stride > rb.len - 1 && n > 0) n0 = n - stride;
+      // hybrid width: thin filament at light intensity; with age the band
+      // both widens and fades — reading as the vortex spreading into air
+      const w = (0.35 + Math.pow(a, 1.3) * (2.2 + st * 1.6)) * (0.5 + 1.9 * age) * 0.5;
+      // tangent always points tail-ward: from an older neighbor normally,
+      // or (current - newer) at the tail-most point — a sign flip here puts
+      // the final quad on the wrong side of the path (twisted tail segment)
+      let n0, flip = false;
+      if (n + stride > rb.len - 1 && n > 0) { n0 = n - stride; flip = true; }
       else n0 = n + stride;
       const j0 = (rb.head - n0 + VR_SEG * 2) % VR_SEG;
-      t.set(rb.cx[j0 * 3] - rb.cx[i * 3], rb.cx[j0 * 3 + 1] - rb.cx[i * 3 + 1], rb.cx[j0 * 3 + 2] - rb.cx[i * 3 + 2]);
+      if (flip) t.set(rb.cx[i * 3] - rb.cx[j0 * 3], rb.cx[i * 3 + 1] - rb.cx[j0 * 3 + 1], rb.cx[i * 3 + 2] - rb.cx[j0 * 3 + 2]);
+      else t.set(rb.cx[j0 * 3] - rb.cx[i * 3], rb.cx[j0 * 3 + 1] - rb.cx[i * 3 + 1], rb.cx[j0 * 3 + 2] - rb.cx[i * 3 + 2]);
       view.set(rb.cx[i * 3] - this.camPos.x, rb.cx[i * 3 + 1] - this.camPos.y, rb.cx[i * 3 + 2] - this.camPos.z);
       side.crossVectors(t, view);
+      // orientation coherence: keep each offset on the same side as the
+      // previous point — when the path curves across the view axis the raw
+      // perpendicular flips sign and would twist the band edge-to-edge
+      if (j > 0 && (side.x * px + side.y * py + side.z * pz) < 0) side.negate();
       const sl = side.length();
-      if (sl > 1e-4) side.multiplyScalar(1 / sl); else side.set(1, 0, 0);
+      if (sl > 1e-4) side.multiplyScalar(1 / sl); else side.set(px, py, pz);
+      px = side.x; py = side.y; pz = side.z;
       const o = base + j * 2;
       V[o * 3] = rb.cx[i * 3] + side.x * w; V[o * 3 + 1] = rb.cx[i * 3 + 1] + side.y * w; V[o * 3 + 2] = rb.cx[i * 3 + 2] + side.z * w;
       V[(o + 1) * 3] = rb.cx[i * 3] - side.x * w; V[(o + 1) * 3 + 1] = rb.cx[i * 3 + 1] - side.y * w; V[(o + 1) * 3 + 2] = rb.cx[i * 3 + 2] - side.z * w;
-      const alpha = 0.16 + 0.5 * Math.pow(a, 1.2);
+      // length-based fade envelope: whichever limit cuts the tail (meters or
+      // seconds), the last stretch of trail eases to zero alpha so the cut
+      // itself is never visible — no hard edge, no stepping retraction
+      let tf = 1;
+      const d = cum[n];
+      if (d > VR_FADE0) {
+        const u = Math.min(1, (d - VR_FADE0) / (VR_MAXLEN - VR_FADE0));
+        tf = 1 - u * u * (3 - 2 * u);           // smoothstep down to 0
+      }
+      const alpha = (0.16 + 0.5 * Math.pow(a, 1.2)) * tf;
       A[o] = alpha; A[o + 1] = alpha;
       T[o] = age; T[o + 1] = age;
       j++;
