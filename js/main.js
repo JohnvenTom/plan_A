@@ -79,7 +79,7 @@ const G = {
   state: 'title',           // title | intro | playing | gameover
   kills: 0, score: 0,
   time: 0, deathTimer: 0, paused: false, menuOpen: false,
-  contrailT: 0, smokeT: 0,
+  smokeT: 0,
   timeScale: 1,             // kill-cam micro slow-motion
   fxPunch: 0,               // radial-blur punch on our missile launch
   aceCut: 0,                // ace-intro letterbox timer
@@ -180,7 +180,7 @@ function introStep(dt) {
   G.introT -= dt;
   player.update(dt, INTRO_INPUT);
   enemies.update(dt, player, { effects });
-  effects.update(dt);
+  effects.update(dt, camera);
   sky.update(dt, camera.position);
   updateEnvironment(dt);
   ocean.mesh.position.x = camera.position.x;
@@ -296,25 +296,20 @@ function update(dt) {
       else if (G._mach && player.speed < 320) G._mach = false;
     }
 
-    // --- wingtip vortices (AC7-style): intensity from lift, not speed —
-    // hard pulls (G), low-speed high-AOA maneuvers, and full stall all
-    // pull visible white vortex streams off the wingtips ---
+    // --- wingtip vortices (AC7-style ribbons): intensity from lift, not
+    // speed — hard pulls (G), low-speed high-AOA maneuvers, and full stall
+    // all pull continuous white vortex strips off the wingtips ---
     const vortexOf = (b, stalling) => {
       const hiG = clamp((Math.max(0, b.gLoad) - 3.2) / 4.2, 0, 1);
       const hiAoa = clamp((b.alpha - 0.14) / 0.12, 0, 1);   // past ~8 deg AOA
       const v = Math.max(hiG * 0.9, hiAoa * 0.75);
       return stalling ? 1 : v;
     };
-    G.contrailT += dt;
     if (player.alive) {
       const vI = vortexOf(player.body, player.stalling);
-      if (vI > 0.05 && G.contrailT > 0.018 + (1 - vI) * 0.05) {
-        G.contrailT = 0;
-        player.model.anchors.wingL.getWorldPosition(_v);
-        player.model.anchors.wingR.getWorldPosition(_v2);
-        effects.wingVortex(_v, vI, player.stalling);
-        effects.wingVortex(_v2, vI, player.stalling);
-      }
+      player.model.anchors.wingL.getWorldPosition(_v);
+      player.model.anchors.wingR.getWorldPosition(_v2);
+      effects.vortexFeed('p', _v, _v2, vI, player.stalling);
     }
     G.smokeT += dt;
     if (player.hp < 55 && G.smokeT > 0.06 && player.alive) {
@@ -325,15 +320,9 @@ function update(dt) {
     for (const e of enemies.enemies) {
       if (!e.dying) {
         const st = e.body.stall > 0.05 || e.body.alpha > 0.22 || e.body.airspeed < 155;
-        const v = vortexOf(e.body, st);
-        e._vortT = (e._vortT ?? 0) + dt;
-        if (v > 0.05 && e._vortT > 0.028 + (1 - v) * 0.06) {
-          e._vortT = 0;
-          e.model.anchors.wingL.getWorldPosition(_v);
-          e.model.anchors.wingR.getWorldPosition(_v2);
-          effects.wingVortex(_v, v, st);
-          effects.wingVortex(_v2, v, st);
-        }
+        e.model.anchors.wingL.getWorldPosition(_v);
+        e.model.anchors.wingR.getWorldPosition(_v2);
+        effects.vortexFeed(e, _v, _v2, vortexOf(e.body, st), st);
       }
       if ((e.hp < 25 || e.pilotHit) && !e.dying && Math.random() < 0.5) {
         e.model.anchors.tail.getWorldPosition(_v);
@@ -358,7 +347,7 @@ function update(dt) {
     audio.update(dt, player, weapons, G.cloud ?? 0);
   }
 
-  effects.update(dt);
+  effects.update(dt, camera);
   sky.update(dt, camera.position);
   updateEnvironment(dt);
 
@@ -687,7 +676,7 @@ function frame() {
     ocean.mat.uniforms.uCamPos.value.copy(camera.position);
     ocean.mat.uniforms.uTime.value = G.time;
     ocean.mat.uniforms.uSunDir.value.copy(sky.sunDir);
-    effects.update(dt);
+    effects.update(dt, camera);
     camera.updateMatrixWorld();
     _pm.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse).invert();
     postfx.setState({

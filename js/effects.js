@@ -116,6 +116,209 @@ class ParticleLayer {
   }
 }
 
+// --- vortex ribbons: one camera-facing strip per wingtip replaces the old
+// per-particle vortices. Zero particle-pool pressure, the whole scene's
+// ribbons share one mesh / one draw call, and the strip is continuous by
+// construction (history points recorded at the wingtip each frame). ---
+const VR_PAIRS = 14;    // player + up to 13 enemies, 2 wingtips each
+const VR_SEG = 56;      // recorded points per ribbon
+const VR_WINDOW = 2.2;  // seconds a recorded point lives
+const VR_MAXLEN = 265;  // meters before the tail is trimmed
+const VR_FAR2 = 1500 * 1500;  // distance² beyond which ribbons sample every 2nd point
+
+const VR_VERT = `
+attribute float aA; attribute float aT; attribute float aU;
+varying float vA; varying float vT; varying float vU;
+void main() {
+  vA = aA; vT = aT; vU = aU;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}`;
+const VR_FRAG = `
+varying float vA; varying float vT; varying float vU;
+void main() {
+  float edge = 1.0 - abs(vU * 2.0 - 1.0); edge *= edge;      // soft across width
+  float a = vA * edge * pow(max(0.0, 1.0 - vT), 1.15);       // + fade to tail
+  vec3 col = mix(vec3(0.97, 0.98, 1.0), vec3(0.82, 0.84, 0.88), vT);
+  gl_FragColor = vec4(col, a);
+}`;
+
+class VortexRibbons {
+  constructor(scene) {
+    this.clock = 0;
+    this.camPos = new THREE.Vector3();
+    this.pairs = new Map();          // id -> { i, L, R, lastFed }
+    this.free = [];
+    for (let i = 0; i < VR_PAIRS; i++) this.free.push(i);
+    const rp = VR_PAIRS * 2, verts = rp * VR_SEG * 2;
+    this.vpos = new Float32Array(verts * 3);
+    this.vA = new Float32Array(verts);
+    this.vT = new Float32Array(verts);
+    this.vU = new Float32Array(verts);
+    const idx = new Uint16Array(rp * VR_SEG * 6);
+    let q = 0;
+    for (let r = 0; r < rp; r++) {
+      const base = r * VR_SEG * 2;
+      for (let s = 0; s < VR_SEG - 1; s++) {
+        const a = base + s * 2;
+        idx[q++] = a; idx[q++] = a + 1; idx[q++] = a + 2;
+        idx[q++] = a + 1; idx[q++] = a + 3; idx[q++] = a + 2;
+      }
+      for (let s = 0; s < VR_SEG * 2; s++) this.vU[base + s] = (s & 1);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(this.vpos, 3));
+    geo.setAttribute('aA', new THREE.BufferAttribute(this.vA, 1));
+    geo.setAttribute('aT', new THREE.BufferAttribute(this.vT, 1));
+    geo.setAttribute('aU', new THREE.BufferAttribute(this.vU, 1));
+    geo.setIndex(new THREE.BufferAttribute(idx, 1));
+    this.mesh = new THREE.Mesh(geo, new THREE.ShaderMaterial({
+      vertexShader: VR_VERT, fragmentShader: VR_FRAG,
+      transparent: true, depthWrite: false, blending: THREE.NormalBlending,
+    }));
+    this.mesh.frustumCulled = false;
+    this.mesh.layers.set(1);       // FX layer: after cloud blend, depth-tested
+    scene.add(this.mesh);
+    this._t = new THREE.Vector3(); this._s = new THREE.Vector3();
+    this._v1 = new THREE.Vector3(); this._v2 = new THREE.Vector3();
+  }
+
+  _newRibbon() {
+    // ring buffer of recorded wingtip points: pos/intensity/stall/birth time
+    return {
+      cx: new Float32Array(VR_SEG * 3), a: new Float32Array(VR_SEG),
+      st: new Uint8Array(VR_SEG), born: new Float32Array(VR_SEG),
+      head: -1, len: 0, attached: false, lastX: 0, lastY: 0, lastZ: 0,
+      lastT: -1, ph: this.rngPhase(),
+    };
+  }
+  rngPhase() { return Math.random() * 100; }
+
+  // call every frame per jet: id, both wingtip world positions, 0..1
+  // intensity, stall flag. k < 0.05 detaches the head (trail dissipates).
+  feed(id, tipL, tipR, k, stall) {
+    let pair = this.pairs.get(id);
+    if (!pair) {
+      const i = this.free.pop();
+      if (i === undefined) return;                    // pool exhausted: skip
+      pair = { i, L: this._newRibbon(), R: this._newRibbon(), lastFed: this.clock };
+      this.pairs.set(id, pair);
+    }
+    pair.lastFed = this.clock;
+    this._feedRibbon(pair.L, tipL, k, stall);
+    this._feedRibbon(pair.R, tipR, k, stall);
+  }
+
+  _feedRibbon(rb, tip, k, stall) {
+    const active = k > 0.05;
+    if (!active) { rb.attached = false; return; }
+    if (!rb.attached) {                              // fresh attach: clear history
+      rb.len = 0; rb.head = -1;
+      rb.attached = true;
+    }
+    const moved = rb.head < 0 ||
+      Math.abs(tip.x - rb.lastX) + Math.abs(tip.y - rb.lastY) + Math.abs(tip.z - rb.lastZ) > 2.2;
+    const timed = this.clock - rb.lastT > 0.04;
+    if (rb.head >= 0 && !moved && !timed) {          // just refresh head pos
+      const h = rb.head;
+      rb.cx[h * 3] = tip.x; rb.cx[h * 3 + 1] = tip.y; rb.cx[h * 3 + 2] = tip.z;
+      return;
+    }
+    // record new head point; stall buffet is baked in as frozen jitter so it
+    // stays behind in the air instead of wiggling with the jet
+    let x = tip.x, y = tip.y, z = tip.z;
+    if (stall) {
+      const w = this.clock * 9 + rb.ph;
+      x += Math.sin(w * 1.7) * (0.5 + 1.5 * Math.random());
+      y += Math.sin(w * 2.3 + 1.3) * (0.5 + 1.5 * Math.random());
+      z += Math.cos(w * 1.9) * (0.5 + 1.5 * Math.random());
+    }
+    rb.head = (rb.head + 1) % VR_SEG;
+    rb.cx[rb.head * 3] = x; rb.cx[rb.head * 3 + 1] = y; rb.cx[rb.head * 3 + 2] = z;
+    rb.a[rb.head] = k; rb.st[rb.head] = stall ? 1 : 0;
+    rb.born[rb.head] = this.clock;
+    if (rb.len < VR_SEG) rb.len++;
+    rb.lastX = tip.x; rb.lastY = tip.y; rb.lastZ = tip.z; rb.lastT = this.clock;
+  }
+
+  update(dt, camera) {
+    this.clock += dt;
+    if (camera) this.camPos.copy(camera.position);
+    // release pairs whose jet stopped feeding (killed / despawned)
+    for (const [id, pair] of this.pairs) {
+      if (this.clock - pair.lastFed > VR_WINDOW) {
+        this.pairs.delete(id); this.free.push(pair.i);
+      }
+    }
+    const V = this.vpos, A = this.vA, T = this.vT;
+    for (const pair of this.pairs.values()) {
+      this._buildRibbon(pair.L, pair.i * 2);
+      this._buildRibbon(pair.R, pair.i * 2 + 1);
+    }
+    this.mesh.geometry.attributes.position.needsUpdate = true;
+    this.mesh.geometry.attributes.aA.needsUpdate = true;
+    this.mesh.geometry.attributes.aT.needsUpdate = true;
+  }
+
+  _buildRibbon(rb, slot) {
+    const base = slot * VR_SEG * 2;
+    const V = this.vpos, A = this.vA, T = this.vT;
+    if (rb.len < 2) {
+      for (let s = 0; s < VR_SEG * 2; s++) { A[base + s] = 0; T[base + s] = 0; }
+      return;
+    }
+    // trim tail: trail longer than VR_MAXLEN meters, or oldest point expired
+    if (rb.len > 2) {
+      let plen = 0;
+      for (let n = 1; n < rb.len; n++) {
+        const ia = (rb.head - n + VR_SEG * 2) % VR_SEG;         // tail-ward
+        const ib = (rb.head - n + 1 + VR_SEG * 2) % VR_SEG;     // one newer
+        const dx = rb.cx[ia * 3] - rb.cx[ib * 3], dy = rb.cx[ia * 3 + 1] - rb.cx[ib * 3 + 1], dz = rb.cx[ia * 3 + 2] - rb.cx[ib * 3 + 2];
+        plen += Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (plen > VR_MAXLEN || this.clock - rb.born[ib] > VR_WINDOW) {
+          rb.len = n + 1;
+          break;
+        }
+      }
+    }
+    const t = this._t, side = this._s, view = this._v1;
+    // distance LOD: past ~1.5 km a ribbon spans too few pixels for
+    // per-point resolution — sample every 2nd point to halve vertex writes
+    const hx = rb.cx[rb.head * 3], hy = rb.cx[rb.head * 3 + 1], hz = rb.cx[rb.head * 3 + 2];
+    const camD2 = (hx - this.camPos.x) ** 2 + (hy - this.camPos.y) ** 2 + (hz - this.camPos.z) ** 2;
+    const stride = camD2 > VR_FAR2 ? 2 : 1;
+    let j = 0;
+    for (let n = 0; n < rb.len; n += stride) {
+      const i = (rb.head - n + VR_SEG * 2) % VR_SEG;
+      const age = Math.min(1, (this.clock - rb.born[i]) / VR_WINDOW);
+      const a = rb.a[i], st = rb.st[i];
+      // hybrid width: thin filament at light intensity, fog band at full pull
+      const w = (0.35 + Math.pow(a, 1.3) * (2.2 + st * 1.6)) * (0.5 + 1.5 * age) * 0.5;
+      // tangent from the next sampled neighbor: older normally, newer at the tail
+      let n0;
+      if (n + stride > rb.len - 1 && n > 0) n0 = n - stride;
+      else n0 = n + stride;
+      const j0 = (rb.head - n0 + VR_SEG * 2) % VR_SEG;
+      t.set(rb.cx[j0 * 3] - rb.cx[i * 3], rb.cx[j0 * 3 + 1] - rb.cx[i * 3 + 1], rb.cx[j0 * 3 + 2] - rb.cx[i * 3 + 2]);
+      view.set(rb.cx[i * 3] - this.camPos.x, rb.cx[i * 3 + 1] - this.camPos.y, rb.cx[i * 3 + 2] - this.camPos.z);
+      side.crossVectors(t, view);
+      const sl = side.length();
+      if (sl > 1e-4) side.multiplyScalar(1 / sl); else side.set(1, 0, 0);
+      const o = base + j * 2;
+      V[o * 3] = rb.cx[i * 3] + side.x * w; V[o * 3 + 1] = rb.cx[i * 3 + 1] + side.y * w; V[o * 3 + 2] = rb.cx[i * 3 + 2] + side.z * w;
+      V[(o + 1) * 3] = rb.cx[i * 3] - side.x * w; V[(o + 1) * 3 + 1] = rb.cx[i * 3 + 1] - side.y * w; V[(o + 1) * 3 + 2] = rb.cx[i * 3 + 2] - side.z * w;
+      const alpha = 0.16 + 0.5 * Math.pow(a, 1.2);
+      A[o] = alpha; A[o + 1] = alpha;
+      T[o] = age; T[o + 1] = age;
+      j++;
+    }
+    // degenerate any leftover slots from a shrunken or LOD-strided ribbon
+    for (let k = j; k < VR_SEG; k++) {
+      const o = base + k * 2;
+      A[o] = 0; A[o + 1] = 0;
+    }
+  }
+}
+
 export class Effects {
   constructor(scene) {
     this.rng = mulberry32(0xC0FFEE);
@@ -126,6 +329,7 @@ export class Effects {
     // testing, so nearer smoke/fire is never covered by farther clouds
     this.add.points.layers.set(1);
     this.smoke.points.layers.set(1);
+    this.vort = new VortexRibbons(scene);
     this._v = V();
     this.scene = scene;
     // shockwave rings: flat expanding circles hugging the sea/ground
@@ -357,20 +561,6 @@ export class Effects {
     });
   }
 
-  // wingtip vortex stream: k = 0..1 aerodynamic intensity (hard pull / high
-  // AOA / stall); stall adds the ragged buffet churn of separated flow
-  wingVortex(pos, k, stall = false) {
-    const r = this.rng;
-    this.spawn(this.smoke, {
-      pos, life: 0.75 + r() * 0.4 + k * 0.6, drag: 1,
-      turb: stall ? 2.6 : 0.9 + k * 0.9,
-      c0: [0.96, 0.97, 1.0], c1: [0.82, 0.84, 0.88],
-      a0: 0.2 + k * 0.34, a1: 0,
-      s0: 1.3 + r() * 0.5,
-      s1: (5.5 + k * 5 + (stall ? 2.5 : 0)) * (0.85 + r() * 0.35),
-    });
-  }
-
   damageSmoke(pos, vel, dark) {
     this.spawn(this.smoke, {
       pos, vel, life: 1.3 + this.rng() * 0.6, drag: 0.95, gravity: -3, turb: 2,
@@ -520,10 +710,15 @@ export class Effects {
     this.ring(pos, 1.3 * scale);
   }
 
-  update(dt) {
+  // per-jet, per-frame wingtip vortex feeding (see VortexRibbons.feed)
+  vortexFeed(id, tipL, tipR, k, stall) {
+    this.vort.feed(id, tipL, tipR, k, stall);
+  }
+
+  update(dt, camera) {
     this.add.update(dt);
     this.smoke.update(dt);
-    // pooled fire glows decay to zero
+    this.vort.update(dt, camera);    // pooled fire glows decay to zero
     for (const f of this.fireLights) {
       if (f.t <= 0) continue;
       f.t -= dt;
