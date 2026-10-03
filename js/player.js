@@ -3,7 +3,7 @@
 // toward it (bank first, then pull, G/AOA-limited); the camera anchors to the
 // aim direction, not the nose. W/A/S/D give direct stick authority while held.
 import * as THREE from 'three';
-import { clamp, damp } from './utils.js';
+import { clamp, damp, smoothstep } from './utils.js';
 import { GROUND_CLEAR_AGL } from './utils.js';
 import { cornerSpeedKMH } from './flightmodel.js';
 import { buildJet } from './jet.js';
@@ -329,8 +329,17 @@ export class Player {
       viewDir.applyQuaternion(this._qTmp).normalize();
     }
     if (this.lookPitch !== 0) {
-      this._v2.crossVectors(viewDir, new THREE.Vector3(0, 1, 0)).normalize().negate(); // camera right
-      this._qTmp.setFromAxisAngle(this._v2, this.lookPitch);
+      // camera right = viewDir x world up — but near the vertical pole that
+      // cross degenerates into a zero axis (gimbal lock: pitch dies, yaw
+      // turns into roll). Blend in the WING axis as the pole fallback: the
+      // camera orbits the plane, so its axes can never align with the view
+      const cross = this._v2.crossVectors(viewDir, new THREE.Vector3(0, 1, 0));
+      const cl = cross.length();
+      const poleK = smoothstep(0.90, 0.985, Math.abs(viewDir.y));   // 0 level -> 1 pole
+      let axis;
+      if (cl < 1e-4) axis = this.body.rightVec(new THREE.Vector3());
+      else axis = cross.divideScalar(cl).negate().lerp(this.body.rightVec(new THREE.Vector3()), poleK).normalize();
+      this._qTmp.setFromAxisAngle(axis, this.lookPitch);
       viewDir.applyQuaternion(this._qTmp).normalize();
     }
     // the sight IS the free view's screen center — it may point anywhere,
@@ -350,9 +359,11 @@ export class Player {
     if (this.camPos.y < ground + 4) this.camPos.y = ground + 4;
 
     this.upVec(this._v2);
-    // camera never rolls with the plane (level horizon); the jet's up is only
-    // used as a fallback when the view points near straight up/down
-    const upBlend = Math.abs(viewDir.y) > 0.95 ? 1 : 0;
+    // camera never rolls with the plane (level horizon); near the vertical
+    // pole a level horizon is undefined, so the up vector blends SMOOTHLY
+    // into the jet's up — the old 0/1 hard switch snapped the horizon by
+    // tens of degrees at the crossing
+    const upBlend = smoothstep(0.90, 0.985, Math.abs(viewDir.y));
     const up = new THREE.Vector3(0, 1, 0).lerp(this._v2, upBlend).normalize();
 
     if (this.camShake > 0) {
