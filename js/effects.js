@@ -554,7 +554,7 @@ export class Effects {
 
   spawn(layer, o) {
     layer.push({
-      pos: o.pos.clone(), vel: o.vel || new THREE.Vector3(),
+      pos: o.pos.clone(), vel: o.vel ? o.vel.clone() : new THREE.Vector3(),
       age: -(o.delay ?? 0), life: o.life,
       c0: o.c0, c1: o.c1, a0: o.a0 ?? 1, a1: o.a1 ?? 0,
       s0: o.s0, s1: o.s1 ?? o.s0,
