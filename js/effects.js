@@ -144,6 +144,57 @@ void main() {
   gl_FragColor = vec4(col, a);
 }`;
 
+// --- transonic vapor cone (音爆云): an open cone shell that rides the
+// aircraft through Mach 1. Silhouette-weighted alpha fakes the scattering
+// volume — edges read dense, face-on reads thin — with the mist fading
+// toward the open base. ---
+const CONE_VERT = `
+varying vec3 vN; varying vec3 vV; varying float vY; varying vec3 vLocal;
+void main() {
+  vec4 wp = modelMatrix * vec4(position, 1.0);
+  vN = normalize(mat3(modelMatrix) * normal);
+  vV = normalize(cameraPosition - wp.xyz);
+  vY = uv.y;
+  vLocal = position;
+  gl_Position = projectionMatrix * viewMatrix * wp;
+}`;
+const CONE_FRAG = `
+uniform float uAlpha; uniform float uTime;
+varying vec3 vN; varying vec3 vV; varying float vY; varying vec3 vLocal;
+// procedural mist: value-noise fbm sampled in LOCAL Cartesian space
+// (seam-free, unlike uv.x which wraps around the cone), drifting with time
+float chash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float cnoise(vec2 p){
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(chash(i), chash(i + vec2(1.0, 0.0)), u.x),
+             mix(chash(i + vec2(0.0, 1.0)), chash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+float fbm(vec2 p){
+  float v = 0.0, a = 0.5;
+  for (int i = 0; i < 4; i++) { v += a * cnoise(p); p = p * 2.03 + 17.13; a *= 0.5; }
+  return v;
+}
+void main() {
+  float rim = 1.0 - abs(dot(normalize(vN), normalize(vV)));
+  // violent churn: the whole noise domain RE-SEEDS in ~16 Hz steps on top
+  // of a fast drift — transonic mist boils, it never slides. vLocal.xy is
+  // continuous across the wall/cap seam, so the closed volume reads as one
+  // cloud, not two surfaces stapled together
+  float tq = floor(uTime * 16.0);
+  vec2 np = vLocal.xy * 3.2
+    + vec2(chash(vec2(tq, 1.7)) - 0.5, chash(vec2(tq, 9.3)) - 0.5) * 6.0
+    + vec2(uTime * 1.8, -uTime * 1.2);
+  float mist = smoothstep(0.18, 0.82, fbm(np));    // billowy patches, not flat fog
+  // annular cloud: the condensation forms a RING around the airframe — the
+  // hot exhaust axis keeps the center clear, so the fuselage and nozzles
+  // read through the hole instead of being swallowed by mist
+  float hole = smoothstep(0.30, 0.55, length(vLocal.xy));
+  float a = uAlpha * hole * (0.35 + 0.65 * mist) * (0.75 + 0.25 * rim) * (0.85 + 0.15 * vY);
+  gl_FragColor = vec4(vec3(0.92, 0.95, 1.0), a);
+}`;
+const _cf = new THREE.Vector3();
+
 class VortexRibbons {
   constructor(scene) {
     this.clock = 0;
@@ -410,6 +461,25 @@ export class Effects {
       m.layers.set(1);
       scene.add(m);
       this.ringPool.push(m);
+    }
+    // transonic vapor cones: open cone shells that ride an aircraft through
+    // Mach 1 (player + enemies), following the owner for their brief life
+    this.cones = [];
+    this.conePool = [];
+    const coneGeo = new THREE.ConeGeometry(1, 1, 48, 1, false);   // CLOSED: wall + base cap — a volume, not a funnel
+    coneGeo.translate(0, 0.5, 0);          // apex at +1, base ring at 0 (unit height)
+    coneGeo.rotateX(-Math.PI / 2);         // +Y -> -Z: apex points FORWARD
+    for (let i = 0; i < 5; i++) {
+      const m = new THREE.Mesh(coneGeo, new THREE.ShaderMaterial({
+        vertexShader: CONE_VERT, fragmentShader: CONE_FRAG,
+        uniforms: { uAlpha: { value: 0 }, uTime: { value: 0 } },
+        transparent: true, depthWrite: false, side: THREE.DoubleSide,
+      }));
+      m.visible = false;
+      m.frustumCulled = false;
+      m.layers.set(1);
+      scene.add(m);
+      this.conePool.push(m);
     }
     // debris chunks: small dark tumbling tetra shards
     this.debrisList = [];   // NOT `debris` — that name is the emitter method
@@ -747,6 +817,24 @@ export class Effects {
     this.rings.push({ m, t: 0, scale });
   }
 
+  // transonic vapor cone: rides the owner for as long as it HOLDS the
+  // transonic band — sustain=true keeps it formed (gently breathing),
+  // sustain=false releases it to blow off and gutter out. Callers drive it
+  // every frame (position/attitude refreshed in update — at M1 the plane
+  // covers ~400 m/s, a world-static cone would be left behind instantly).
+  vaporCone(owner, sustain) {
+    let c = this.cones.find(x => x.owner === owner);
+    if (sustain) {
+      if (!c) {
+        const m = this.conePool.find(x => !x.visible);
+        if (!m) return;
+        m.visible = true;
+        c = { m, owner, t: 0, form: 0, phase: 0, sustain: true };
+        this.cones.push(c);
+      } else c.sustain = true;
+    } else if (c) c.sustain = false;
+  }
+
   // debris chunks thrown out of a destruction
   debris(pos, n = 10) {
     for (let i = 0; i < n; i++) {
@@ -890,6 +978,32 @@ export class Effects {
       const e = 1 - Math.pow(1 - r.t, 2.4);
       r.m.scale.setScalar(2 + e * 68 * r.scale);
       r.m.material.opacity = 0.65 * (1 - r.t);
+    }
+    // vapor cones: a closed, mist-filled dish (mouth 10.4 m, 6 m deep,
+    // apex at mid-fuselage) riding the M 0.98-1.05 band. The FX layer
+    // depth-tests it against the opaque airframe, so the closed far side
+    // hides behind the plane and only the enveloping mist shows in front.
+    // Opacity snaps to full in ~30 ms; leaving the band blows it off in
+    // ~0.3 s
+    for (let i = this.cones.length - 1; i >= 0; i--) {
+      const c = this.cones[i];
+      if (!c.owner || c.owner.dying || c.owner.dead) c.sustain = false;
+      c.form = Math.min(1, c.form + dt / 0.03);     // opacity snaps in
+      c.phase += dt;
+      if (!c.sustain) c.t += dt;                    // death clock runs only when released
+      const k = c.t / 0.3;
+      if (k >= 1) { c.m.visible = false; this.cones.splice(i, 1); continue; }
+      c.owner.forward(_cf);
+      c.m.position.copy(c.owner.position).addScaledVector(_cf, -6);    // apex at mid-fuselage
+      c.m.quaternion.copy(c.owner.quaternion);
+      const grow = 0.85 + 0.15 * c.form + (c.sustain
+        ? 0.03 * Math.sin(c.phase * 9)               // held: faint shimmer
+        : 0.35 * k);                                 // released: blows back as it dies
+      c.m.scale.set(5.2 * grow, 5.2 * grow, 6);
+      c.m.material.uniforms.uAlpha.value = c.form * (c.sustain
+        ? 1.0
+        : Math.pow(1 - k, 1.5));
+      c.m.material.uniforms.uTime.value = c.phase;   // drives the mist drift
     }
     for (let i = this.debrisList.length - 1; i >= 0; i--) {
       const d = this.debrisList[i];

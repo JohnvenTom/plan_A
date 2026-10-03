@@ -13,7 +13,7 @@ import { Effects } from './effects.js';
 import { HUD } from './hud.js';
 import { PostFX } from './postfx.js';
 import { GameAudio } from './audio.js';
-import { clamp, smoothstep } from './utils.js';
+import { clamp, smoothstep, machOf } from './utils.js';
 
 const q = new URLSearchParams(location.search);
 const FREEZE_T = q.has('t') ? Math.max(0, parseFloat(q.get('t')) || 0) : null;
@@ -290,11 +290,17 @@ function update(dt) {
     }
     enemies.events.length = 0;
 
-    // supersonic boom: one-shot ring + thunder when crossing the sound barrier
+    // supersonic boom: one-shot ring + thunder when crossing the sound
+    // barrier; the vapor cone is the M 0.98-1.05 transonic band itself —
+    // present the whole time the aircraft sits in it, gone outside it
     if (player.alive) {
-      if (!G._mach && player.speed > 340) { G._mach = true; effects.ring(player.position, 1.6); audio.sonicBoom(); }
-      else if (G._mach && player.speed < 320) G._mach = false;
-    }
+      // Mach gate on the LOCAL speed of sound (standard atmosphere): the
+      // crossing line drops from ~1225 km/h at sea level to ~1063 at 11 km+
+      const pm = machOf(player.speed, player.position.y);
+      if (!G._mach && pm > 1) { G._mach = true; effects.ring(player.position, 1.6); audio.sonicBoom(); }
+      else if (G._mach && pm < 0.95) G._mach = false;
+      effects.vaporCone(player, pm >= 0.98 && pm <= 1.05);
+    } else effects.vaporCone(player, false);
 
     // --- wingtip vortices (AC7-style ribbons): intensity from lift, not
     // speed — hard pulls (G), low-speed high-AOA maneuvers, and full stall
@@ -323,6 +329,9 @@ function update(dt) {
         e.model.anchors.wingL.getWorldPosition(_v);
         e.model.anchors.wingR.getWorldPosition(_v2);
         effects.vortexFeed(e, _v, _v2, vortexOf(e.body, st), st);
+        // enemy transonic band M 0.98-1.05: cone held, visual only
+        const em = machOf(e.speed, e.position.y);
+        effects.vaporCone(e, em >= 0.98 && em <= 1.05);
       }
       if ((e.hp < 25 || e.pilotHit) && !e.dying && Math.random() < 0.5) {
         e.model.anchors.tail.getWorldPosition(_v);

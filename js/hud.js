@@ -4,7 +4,7 @@
 // missile loadout cards with the seeker warmup state, and center warnings
 // with a red edge glow while missiles are inbound.
 import * as THREE from 'three';
-import { clamp, pad } from './utils.js';
+import { clamp, pad, machOf } from './utils.js';
 import { cornerSpeedKMH } from './flightmodel.js';
 
 const CYAN = '#9fe8ff';
@@ -319,6 +319,14 @@ export class HUD {
     this._tape(xL, cy, H, p.speed * 3.6, 20, 100, 1);
     this._drumBox('spd', xL, cy, String(Math.round(p.speed * 3.6)), 'km/h', dt);
     this.text('SPD', xL - 16, cy - H / 2 - 16, 11, CYAN_DIM, 'right', 4);
+    // mach readout: the speed of sound DROPS with altitude (standard
+    // atmosphere), so this — not the km/h tape — is the honest transonic
+    // gauge: M 1.00 is the vapor-cone line at any altitude
+    {
+      const M = machOf(p.speed, p.position.y);
+      const col = M >= 1 ? AMBER : M >= 0.95 ? CYAN : CYAN_DIM;
+      this.text(`M ${M.toFixed(2)}`, xL, cy + 40, 13, col, 'center', 4);
+    }
     // corner-speed (max-G) reference, altitude-compensated (density thins ->
     // crossing rises with alt): lights up inside the ±40 km/h window
     {

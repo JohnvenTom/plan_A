@@ -661,11 +661,13 @@ export class PostFX {
       r.render(this.blendPass.scene, this.blendPass.cam);
       if (scene && camera) {
         // fold blended color back into the RT that still owns the opaque
-        // depth, then overlay the FX layer with correct depth testing
+        // depth, then overlay the FX layer with correct depth testing.
+        // autoClear MUST be off for the copy too — clearing here would wipe
+        // the opaque depth and every FX would paint over the airframe
         this.copyPass.mat.uniforms.tSrc.value = this.sceneRT2.texture;
         r.setRenderTarget(this.sceneRT);
-        r.render(this.copyPass.scene, this.copyPass.cam);
         r.autoClear = false;
+        r.render(this.copyPass.scene, this.copyPass.cam);
         camera.layers.set(1);
         r.render(scene, camera);
         camera.layers.set(0);

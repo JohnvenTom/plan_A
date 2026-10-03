@@ -28,6 +28,17 @@ export const AIRCRAFT_HIT_R = 12;     // gun segment-sphere radius (both sides)
 export const MISSILE_FUSE_R = 28;     // proximity fuse radius (both sides)
 export const GROUND_CLEAR_AGL = 8;    // belly clearance for ground impact
 
+// speed of sound, standard atmosphere: 6.5 K/km troposphere lapse up to
+// the 11 km tropopause, isothermal 216.65 K above. a = 20.05*sqrt(T):
+// 340.3 m/s at sea level, 295.1 m/s in the stratosphere.
+export function speedOfSound(alt) {
+  const T = alt <= 11000 ? 288.15 - 0.0065 * Math.max(0, alt) : 216.65;
+  return 20.047 * Math.sqrt(T);
+}
+export function machOf(speed, alt) {
+  return speed / speedOfSound(alt);
+}
+
 // wrap angle to [-PI, PI]
 export function wrapAngle(a) {
   a = (a + Math.PI) % TAU;
