@@ -427,13 +427,16 @@ void main() {
   gl_FragColor = vec4(col * uOpen, uOpen);
 }`;
 
-// fullscreen passes hard-code clip space; the PIP quad must respect its
-// mesh scale/position (setPipRect) so it stays a corner box, not the screen
+// fullscreen passes hard-code clip space; the PIP quad places itself in NDC
+// via the uNDC uniform (center + half-size) — matrix-free on purpose: the
+// modelViewMatrix path was observed rendering the quad 2x too wide (right
+// edge off-screen) even with correct mesh/camera state on some setups
 const QUAD_XF_VERT = /* glsl */`
+uniform vec4 uNDC;     // cx, cy, halfW, halfH in clip space
 varying vec2 vUv;
 void main() {
   vUv = uv;
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  gl_Position = vec4(uNDC.x + position.x * uNDC.z, uNDC.y + position.y * uNDC.w, 0.0, 1.0);
 }`;
 
 const _pm4 = new THREE.Matrix4();
@@ -511,6 +514,7 @@ export class PostFX {
       tSrc: { value: null }, uOpen: { value: 0 }, uGlitch: { value: 0 },
       uZoom: { value: 1 }, uTime: { value: 0 },
       uBorderUV: { value: new THREE.Vector2(0.01, 0.008) },
+      uNDC: { value: new THREE.Vector4(0, 0, 0.155, 0.1) },
     }, QUAD_XF_VERT);
     this._pipBase = { w: 0.3, h: 0.2 };
 
@@ -612,18 +616,17 @@ export class PostFX {
     u.uGlitch.value = glitch;
     // CRT vertical expansion: near-zero open = collapsed bright line
     const e = open <= 0 ? 0 : (open >= 1 ? 1 : 1 - Math.pow(1 - open, 3));
-    this.pipPass.mesh.scale.y = this._pipBase.h * Math.max(0.05, e);
+    u.uNDC.value.w = this._pipBase.h * 0.5 * Math.max(0.05, e);
     u.uBorderUV.value.set(
       4 / Math.max(2, this._pipBase.w * 0.5 * (innerWidth || 1)),
       2 / Math.max(2, this._pipBase.h * Math.max(0.05, e) * 0.5 * (innerHeight || 1)),
     );
   }
-  // PIP on-screen rect (NDC), mesh scaled to it; border thickness follows
+  // PIP on-screen rect (NDC), quad placed via uNDC; border thickness follows
   // the quad's pixel size so it stays a 4px matte + 2px line at any window
   setPipRect(x, y, w, h) {
     this._pipBase = { w, h };
-    this.pipPass.mesh.scale.set(w, h, 1);
-    this.pipPass.mesh.position.set(x, y, 0);
+    this.pipPass.mat.uniforms.uNDC.value.set(x, y, w * 0.5, h * 0.5);
     const pxW = Math.max(2, w * 0.5 * (innerWidth || 1));
     const pxH = Math.max(2, h * 0.5 * (innerHeight || 1));
     this.pipPass.mat.uniforms.uBorderUV.value.set(1.6 / pxW, 1.1 / pxH);   // ultra-thin

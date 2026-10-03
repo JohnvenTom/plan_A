@@ -2,3 +2,4 @@ node_modules/
 test_kill.mjs
 check_modules.mjs
 test_close.mjs
+serve.log
