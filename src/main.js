@@ -555,13 +555,19 @@ function renderFrame(dt) {
   renderer.render(scene, camera);
   postfx.setPipSource(pipSrc);
   // PIP box: 24% of screen width, TRUE 16:9 by pixels (not screen
-  // fractions) so the seeker image is never stretched; top-right corner
-  // ultra-thin frame + hard viewport-safety: the box ALWAYS lands fully
-  // inside the browser window at any aspect ratio
+  // fractions) so the seeker image is never stretched; ultra-thin frame +
+  // hard viewport-safety: the box ALWAYS lands fully inside the browser
+  // window at any aspect ratio.
+  // LEFT side, high: rides the gap under the screen top, clear of the
+  // speed tape's fixed-px furniture (SPD label sits at h/2-176). It used
+  // to sit right at 0.30h and covered the altitude tape's upper third;
+  // the second clamp keeps the box's bottom edge above the tape on short
+  // windows, the floor keeps it on-screen at all
   const PIP_W = Math.min(0.155, (innerWidth - 40) / innerWidth);
   const PIP_H = Math.min((PIP_W * innerWidth * 9 / 16) / innerHeight, 0.2);
-  const PIP_CX = 1 - PIP_W / 2 - 0.025;
-  const PIP_CY = Math.min(PIP_H / 2 + 0.30, 1 - PIP_H / 2 - 0.05);
+  const PIP_CX = PIP_W / 2 + 0.025;
+  const PIP_CY = Math.max(PIP_H / 2 + 0.02,
+    Math.min(PIP_H / 2 + 0.115, 0.5 - 188 / innerHeight - PIP_H / 2));
   if (pipSrc) {
     postfx.setPip(G.pipOpen, G.pipZoom, G.pipGlitch ?? 0);
     postfx.setPipRect(PIP_CX * 2 - 1, 1 - PIP_CY * 2, PIP_W * 2, PIP_H * 2);
