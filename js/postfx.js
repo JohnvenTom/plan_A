@@ -427,6 +427,13 @@ void main() {
   gl_FragColor = vec4(col * uOpen, uOpen);
 }`;
 
+// plain blit (tSrc -> output)
+const COPY_FRAG = /* glsl */`
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D tSrc;
+void main() { gl_FragColor = texture2D(tSrc, vUv); }`;
+
 // fullscreen passes hard-code clip space; the PIP quad places itself in NDC
 // via the uNDC uniform (center + half-size) — matrix-free on purpose: the
 // modelViewMatrix path was observed rendering the quad 2x too wide (right
@@ -516,6 +523,9 @@ export class PostFX {
       uBorderUV: { value: new THREE.Vector2(0.01, 0.008) },
       uNDC: { value: new THREE.Vector4(0, 0, 0.155, 0.1) },
     }, QUAD_XF_VERT);
+    // plain blit: used to fold the cloud-blended color back into the depth-
+    // carrying scene RT so the FX overlay pass can depth-test correctly
+    this.copyPass = makePass(COPY_FRAG, { tSrc: { value: null } });
     this._pipBase = { w: 0.3, h: 0.2 };
 
     this.setSize(innerWidth, innerHeight);
@@ -632,11 +642,15 @@ export class PostFX {
     this.pipPass.mat.uniforms.uBorderUV.value.set(1.6 / pxW, 1.1 / pxH);   // ultra-thin
   }
 
-  // run the chain to the screen (PIP last, if tSrc bound)
-  composite() {
+  // run the chain to the screen (PIP last, if tSrc bound). scene/camera,
+  // when given, drive the FX overlay stage: transparent FX live on layer 1
+  // and are drawn AFTER the cloud blend, depth-tested against the opaque
+  // depth in sceneRT — so a nearer missile trail can never be painted over
+  // by farther volumetric clouds
+  composite(scene = null, camera = null) {
     const r = this.r;
     // volumetric clouds: march at half res, blend over the scene (full res)
-    const work = (this.cloudPass.mat.uniforms.uCoverage.value > 0.02) ? this.sceneRT2 : this.sceneRT;
+    let work = (this.cloudPass.mat.uniforms.uCoverage.value > 0.02) ? this.sceneRT2 : this.sceneRT;
     if (work === this.sceneRT2) {
       this.cloudPass.mat.uniforms.uTime.value = performance.now() / 1000;
       r.setRenderTarget(this.cloudRT);
@@ -645,6 +659,28 @@ export class PostFX {
       this.blendPass.mat.uniforms.tCloud.value = this.cloudRT.texture;
       r.setRenderTarget(this.sceneRT2);
       r.render(this.blendPass.scene, this.blendPass.cam);
+      if (scene && camera) {
+        // fold blended color back into the RT that still owns the opaque
+        // depth, then overlay the FX layer with correct depth testing
+        this.copyPass.mat.uniforms.tSrc.value = this.sceneRT2.texture;
+        r.setRenderTarget(this.sceneRT);
+        r.render(this.copyPass.scene, this.copyPass.cam);
+        r.autoClear = false;
+        camera.layers.set(1);
+        r.render(scene, camera);
+        camera.layers.set(0);
+        r.autoClear = true;
+        work = this.sceneRT;   // composite source now carries clouds + FX
+      }
+    } else if (scene && camera) {
+      // clear sky: no cloud blend, overlay the FX layer straight onto the
+      // opaque render (same depth-tested path, no copy needed)
+      r.setRenderTarget(this.sceneRT);
+      r.autoClear = false;
+      camera.layers.set(1);
+      r.render(scene, camera);
+      camera.layers.set(0);
+      r.autoClear = true;
     }
     // bright extract
     this.brightPass.mat.uniforms.tScene.value = work.texture;

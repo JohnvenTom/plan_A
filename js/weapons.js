@@ -111,6 +111,7 @@ export class Weapons {
       const m = new THREE.Mesh(tracerGeo, this.tracerMatP);
       m.visible = false;
       m.frustumCulled = false;
+      m.layers.set(1);   // FX layer: drawn over clouds, depth-tested vs opaque
       scene.add(m);
       this.tracerPool.push(m);
     }

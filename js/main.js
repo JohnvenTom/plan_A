@@ -58,6 +58,7 @@ const audio = new GameAudio();
 // post-processing stack + missile-cam picture-in-picture rig
 const postfx = new PostFX(renderer);
 const mslCam = new THREE.PerspectiveCamera(58, 16 / 9, 2, 72000);
+mslCam.layers.enable(1);   // seeker cam sees the FX layer (trails, tracers)
 const mslRT = new THREE.WebGLRenderTarget(480, 270, { type: THREE.HalfFloatType });
 mslRT.depthTexture = new THREE.DepthTexture(480, 270);
 mslRT.depthTexture.type = THREE.UnsignedIntType;
@@ -295,14 +296,25 @@ function update(dt) {
       else if (G._mach && player.speed < 320) G._mach = false;
     }
 
-    // player contrails + damage smoke
+    // --- wingtip vortices (AC7-style): intensity from lift, not speed —
+    // hard pulls (G), low-speed high-AOA maneuvers, and full stall all
+    // pull visible white vortex streams off the wingtips ---
+    const vortexOf = (b, stalling) => {
+      const hiG = clamp((Math.max(0, b.gLoad) - 3.2) / 4.2, 0, 1);
+      const hiAoa = clamp((b.alpha - 0.14) / 0.12, 0, 1);   // past ~8 deg AOA
+      const v = Math.max(hiG * 0.9, hiAoa * 0.75);
+      return stalling ? 1 : v;
+    };
     G.contrailT += dt;
-    const turning = Math.abs(player.ctl.roll) > 0.25 || Math.abs(player.ctl.pitch) > 0.3;
-    if (G.contrailT > 0.03 && (player.speed > 360 || turning) && player.position.y > 1600) {
-      G.contrailT = 0;
-      player.model.anchors.wingL.getWorldPosition(_v);
-      player.model.anchors.wingR.getWorldPosition(_v2);
-      effects.contrail(_v); effects.contrail(_v2);
+    if (player.alive) {
+      const vI = vortexOf(player.body, player.stalling);
+      if (vI > 0.05 && G.contrailT > 0.018 + (1 - vI) * 0.05) {
+        G.contrailT = 0;
+        player.model.anchors.wingL.getWorldPosition(_v);
+        player.model.anchors.wingR.getWorldPosition(_v2);
+        effects.wingVortex(_v, vI, player.stalling);
+        effects.wingVortex(_v2, vI, player.stalling);
+      }
     }
     G.smokeT += dt;
     if (player.hp < 55 && G.smokeT > 0.06 && player.alive) {
@@ -311,6 +323,18 @@ function update(dt) {
       effects.damageSmoke(_v, _v2.set(0, 0, 0), player.hp < 25);
     }
     for (const e of enemies.enemies) {
+      if (!e.dying) {
+        const st = e.body.stall > 0.05 || e.body.alpha > 0.22 || e.body.airspeed < 155;
+        const v = vortexOf(e.body, st);
+        e._vortT = (e._vortT ?? 0) + dt;
+        if (v > 0.05 && e._vortT > 0.028 + (1 - v) * 0.06) {
+          e._vortT = 0;
+          e.model.anchors.wingL.getWorldPosition(_v);
+          e.model.anchors.wingR.getWorldPosition(_v2);
+          effects.wingVortex(_v, v, st);
+          effects.wingVortex(_v2, v, st);
+        }
+      }
       if ((e.hp < 25 || e.pilotHit) && !e.dying && Math.random() < 0.5) {
         e.model.anchors.tail.getWorldPosition(_v);
         effects.damageSmoke(_v, _v2.set(0, 0, 0), true);
@@ -431,11 +455,13 @@ function renderFrame(dt) {
   if (playingLike) {
     camera.getWorldDirection(_pv);
     const sunDot = _pv.dot(sky.sunDir);
-    // facing the sun the eye STOPS DOWN (whole frame dims, sun itself
-    // blooms) — the old positive boost blew the sky out
-    exT = 1.0 - Math.max(0, sunDot - 0.3) * 0.34 + immerse * 0.35 + (G.night01 ?? 0) * 0.18;
+    // facing the sun the eye STOPS DOWN hard (whole frame dims, sun itself
+    // blooms) — kicks in from sunDot 0.2 and bottoms out around 0.6
+    exT = 1.0 - Math.max(0, sunDot - 0.2) * 0.55 + immerse * 0.35 + (G.night01 ?? 0) * 0.18;
   }
-  G.exposure += (exT - G.exposure) * 0.045;
+  // pupil response: stop-down is FAST (~0.13 s — no glare window when you
+  // turn into the sun), recovery is slow (~1.5 s) like a real eye opening
+  G.exposure += (exT - G.exposure) * (exT < G.exposure ? 0.18 : 0.026);
 
   // --- grading: golden-hour warm / night cool / storm desaturated ---
   const day01 = G.day01 ?? 0.46;
@@ -538,7 +564,7 @@ function renderFrame(dt) {
     postfx.setPip(G.pipOpen, G.pipZoom, G.pipGlitch ?? 0);
     postfx.setPipRect(PIP_CX * 2 - 1, 1 - PIP_CY * 2, PIP_W * 2, PIP_H * 2);
   }
-  postfx.composite();
+  postfx.composite(scene, camera);
 
   // PIP border rect for the HUD canvas (pixels), same fractions
   const rect = pipSrc ? {
@@ -675,7 +701,7 @@ function frame() {
     postfx.beginScene();
     renderer.render(scene, camera);
     postfx.setPipSource(null);
-    postfx.composite();
+    postfx.composite(scene, camera);
     hud.draw(dt, { state: 'title' });
   } else {
     if (G.state === 'gameover' && input.pressedRaw('Enter')) { startGame(); }

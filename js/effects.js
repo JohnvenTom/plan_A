@@ -122,6 +122,10 @@ export class Effects {
     const V = () => new THREE.Vector3();
     this.add = new ParticleLayer(scene, MAX_ADD, THREE.AdditiveBlending, 0.02);
     this.smoke = new ParticleLayer(scene, MAX_SMOKE, THREE.NormalBlending, 0.12);
+    // FX live on layer 1: drawn AFTER the cloud blend with opaque-depth
+    // testing, so nearer smoke/fire is never covered by farther clouds
+    this.add.points.layers.set(1);
+    this.smoke.points.layers.set(1);
     this._v = V();
     this.scene = scene;
     // shockwave rings: flat expanding circles hugging the sea/ground
@@ -136,6 +140,7 @@ export class Effects {
       m.rotation.x = -Math.PI / 2;
       m.visible = false;
       m.frustumCulled = false;
+      m.layers.set(1);
       scene.add(m);
       this.ringPool.push(m);
     }
@@ -147,6 +152,7 @@ export class Effects {
     for (let i = 0; i < 48; i++) {
       const m = new THREE.Mesh(chunkGeo, chunkMat);
       m.visible = false;
+      m.layers.set(1);
       scene.add(m);
       this.debrisPool.push(m);
     }
@@ -156,6 +162,7 @@ export class Effects {
     for (let i = 0; i < 4; i++) {
       const L = new THREE.PointLight(0xff8a3a, 0, 1700, 2);
       L.visible = false;
+      L.layers.enable(1);   // fire glow lights the FX layer too
       scene.add(L);
       this.fireLights.push({ L, t: 0, dur: 1, k: 0 });
     }
@@ -178,6 +185,7 @@ export class Effects {
       const m = new THREE.Mesh(chunkGeos[i % 4], this.chunkMatBig);
       m.visible = false;
       m.frustumCulled = false;
+      m.layers.set(1);
       scene.add(m);
       this.bigChunks.push({ m, v: new THREE.Vector3(), spin: new THREE.Vector3(), t: 0, life: 0, burnT: 0, on: false });
     }
@@ -198,6 +206,8 @@ export class Effects {
       };
       const round = mk(), hStreak = mk(), vStreak = mk();
       g.visible = false;
+      g.traverse(o => o.layers.set(1));
+      g.layers.set(1);
       scene.add(g);
       this.halos.push({ g, round, hStreak, vStreak, t: 0, dur: 0.42, size: 200 });
     }
@@ -347,11 +357,17 @@ export class Effects {
     });
   }
 
-  contrail(pos) {
+  // wingtip vortex stream: k = 0..1 aerodynamic intensity (hard pull / high
+  // AOA / stall); stall adds the ragged buffet churn of separated flow
+  wingVortex(pos, k, stall = false) {
+    const r = this.rng;
     this.spawn(this.smoke, {
-      pos, life: 1.9 + this.rng() * 0.5, drag: 1, turb: 0.5,
-      c0: [0.95, 0.96, 1.0], c1: [0.8, 0.82, 0.86], a0: 0.34, a1: 0,
-      s0: 1.6, s1: 7,
+      pos, life: 0.75 + r() * 0.4 + k * 0.6, drag: 1,
+      turb: stall ? 2.6 : 0.9 + k * 0.9,
+      c0: [0.96, 0.97, 1.0], c1: [0.82, 0.84, 0.88],
+      a0: 0.2 + k * 0.34, a1: 0,
+      s0: 1.3 + r() * 0.5,
+      s1: (5.5 + k * 5 + (stall ? 2.5 : 0)) * (0.85 + r() * 0.35),
     });
   }
 

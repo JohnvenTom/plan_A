@@ -326,9 +326,11 @@ export class Sky {
 
     // --- lighting: sun + sky hemisphere, one shared direction ---
     this.sun = new THREE.DirectionalLight(0xffd9a8, 2.9);
+    this.sun.layers.enable(1);   // also lights the FX overlay pass
     this.sun.position.copy(this.sunDir).multiplyScalar(10000);
     scene.add(this.sun);
     this.hemi = new THREE.HemisphereLight(0x9db8e8, 0x9a7350, 1.3);
+    this.hemi.layers.enable(1);
     scene.add(this.hemi);
 
     // --- distance haze (FogExp2), color = horizon band average ---
