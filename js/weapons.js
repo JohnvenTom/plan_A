@@ -27,6 +27,15 @@ const LOCK_RANGE = 20000;
 const SEEKER_RANGE = 5200;                        // IR seeker heat detection
 const AMMO_REGEN = { ir: 5.5, radar: 8 };         // s per missile, per pool
 
+// a guidance target counts only while it is a LIVE body: enemies flag death
+// with dying/dead, the player with alive, flares with neither (they die by
+// leaving flareList). A corpse that sets only one convention — notably the
+// 70% instant kill (dead without dying) — must not hold locks or steer
+// missiles into orbit around its frozen position.
+function liveTarget(t) {
+  return !!t && !t.dying && !t.dead && t.alive !== false;
+}
+
 function tracerMaterial() {
   return new THREE.MeshBasicMaterial({
     color: 0xffc866, transparent: true, opacity: 0.95,
@@ -272,7 +281,7 @@ export class Weapons {
     const range = LOCK_RANGE;
     let best = null, bestDot = BASKET_DOT;
     for (const e of enemies) {
-      if (e.dying) continue;
+      if (!liveTarget(e)) continue;
       _v.copy(e.position).sub(player.position);
       const dist = _v.length();
       if (dist > range || dist < 90) continue;
@@ -303,7 +312,7 @@ export class Weapons {
     _v.set(0, 0, -1).applyQuaternion(ms.quat);
     let best = null, bestDot = 0.87;   // ~29 deg seeker cone
     const consider = (t) => {
-      if (!t || t.dying || t.alive === false) return;
+      if (!liveTarget(t)) return;
       if (t === ms.owner) return;                 // seeker ignores the launcher
       if (ms.fromPlayer && t === player) return;   // no self-hits
       _v2.copy(t.position).sub(ms.pos);
@@ -332,7 +341,7 @@ export class Weapons {
     _v.copy(t.position).sub(player.position);
     const d = _v.length() || 1;
     this.lockConeDot = _v.divideScalar(d).dot(player.forward(_v2));
-    const valid = !t.dying && t.alive !== false &&
+    const valid = liveTarget(t) &&
       t.position.distanceTo(player.position) < range &&
       this.lockConeDot > ENV_DOT;
     if (!valid) {
@@ -423,7 +432,7 @@ export class Weapons {
       if (d < bestDist) { bestDist = d; best = src; bestCone = cone; }
     };
     for (const e of enemies) {
-      if (e.dying || e.alive === false) continue;
+      if (!liveTarget(e)) continue;
       consider(e.position, e);
     }
     for (const f of this.flareList) consider(f.pos, f);
@@ -527,7 +536,7 @@ export class Weapons {
       ms.pos.addScaledVector(ms.vel, dt);
       return;
     }
-    const hasTarget = ms.target && !ms.target.dying && ms.target.alive !== false;
+    const hasTarget = liveTarget(ms.target);
     if (hasTarget) {
       const tp = ms.target.position ?? ms.target.pos;   // flares carry .pos
       const dist = ms.pos.distanceTo(tp);
@@ -686,7 +695,7 @@ export class Weapons {
       // cloud from the target near the engagement, the window relaxes to a
       // lazy ±33° beam ("48 机动") and locks faster — chaff enables the
       // maneuver, it never decoys the seeker by itself.
-      if (ms.kind === 'radar' && ms.target && !ms.target.dying && ms.target.alive !== false) {
+      if (ms.kind === 'radar' && liveTarget(ms.target)) {
         _v.copy(ms.target.pos ?? ms.target.position).sub(ms.pos);
         const losLen = _v.length() || 1;
         _v.divideScalar(losLen);
@@ -737,7 +746,7 @@ export class Weapons {
       let boom = false, boomPos = ms.pos.clone();
       const armed = ms.life > ms.armT;
       const fuseHit = (t) => {
-        if (!t || t.dying || t.alive === false) return;
+        if (!liveTarget(t)) return;
         if (t === ms.owner) return;               // launcher immunity
         if (ms.fromPlayer && t === player) return;
         if (!armed) return;
