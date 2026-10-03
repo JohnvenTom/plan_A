@@ -456,27 +456,29 @@ export class Effects {
       scene.add(m);
       this.bigChunks.push({ m, v: new THREE.Vector3(), spin: new THREE.Vector3(), t: 0, life: 0, burnT: 0, on: false });
     }
-    // explosion HALOS: cross-starburst glow — a round core sprite plus a wide
-    // horizontal streak and a short vertical one (additive, bloom amplifies)
+    // blast-kit toggle (wired from the settings panel by main; the streak
+    // half of the kit is gated HUD-side via state)
+    this.blastGhosts = true;
+    // explosion HALOS: a hot round core only — the anamorphic pair (wide
+    // horizontal streaks) lives on the HUD glass now, screen-space like
+    // the sun kit's, so it reads full-width at any range. Core color is
+    // the fireball's own white-gold.
     this.halos = [];
+    this.killFlares = [];   // big booms -> HUD lens kit (drained by main)
     const haloTex = makeHaloTexture();
     for (let i = 0; i < 4; i++) {
       const g = new THREE.Group();
-      const mk = () => {
-        const mat = new THREE.SpriteMaterial({
-          map: haloTex, color: new THREE.Color(2.6, 1.85, 1.05),
-          blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0,
-        });
-        const s = new THREE.Sprite(mat);
-        g.add(s);
-        return s;
-      };
-      const round = mk(), hStreak = mk(), vStreak = mk();
+      const mat = new THREE.SpriteMaterial({
+        map: haloTex, color: new THREE.Color(3.2, 2.3, 1.2),
+        blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0,
+      });
+      const round = new THREE.Sprite(mat);
+      g.add(round);
       g.visible = false;
       g.traverse(o => o.layers.set(1));
       g.layers.set(1);
       scene.add(g);
-      this.halos.push({ g, round, hStreak, vStreak, t: 0, dur: 0.42, size: 200 });
+      this.halos.push({ g, round, t: 0, dur: 0.42, size: 200 });
     }
   }
 
@@ -535,8 +537,9 @@ export class Effects {
     this.halo(pos, scale);
   }
 
-  // cross-starburst glow: round core + wide horizontal streak + short
-  // vertical one; inflates fast then gutters out (~0.4 s)
+  // anamorphic blast glow: hot core flash, inflates fast then gutters out
+  // (~0.4 s). EVERY explosion also rings the HUD lens kit (streak + ghost
+  // train; ghost size scales with the blast).
   halo(pos, scale = 1) {
     let h = this.halos.find(x => x.t <= 0);
     if (!h) h = this.halos[0];
@@ -544,6 +547,9 @@ export class Effects {
     h.size = 190 * (0.7 + scale * 0.55);
     h.g.position.copy(pos);
     h.g.visible = true;
+    if (this.blastGhosts && this.killFlares.length < 4) {
+      this.killFlares.push({ pos: pos.clone(), t: 0, k: Math.min(1.6, scale) });
+    }
   }
 
   // the airframe breaks apart: 4-6 big burning chunks fork out along the
@@ -824,7 +830,7 @@ export class Effects {
         this.fireFlash(f.pos, 0.85 * f.scale * k, 0.42);
       }
     }
-    // halos: inflate fast, gutter out
+    // halos: core inflates fast then gutters out (streaks live on the HUD)
     for (const h of this.halos) {
       if (h.t <= 0) continue;
       h.t -= dt;
@@ -832,11 +838,14 @@ export class Effects {
       const k = 1 - h.t / h.dur;                       // 0 -> 1
       const e = 1 - Math.pow(1 - k, 3);                // ease-out inflate
       const s = h.size * (0.3 + 0.7 * e);
-      const op = Math.pow(1 - k, 1.6) * 0.95;
       h.round.scale.set(s, s, 1);
-      h.hStreak.scale.set(s * 2.7, s * 0.16, 1);
-      h.vStreak.scale.set(s * 0.2, s * 1.5, 1);
-      for (const sp of [h.round, h.hStreak, h.vStreak]) sp.material.opacity = op;
+      h.round.material.opacity = Math.pow(1 - k, 1.6) * 0.95;
+    }
+    // kill flares: age the HUD ghost-chain events, prune after their fade
+    for (let i = this.killFlares.length - 1; i >= 0; i--) {
+      const f = this.killFlares[i];
+      f.t += dt;
+      if (f.t > 0.5) this.killFlares.splice(i, 1);
     }
     // wreck chunks: fly, tumble, trail fire, pop where they land
     const r2 = this.rng;

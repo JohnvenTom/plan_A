@@ -583,6 +583,13 @@ function renderHUD(pipRect) {
     pipRect, pipOn: !!pipRect,
     sunUV: (() => { _pv.copy(camera.position).addScaledVector(sky.sunDir, 30000).project(camera); return [_pv.x * 0.5 + 0.5, -_pv.y * 0.5 + 0.5]; })(),
     sunVis: (() => { camera.getWorldDirection(_pv2); return _pv2.dot(sky.sunDir) > 0.3 && sky.sunDir.y > 0 ? Math.min(1, _pv2.dot(sky.sunDir)) : 0; })(),
+    killGhosts: effects.killFlares.map(f => {
+      _v2.copy(f.pos).project(camera);
+      return [Math.round((_v2.x * 0.5 + 0.5) * 1000) / 1000, Math.round((-_v2.y * 0.5 + 0.5) * 1000) / 1000,
+        _v2.z < 1, Math.round(f.t * 1000) / 1000, f.k];
+    }),
+    blastGhosts: settings.blastGhosts,
+    blastFlare: settings.blastFlare,
     aceCut: G.aceCut > 0,
     cineBars: G.cineBars ?? 0,
     enemyLock: enemies.enemies.reduce((m, e) => Math.max(m, e.lockT || 0), 0),
@@ -803,11 +810,13 @@ const bindRows = document.getElementById('bind-rows');
 // toggle: { key, label, on, off }  |  slider: { key, label, kind: 'slider', min, max, step, fmt }
 const OPTIONS = [
   { key: 'nearMissWhip', label: '近失弹甩镜 — 导弹掠过时镜头甩动+黑边', on: '开启', off: '关闭' },
+  { key: 'blastFlare', label: '爆炸变形光条 — 爆炸时的横向电影光晕', on: '开启', off: '关闭' },
+  { key: 'blastGhosts', label: '爆炸鬼像链 — 大爆炸的镜头彩圈反射', on: '开启', off: '关闭' },
   { key: 'volMaster', label: '总音量', kind: 'slider', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
   { key: 'volSfx', label: '音效 — 武器/爆炸/警报', kind: 'slider', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
   { key: 'volEngine', label: '引擎与风声', kind: 'slider', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
 ];
-const settings = { nearMissWhip: true, volMaster: 1, volSfx: 1, volEngine: 1 };      // defaults
+const settings = { nearMissWhip: true, blastFlare: true, blastGhosts: true, volMaster: 1, volSfx: 1, volEngine: 1 };      // defaults
 try { Object.assign(settings, JSON.parse(localStorage.getItem('sb_opts') || '{}')); } catch { /* fresh start */ }
 const saveSettings = () => { try { localStorage.setItem('sb_opts', JSON.stringify(settings)); } catch { /* private mode */ } };
 window.__settings = settings;                 // debug hook
@@ -817,6 +826,9 @@ window.__settings = settings;                 // debug hook
 const applyAudioSettings = () => {
   try { audio.applyVolumes({ master: settings.volMaster, sfx: settings.volSfx, engine: settings.volEngine }); }
   catch { /* audio not ready yet */ }
+};
+const applyBlastSettings = () => {
+  effects.blastGhosts = settings.blastGhosts;   // streak half is gated HUD-side
 };
 
 const optRows = document.getElementById('opt-rows');
@@ -848,13 +860,14 @@ function renderOptions() {
       const tog = document.createElement('span');
       tog.className = 'tog' + (settings[o.key] ? '' : ' off');
       tog.textContent = settings[o.key] ? o.on : o.off;
-      tog.onclick = () => { settings[o.key] = !settings[o.key]; saveSettings(); renderOptions(); };
+      tog.onclick = () => { settings[o.key] = !settings[o.key]; saveSettings(); applyBlastSettings(); renderOptions(); };
       row.appendChild(tog);
     }
     optRows.appendChild(row);
   }
 }
 applyAudioSettings();   // restore persisted volumes (safe pre-gesture: init() reads them)
+applyBlastSettings();   // + persisted blast-kit toggles
 
 function renderBindings() {
   bindRows.innerHTML = '';

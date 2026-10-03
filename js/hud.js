@@ -269,6 +269,7 @@ export class HUD {
     this.drawBanner(dt);
     this.drawRain(dt, S);
     this.drawFlare(S);
+    this.drawBlastFlare(S);
     this.drawPipFrame(S);
     this.drawLetterbox(S);
     this.vignette(S);
@@ -1019,6 +1020,70 @@ export class HUD {
     st2.addColorStop(1, 'rgba(120,180,255,0)');
     c.fillStyle = st2;
     c.fillRect(cx - this.w * 0.2, cy - 8, this.w * 0.4, 16);
+    c.restore();
+  }
+
+  // ---- blast lens kit: big explosions get the sun treatment, all in
+  // screen space — a huge anamorphic horizontal streak (nearly full screen
+  // width, two stacked fire-palette layers) plus the chromatic ghost train
+  // mirrored through the screen center. A lens artifact keeps its size
+  // whatever the range, so the streak reads full-width from anywhere. ----
+  drawBlastFlare(S) {
+    const list = S.killGhosts;
+    if (!list || !list.length) return;
+    const noStreak = S.blastFlare === false, noGhosts = S.blastGhosts === false;
+    if (noStreak && noGhosts) return;      // settings toggles (absent = on)
+    const c = this.ctx;
+    c.save();
+    c.globalCompositeOperation = 'lighter';
+    for (const [ux, uy, front, t, k] of list) {
+      if (!front) continue;
+      if (ux < -0.35 || ux > 1.35 || uy < -0.35 || uy > 1.35) continue;
+      const a = Math.min(1, t / 0.04) * Math.pow(Math.max(0, 1 - t / 0.5), 1.6);
+      if (a <= 0.01) continue;
+      const cx = ux * this.w, cy = uy * this.h;
+      if (!noStreak) {
+        // whip-out: length snaps to full width in ~70 ms, then gutters out
+        const wl = 1 - Math.pow(1 - Math.min(1, t / 0.07), 2);
+        const half = this.w * 0.44 * wl;
+        const st = c.createLinearGradient(cx - half, cy, cx + half, cy);
+        st.addColorStop(0, 'rgba(255,120,40,0)');
+        st.addColorStop(0.42, `rgba(255,150,60,${0.24 * a})`);
+        st.addColorStop(0.5, `rgba(255,200,120,${0.42 * a})`);
+        st.addColorStop(0.58, `rgba(255,150,60,${0.24 * a})`);
+        st.addColorStop(1, 'rgba(255,120,40,0)');
+        c.fillStyle = st;
+        c.fillRect(cx - half, cy - 4, half * 2, 8);
+        // secondary feather: shorter, thicker, deeper red-orange
+        const half2 = this.w * 0.26 * wl;
+        const st2 = c.createLinearGradient(cx - half2, cy, cx + half2, cy);
+        st2.addColorStop(0, 'rgba(255,90,30,0)');
+        st2.addColorStop(0.5, `rgba(255,120,50,${0.15 * a})`);
+        st2.addColorStop(1, 'rgba(255,90,30,0)');
+        c.fillStyle = st2;
+        c.fillRect(cx - half2, cy - 11, half2 * 2, 22);
+      }
+      if (!noGhosts) {
+        const fx = this.w - cx, fy = this.h - cy;
+        const ghosts = [
+          [0.30, 40, 255, 215, 150, 0.30],   // gold      (radii 2x the sun kit:
+          [0.48, 68, 255, 170, 90,  0.20],   // amber      explosions are dimmer
+          [0.66, 104, 255, 130, 60, 0.16],   // orange     sources, same sizes read
+          [0.82, 32, 230, 70, 40,   0.26],   // deep red   as noise)
+          [1.06, 80, 180, 40, 30,   0.10],   // dark red
+        ];
+        for (const [gt, r, cr, cg, cb, ga] of ghosts) {
+          const gx = cx + fx * 2 * (gt - 0.5) * 0.5;
+          const gy = cy + fy * 2 * (gt - 0.5) * 0.5;
+          const g = c.createRadialGradient(gx, gy, 0, gx, gy, r * k);
+          g.addColorStop(0, `rgba(${cr},${cg},${cb},${ga * a})`);
+          g.addColorStop(0.8, `rgba(${cr},${cg},${cb},${ga * 0.35 * a})`);
+          g.addColorStop(1, 'rgba(0,0,0,0)');
+          c.fillStyle = g;
+          c.beginPath(); c.arc(gx, gy, r * k, 0, Math.PI * 2); c.fill();
+        }
+      }
+    }
     c.restore();
   }
 
