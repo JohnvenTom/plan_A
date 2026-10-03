@@ -11,9 +11,10 @@ const _q = new THREE.Quaternion();
 const _m = new THREE.Matrix4();
 const UP = new THREE.Vector3(0, 1, 0);
 
-// seeker warmup machine (both kinds): cold --(SPACE/ALT)--> warming (1 s)
+// seeker warmup machine (both kinds): cold --(SPACE/ALT)--> warming (0.7 s)
 // --(auto)--> hot (8 s hold window) --> cold. ALT is the ONLY cancel.
-const MSL_WARM_TIME = 1.0;
+const MSL_WARM_TIME = 0.7;
+export { MSL_WARM_TIME };
 const MSL_HOT_WINDOW = 8.0;
 // 120° front cone (±60° off the FUSELAGE axis, not the sight): radar locks
 // hold only inside it, IR shots may only leave the rail inside it.

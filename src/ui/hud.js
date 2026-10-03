@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { clamp, pad, machOf } from '../core/utils.js';
 import { cornerSpeedKMH } from '../units/flightmodel.js';
+import { MSL_WARM_TIME } from '../units/weapons.js';
 
 const CYAN = '#9fe8ff';
 const CYAN_DIM = 'rgba(159,232,255,0.5)';
@@ -547,7 +548,7 @@ export class HUD {
     } else {
       if (blink) this.circle(ap.x, ap.y, 44, RED, 2);
       if (w.warm.state === 'warming') {
-        this.arcProgress(ap.x, ap.y, 52, w.warm.t / 1.0, AMBER);
+        this.arcProgress(ap.x, ap.y, 52, w.warm.t / MSL_WARM_TIME, AMBER);
       }
     }
     if (w.warm.state === 'hot') {
@@ -668,7 +669,7 @@ export class HUD {
         const size = clamp(4200 / ltp.distanceTo(S.player.position), 18, 66);
         const r = size * 0.78 + 10;
         if (w.warm.state === 'warming') {
-          this.arcProgress(tp.x, tp.y, r, w.warm.t / 1.0, AMBER);
+          this.arcProgress(tp.x, tp.y, r, w.warm.t / MSL_WARM_TIME, AMBER);
         } else {
           this.circle(tp.x, tp.y, r, RED, 1.25);
         }
