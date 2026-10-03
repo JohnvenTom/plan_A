@@ -270,6 +270,7 @@ export class HUD {
     this.drawRain(dt, S);
     this.drawFlare(S);
     this.drawBlastFlare(S);
+    this.drawMissileGlint(S);
     this.drawPipFrame(S);
     this.drawLetterbox(S);
     this.vignette(S);
@@ -1083,6 +1084,43 @@ export class HUD {
           c.beginPath(); c.arc(gx, gy, r * k, 0, Math.PI * 2); c.fill();
         }
       }
+    }
+    c.restore();
+  }
+
+  // ---- own-missile glint: the anamorphic kit's little sibling — a short,
+  // thin fire streak riding each of the player's outgoing missiles. Much
+  // smaller than the blast bar, and it shrinks + fades with range (far
+  // missiles hand readability back to their smoke trail); brightness
+  // jitters frame to frame like a burning motor seen through the glass. ----
+  drawMissileGlint(S) {
+    if (S.blastFlare === false) return;           // shares the streak toggle
+    const c = this.ctx;
+    c.save();
+    c.globalCompositeOperation = 'lighter';
+    for (const ms of S.weapons.missiles) {
+      if (!ms.fromPlayer) continue;
+      const d = ms.pos.distanceTo(S.player.position);
+      const k = clamp((2000 - d) / 1600, 0, 1);       // full <= 400 m, gone at 2 km
+      if (k <= 0.02) continue;
+      const s = this.proj(ms.pos, S.camera);
+      if (s.behind || s.x < -30 || s.x > this.w + 30 || s.y < -30 || s.y > this.h + 30) continue;
+      const fl = 0.55 + 0.45 * Math.random();        // per-frame motor sparkle
+      const a = 0.55 * k * fl;
+      const half = this.w * 0.07 * (0.15 + 0.85 * k);   // shortens hard toward the 2 km edge
+      const st = c.createLinearGradient(s.x - half, s.y, s.x + half, s.y);
+      st.addColorStop(0, 'rgba(255,140,50,0)');
+      st.addColorStop(0.5, `rgba(255,225,170,${a})`);
+      st.addColorStop(1, 'rgba(255,140,50,0)');
+      c.fillStyle = st;
+      c.fillRect(s.x - half, s.y - 1.5, half * 2, 3);
+      const half2 = half * 0.55;
+      const st2 = c.createLinearGradient(s.x - half2, s.y, s.x + half2, s.y);
+      st2.addColorStop(0, 'rgba(255,90,30,0)');
+      st2.addColorStop(0.5, `rgba(255,150,60,${a * 0.5})`);
+      st2.addColorStop(1, 'rgba(255,90,30,0)');
+      c.fillStyle = st2;
+      c.fillRect(s.x - half2, s.y - 4, half2 * 2, 8);
     }
     c.restore();
   }

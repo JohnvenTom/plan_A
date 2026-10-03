@@ -810,7 +810,7 @@ const bindRows = document.getElementById('bind-rows');
 // toggle: { key, label, on, off }  |  slider: { key, label, kind: 'slider', min, max, step, fmt }
 const OPTIONS = [
   { key: 'nearMissWhip', label: '近失弹甩镜 — 导弹掠过时镜头甩动+黑边', on: '开启', off: '关闭' },
-  { key: 'blastFlare', label: '爆炸变形光条 — 爆炸时的横向电影光晕', on: '开启', off: '关闭' },
+  { key: 'blastFlare', label: '变形光条 — 爆炸与己方导弹的横向光晕', on: '开启', off: '关闭' },
   { key: 'blastGhosts', label: '爆炸鬼像链 — 大爆炸的镜头彩圈反射', on: '开启', off: '关闭' },
   { key: 'volMaster', label: '总音量', kind: 'slider', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
   { key: 'volSfx', label: '音效 — 武器/爆炸/警报', kind: 'slider', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
