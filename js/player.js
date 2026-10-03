@@ -230,14 +230,6 @@ export class Player {
     this.model.group.position.copy(b.pos);
     this.model.group.quaternion.copy(b.quat);
     if (this.model.setControlSurfaces) this.model.setControlSurfaces(b.ctl);
-    // afterburner plume flicker
-    if (this.model.afterburners) {
-      for (const ab of this.model.afterburners) {
-        if (!ab.visible) continue;
-        const f = 0.82 + Math.random() * 0.36;
-        ab.scale.set(f, 0.75 + Math.random() * 0.5, f);
-      }
-    }
 
     // ---- terrain & limits ----
     const ground = Math.max(terrainHeightAt(b.pos.x, b.pos.z), SEA_LEVEL);
@@ -266,15 +258,31 @@ export class Player {
     this._wasBoost = this.boosting;
     this._abKick = Math.max(0, (this._abKick ?? 0) - dt * 1.5);
 
-    // ---- afterburner visual ----
+    // ---- afterburner plume: spool-up/down + twin-engine live flame ----
+    // abLevel ramps (fast light-up, slower gutter-out) so the flame GROWS
+    // and SHRINKS instead of popping; each nozzle flickers on its own
+    // multi-frequency jitter (never in sync), and the color/brightness
+    // wander between deep orange and white-hot
     const abVis = this.boosting && b.airspeed > 200;
-    for (const ab of this.model.afterburners) {
-      ab.visible = abVis;
-      if (abVis) {
-        const s = 0.75 + Math.sin(performance.now() * 0.04) * 0.12 + (b.airspeed - 200) / 900;
-        ab.scale.set(1, 1, s);
-      }
-    }
+    this._abLevel = clamp((this._abLevel ?? 0) + (abVis ? dt / 0.16 : -dt / 0.4), 0, 1);
+    const lv = this._abLevel;
+    const tAb = performance.now() * 0.001;
+    this.model.afterburners.forEach((ab, i) => {
+      ab.visible = lv > 0.02;
+      if (!ab.visible) return;
+      const ph = ab.userData.ph ?? (ab.userData.ph = i * 2.4 + Math.random() * 9);
+      // length: level growth + airspeed stretch + live flicker (capped)
+      const fl = 1 + 0.09 * Math.sin(tAb * 31 + ph)
+                   + 0.06 * Math.sin(tAb * 57 + ph * 1.7)
+                   + 0.05 * (Math.random() - 0.5);
+      const wide = 0.8 + 0.25 * lv + 0.05 * Math.sin(tAb * 43 + ph * 2.3);
+      const stretch = Math.min(1.45, 0.8 + (b.airspeed - 200) / 900);
+      ab.scale.set(wide, wide, (0.25 + 1.55 * lv) * stretch * fl);
+      // heat wander: deep orange <-> white-hot, opacity breathing with it
+      const heat = clamp(0.5 + 0.5 * Math.sin(tAb * 7.3 + ph * 3.1) + 0.18 * (Math.random() - 0.5), 0, 1);
+      ab.material.color.setRGB(1, 0.63 + 0.25 * heat, 0.30 + 0.38 * heat);
+      ab.material.opacity = (0.55 + 0.35 * lv) * (0.8 + 0.2 * heat);
+    });
 
     this.hitFlash = Math.max(0, this.hitFlash - dt * 1.6);
     this.updateCamera(dt);
