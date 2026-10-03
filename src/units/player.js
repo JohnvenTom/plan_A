@@ -40,6 +40,8 @@ export class Player {
     this._keyOverride = 0; this._keyYaw = 0; this._keyPitch = 0;
 
     this._qTmp = new THREE.Quaternion();
+    this._qTmp2 = new THREE.Quaternion();
+    this._pitchAxis = new THREE.Vector3(1, 0, 0);   // free-look orbit axis; persists through the exact pole
     this._vTmp = new THREE.Vector3();
     this._v2 = new THREE.Vector3();
     this._camRight = new THREE.Vector3();
@@ -320,7 +322,14 @@ export class Player {
     if (!this._camDirInit) { this.camDir.copy(this.aimDir); this._camDirInit = true; }
     // frozen while free-looking: the view rides the look offsets alone, so
     // the pinned aim and the view never feed back into each other
-    if (!this._freeLook) this.camDir.lerp(this.aimDir, 1 - Math.exp(-6 * dt)).normalize();
+    // chase takes the SHORTEST ARC: after a wide free-look camDir can sit
+    // ~180° from the pinned aim, and a straight lerp between the two passes
+    // through the zero vector there — normalize() then leaves the view to
+    // float noise for a frame
+    if (!this._freeLook) {
+      this._qTmp.setFromUnitVectors(this.camDir, this.aimDir);
+      this.camDir.applyQuaternion(this._qTmp2.identity().slerp(this._qTmp, 1 - Math.exp(-6 * dt))).normalize();
+    }
 
     // view direction = followed aim rotated by the free-look offsets
     const viewDir = this._vTmp.copy(this.camDir);
@@ -329,16 +338,21 @@ export class Player {
       viewDir.applyQuaternion(this._qTmp).normalize();
     }
     if (this.lookPitch !== 0) {
-      // camera right = viewDir x world up — but near the vertical pole that
-      // cross degenerates into a zero axis (gimbal lock: pitch dies, yaw
-      // turns into roll). Blend in the WING axis as the pole fallback: the
-      // camera orbits the plane, so its axes can never align with the view
+      // orbit axis = horizontal LEFT of the yawed chase direction. Yaw
+      // preserves camDir.y, so the axis depends only on the FROZEN chase
+      // direction: it cannot degenerate from the VIEW getting steep, and
+      // sweeping the yaw through the nose azimuth merely rotates it
+      // (continuous). The poleK wing-blend this replaces tried to smooth
+      // the exactly-vertical chase direction but flipped the axis instead:
+      // with the yawed azimuth near the nose, the horizontal axis and the
+      // wing target pass through ANTI-parallel — the lerp crossed zero,
+      // normalize() handed the full-offset pitch rotation an axis made of
+      // float noise, and the view snapped by up to 2*lookPitch. The exact
+      // pole (measure zero; yaw is dead there anyway) holds the last axis.
       const cross = this._v2.crossVectors(viewDir, new THREE.Vector3(0, 1, 0));
-      const cl = cross.length();
-      const poleK = smoothstep(0.90, 0.985, Math.abs(viewDir.y));   // 0 level -> 1 pole
-      let axis;
-      if (cl < 1e-4) axis = this.body.rightVec(new THREE.Vector3());
-      else axis = cross.divideScalar(cl).negate().lerp(this.body.rightVec(new THREE.Vector3()), poleK).normalize();
+      const axis = cross.lengthSq() < 1e-8
+        ? this._pitchAxis
+        : this._pitchAxis.copy(cross).normalize().negate();
       this._qTmp.setFromAxisAngle(axis, this.lookPitch);
       viewDir.applyQuaternion(this._qTmp).normalize();
     }
@@ -361,9 +375,11 @@ export class Player {
     this.upVec(this._v2);
     // camera never rolls with the plane (level horizon); near the vertical
     // pole a level horizon is undefined, so the up vector blends SMOOTHLY
-    // into the jet's up — the old 0/1 hard switch snapped the horizon by
-    // tens of degrees at the crossing
+    // into the jet's up — oriented into the world-up hemisphere first: an
+    // inverted jet's up is ANTI-parallel to world up, and the raw lerp
+    // crossed zero there (degenerate lookAt roll for a frame)
     const upBlend = smoothstep(0.90, 0.985, Math.abs(viewDir.y));
+    if (this._v2.y < 0) this._v2.negate();
     const up = new THREE.Vector3(0, 1, 0).lerp(this._v2, upBlend).normalize();
 
     if (this.camShake > 0) {
