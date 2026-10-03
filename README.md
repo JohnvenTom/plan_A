@@ -88,7 +88,7 @@ python serve.py            # 自带 no-cache 头,刷新即得最新代码
 
 ## 气动模型(全拟真)
 
-敌我共用同一套 6 自由度刚体气动核心(`js/flightmodel.js`):
+敌我共用同一套 6 自由度刚体气动核心(`src/units/flightmodel.js`):
 
 - **力矩操控**:舵面产生角加速度而非角速率,旋转带惯性与气动阻尼
 - **速度独立矢量**:机头≠航迹,迎角 α 与侧滑 β 自然涌现,升力垂直来流
@@ -107,17 +107,17 @@ python serve.py            # 自带 no-cache 头,刷新即得最新代码
 | 文件 | 职责 |
 |---|---|
 | `index.html` | 画布 + HUD 层 + 标题/结算界面 |
-| `js/main.js` | 游戏循环、状态机、系统接线、`?t=` 冻结 harness |
-| `js/sky.js` | 大气模型:天空穹顶着色器(渐变+太阳+Mie 前向光晕)、fbm 云层、雾、光照 |
-| `js/terrain.js` | 岛链高度场(ridge fbm)、顶点色分层、海洋着色器(菲涅尔+太阳光带) |
-| `js/jet.js` | 程序化战机建模(机身/三角翼/双垂尾/座舱/加力锥)— 敌机与玩家回退模型 |
-| `js/f14.js` | 玩家 F-14 GLB 加载器(锚点/加力锥/舵面驱动,失败回退程序化战机) |
-| `js/player.js` | 街机飞行模型(四元数姿态)、追尾相机 |
-| `js/enemies.js` | 敌机 AI(巡逻/追击/规避)、波次刷新 |
-| `js/weapons.js` | 机炮弹道、锁定导弹(比例导引+近炸)、敌导弹 |
-| `js/effects.js` | 粒子池:爆炸/尾烟/拉烟/火花 |
-| `js/hud.js` | AC 风格 HUD(2D canvas) |
-| `js/audio.js` | WebAudio 程序化音效 |
-| `js/utils.js` | 种子 RNG、simplex 噪声、数学工具 |
+| `src/main.js` | 游戏循环、状态机、系统接线、`?t=` 冻结 harness |
+| `src/world/sky.js` | 大气模型:天空穹顶着色器(渐变+太阳+Mie 前向光晕)、fbm 云层、雾、光照 |
+| `src/world/terrain.js` | 岛链高度场(ridge fbm)、顶点色分层、海洋着色器(菲涅尔+太阳光带) |
+| `src/units/jet.js` | 程序化战机建模(机身/三角翼/双垂尾/座舱/加力锥)— 敌机与玩家回退模型 |
+| `src/units/f14.js` | 玩家 F-14 GLB 加载器(锚点/加力锥/舵面驱动,失败回退程序化战机) |
+| `src/units/player.js` | 街机飞行模型(四元数姿态)、追尾相机 |
+| `src/units/enemies.js` | 敌机 AI(巡逻/追击/规避)、波次刷新 |
+| `src/units/weapons.js` | 机炮弹道、锁定导弹(比例导引+近炸)、敌导弹 |
+| `src/world/effects.js` | 粒子池:爆炸/尾烟/拉烟/火花 |
+| `src/ui/hud.js` | AC 风格 HUD(2D canvas) |
+| `src/core/audio.js` | WebAudio 程序化音效 |
+| `src/core/utils.js` | 种子 RNG、simplex 噪声、数学工具 |
 
 渲染路径:所有材质输出 scene-linear,`renderer.toneMapping = ACESFilmic` 是唯一输出级(色调映射只做一次);天空、平行光、半球光、雾共享同一太阳方向。

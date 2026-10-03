@@ -16,7 +16,7 @@ import re
 import sys
 
 IMPORT_RE = re.compile(r"(from\s+['\"])(\.\.?/[^'\"]+?\.js)(\?v=[0-9a-f]+)?(['\"])")
-SCRIPT_RE = re.compile(r"(src=[\"'])(\.{0,2}/?js/[^\"']+?\.js)(\?v=[0-9a-f]+)?([\"'])")
+SCRIPT_RE = re.compile(r"(src=[\"'])(\.{0,2}/?(?:src|js)/[^\"']+?\.js)(\?v=[0-9a-f]+)?([\"'])")
 
 
 def module_version():

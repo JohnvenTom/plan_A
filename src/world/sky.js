@@ -1,0 +1,525 @@
+// sky.js — one authored atmosphere model (skill: threejs-sky-atmosphere-and-haze, authored local branch)
+// - Sky dome fragment shader: zenith->horizon gradient + sun disc + forward Mie glow
+// - scene.fog (FogExp2) = distance haze, color matched to the horizon band
+// - ONE sun direction shared by dome shader, directional light, hemisphere light
+// - Output stays scene-linear HDR; renderer.toneMapping (ACES) is the single output owner
+import * as THREE from 'three';
+import { clamp, smoothstep } from '../core/utils.js';
+
+const _nc = new THREE.Color();
+const _gc = new THREE.Color();
+
+const SKY_VERT = /* glsl */`
+varying vec3 vDir;
+void main() {
+  vDir = position; // dome centered on camera; position IS the direction
+  vec4 mv = modelViewMatrix * vec4(position, 1.0);
+  gl_Position = projectionMatrix * mv;
+}`;
+
+const SKY_FRAG = /* glsl */`
+precision highp float;
+varying vec3 vDir;
+uniform vec3 uSunDir;
+uniform float uSunElev; // sin(elevation), used to warm the horizon as the sun lowers
+uniform float uNight;   // 0 day .. 1 full night
+uniform vec3 uFogColor; // live scene-fog color: the far haze everything fades into
+
+void main() {
+  vec3 d = normalize(vDir);
+  vec3 s = normalize(uSunDir);
+  float h = clamp(d.y, -1.0, 1.0);
+  float sunAmt = clamp(dot(d, s), 0.0, 1.0);
+
+  // --- authored gradient (all values scene-linear) ---
+  vec3 zenith   = vec3(0.045, 0.13, 0.40);
+  vec3 mid      = vec3(0.22, 0.38, 0.70);
+  // horizon gets warmer the lower the sun
+  vec3 horizon  = mix(vec3(0.82, 0.80, 0.72), vec3(1.30, 0.68, 0.32), uSunElev);
+
+  float upness = clamp(h, 0.0, 1.0);
+  vec3 col = mix(mid, zenith, pow(upness, 0.9));
+  float hz = pow(1.0 - upness, 4.0);                 // horizon band weight
+  float azHeat = 0.45 + 0.55 * pow(sunAmt, 3.0);     // warmer toward sun azimuth
+  col = mix(col, horizon, hz * azHeat);
+
+  // --- forward Mie lobe (sign: glow hugs the SUN side, never opposite) ---
+  col += vec3(1.15, 0.62, 0.30) * pow(sunAmt, 7.0)  * 0.42;
+  col += vec3(1.30, 0.86, 0.55) * pow(sunAmt, 48.0) * 1.10;
+
+  // --- sun disc, ~0.8 deg with soft limb (HDR value -> ACES rolls it off) ---
+  float cosA = dot(d, s);
+  float disc = smoothstep(0.99988, 0.99994, cosA);
+  col += vec3(46.0, 33.0, 20.0) * disc;
+
+  // night blend: dark blue gradient with a faint horizon airglow
+  // (stars live in the THREE.Points starfield below the dome, not here)
+  vec3 nightCol = mix(vec3(0.015, 0.025, 0.06), vec3(0.05, 0.07, 0.12), hz);
+  col = mix(col, nightCol, uNight);
+
+  // below-horizon the dome IS the far haze past the ocean's edge: the LIVE
+  // fog color the ocean fades into (already night/weather-adjusted), reached
+  // fully just under the horizon so the sea/sky junction can never read as a
+  // line — applied last, after the night blend, so it owns the under-horizon
+  col = mix(col, uFogColor, smoothstep(0.015, -0.01, h));
+
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+// starfield: round soft point sprites with per-star brightness, tint and a
+// slow twinkle. Lives just inside the dome (renderOrder after it), rides
+// with the camera, additive so the night bloom picks the bright ones up.
+const STAR_VERT = /* glsl */`
+attribute float aSize;    // sprite size in px at the 1080p reference
+attribute float aBright;  // 0..1, horizon fade baked in at generation
+attribute vec3 aColor;    // scene-linear tint
+attribute float aPhase;   // twinkle phase
+attribute float aSpeed;   // twinkle speed, rad/s
+uniform float uScale;     // drawingBufferHeight / 1080
+uniform float uTime;
+varying vec3 vColor;
+varying float vTw;
+void main() {
+  vColor = aColor * aBright;
+  vTw = 0.8 + 0.4 * (0.5 + 0.5 * sin(uTime * aSpeed + aPhase)); // +-20%
+  vec4 mv = modelViewMatrix * vec4(position, 1.0);
+  gl_Position = projectionMatrix * mv;
+  gl_PointSize = aSize * uScale;
+}`;
+
+const STAR_FRAG = /* glsl */`
+precision highp float;
+uniform float uNight;
+varying vec3 vColor;
+varying float vTw;
+void main() {
+  vec2 c = gl_PointCoord * 2.0 - 1.0;
+  float d2 = dot(c, c);
+  if (d2 > 1.0) discard;
+  float b = exp(-d2 * 3.5);   // gaussian disc: round, no sprite corners
+  gl_FragColor = vec4(vColor * (b * vTw * uNight), 1.0);
+}`;
+
+const CLOUD_VERT = /* glsl */`
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}`;
+
+const CLOUD_FRAG = /* glsl */`
+precision highp float;
+varying vec2 vUv;
+uniform float uTime;
+uniform vec3 uColorLit;
+uniform vec3 uColorShade;
+uniform float uScale;
+uniform float uThreshold;
+uniform float uDrift;
+uniform float uNight;   // 0 day .. 1 night: clouds go moonlit-dark
+uniform float uAlpha;   // overall deck presence (weather)
+uniform vec3 uSunDir;   // light direction for the puff tops
+uniform vec3 uBoltPos;  // world position of the latest lightning strike
+uniform float uBoltT;   // 1 at strike, decays to 0
+
+float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float noise(vec2 p){
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1,0)), u.x),
+             mix(hash(i + vec2(0,1)), hash(i + vec2(1,1)), u.x), u.y);
+}
+float fbm(vec2 p){
+  float v = 0.0, a = 0.5;
+  for (int i = 0; i < 5; i++){ v += a * noise(p); p = p * 2.03 + 11.7; a *= 0.5; }
+  return v;
+}
+
+void main() {
+  vec2 p = vUv * uScale + vec2(uTime * uDrift, uTime * uDrift * 0.22);
+  float n = fbm(p);
+  float n2 = fbm(p * 1.9 + 4.7);
+  float a = smoothstep(uThreshold, uThreshold + 0.24, n * 0.72 + n2 * 0.28);
+  // soft border fade so the deck has no visible edge
+  vec2 c = vUv - 0.5;
+  float border = smoothstep(0.5, 0.32, max(abs(c.x), abs(c.y)));
+  // pseudo-volumetric puffs: sample the density field slightly toward the
+  // sun — if that neighbor is DENSER, this pixel is a self-shadowed base;
+  // if thinner, it's a sunlit crest. Cheap 2-tap fake of volume lighting.
+  vec2 sunOff = -normalize(uSunDir.xz + vec2(1e-4)) * 0.012;
+  float nSun = fbm((vUv + sunOff) * uScale + vec2(uTime * uDrift, uTime * uDrift * 0.22) * 0.0 + 4.7);
+  nSun = nSun * 0.72 + fbm((vUv + sunOff) * uScale * 1.9 + 9.3) * 0.28;
+  float crest = clamp((n * 0.72 + n2 * 0.28) - nSun + 0.22, 0.0, 1.0);
+  vec3 col = mix(uColorShade, uColorLit, clamp(0.3 + n2 * 0.7 + crest * 0.85, 0.0, 1.2));
+  col *= 1.0 - uNight * 0.78;
+  // lightning: near clouds flash toward the strike column
+  if (uBoltT > 0.001) {
+    vec2 bw = (vUv - 0.5) * 44000.0;
+    float d = length(bw - uBoltPos.xz);
+    col += uBoltT * vec3(0.85, 0.9, 1.0) * exp(-d / 2600.0) * 1.6;
+  }
+  gl_FragColor = vec4(col, a * border * uAlpha);
+}`;
+
+// ---- volumetric-feel cloud field: ~500 billboarded puff clusters in the
+// deck altitude bands. One InstancedMesh = one draw call; instances wrap
+// around the camera on the GPU (mod-cell trick), so a 26 km field follows
+// the player forever without CPU updates. Weather scales density/darkness.
+const PUFF_VERT = /* glsl */`
+attribute float aSeed;
+uniform vec3 uCamPos;
+uniform float uCell;
+varying vec2 vUv;
+varying float vSeed;
+varying float vDist;
+varying float vTop;
+void main() {
+  vUv = uv;
+  vSeed = aSeed;
+  vec4 wp = instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+  vec3 c = mod(wp.xyz - uCamPos + uCell * 0.5, uCell) - uCell * 0.5 + uCamPos;
+  float sx = length(vec3(instanceMatrix[0].xyz));
+  vec3 right = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
+  vec3 up    = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
+  vec3 world = c + (position.x * right + position.y * up) * sx;
+  vec4 mv = viewMatrix * vec4(world, 1.0);
+  vDist = -mv.z;
+  vTop = position.y + 0.5;   // 0 bottom .. 1 top of the billboard
+  gl_Position = projectionMatrix * mv;
+}`;
+
+const PUFF_FRAG = /* glsl */`
+precision highp float;
+varying vec2 vUv;
+varying float vSeed;
+varying float vDist;
+varying float vTop;
+uniform vec3 uSunDir;
+uniform float uDensity;   // weather alpha 0..1
+uniform float uDark;      // weather gray 0..1
+uniform float uNight;
+
+float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float noise(vec2 p){
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x),
+             mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
+}
+void main() {
+  // puffy silhouette: fbm blob inside a soft radial mask
+  vec2 p = vUv * 2.1 + vec2(vSeed * 37.0, vSeed * 91.0);
+  float n = noise(p) * 0.68 + noise(p * 1.9 + 7.7) * 0.32;
+  vec2 q = vUv - 0.5;
+  float mask = smoothstep(0.52, 0.16, length(q * vec2(1.0, 0.9)));
+  float a = smoothstep(0.3, 0.5, n) * mask * uDensity;
+  if (a < 0.004) discard;
+  // lighting: sunlit crests (high noise) + brighter tops, dark storm base
+  float crest = smoothstep(0.55, 0.8, n);
+  vec3 lit = mix(vec3(0.62, 0.64, 0.70), vec3(1.38, 1.30, 1.18), crest);
+  vec3 col = mix(vec3(0.44, 0.46, 0.52), lit, clamp(0.3 + vTop * 0.55 + crest * 0.35, 0.0, 1.0));
+  col = mix(col, col * vec3(0.42, 0.44, 0.5), uDark);          // storm darkening
+  col *= 1.0 - uNight * 0.75;
+  // distance fade + slight haze toward the horizon
+  float fade = smoothstep(24000.0, 13000.0, vDist);
+  a *= fade;
+  gl_FragColor = vec4(col, a * 0.92);
+}`;
+
+function buildCloudField(scene, sunDir) {
+  const CELL = 19000;
+  const CLUSTERS = 220;
+  const perCluster = 7;
+  const N = CLUSTERS * perCluster;
+  const geo = new THREE.InstancedBufferGeometry();
+  const quad = new THREE.PlaneGeometry(1, 1);
+  geo.index = quad.index;
+  geo.attributes.position = quad.attributes.position;
+  geo.attributes.uv = quad.attributes.uv;
+  const seeds = new Float32Array(N);
+  for (let i = 0; i < N; i++) seeds[i] = Math.random() * 100;
+  geo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seeds, 1));
+  const mat = new THREE.ShaderMaterial({
+    vertexShader: PUFF_VERT,
+    fragmentShader: PUFF_FRAG,
+    transparent: true, depthWrite: false, fog: false,
+    side: THREE.DoubleSide,
+    uniforms: {
+      uCamPos: { value: new THREE.Vector3() },
+      uCell: { value: CELL },
+      uSunDir: { value: sunDir },
+      uDensity: { value: 0.8 },
+      uDark: { value: 0 },
+      uNight: { value: 0 },
+    },
+  });
+  const mesh = new THREE.InstancedMesh(geo, mat, N);
+  mesh.frustumCulled = false;
+  mesh.renderOrder = -4;
+  const m4 = new THREE.Matrix4();
+  let k = 0;
+  for (let c = 0; c < CLUSTERS; c++) {
+    // 70% low band, 30% high band — matches the whiteout altitude bands
+    const low = Math.random() < 0.7;
+    const cy = low ? 2750 : 4200;
+    const half = low ? 380 : 460;
+    const cx = (Math.random() - 0.5) * CELL;
+    const cz = (Math.random() - 0.5) * CELL;
+    // one MASS: 600–1400 m wide, stacked tall — a chunky volumetric bank
+    const size = 650 + Math.random() * 750;
+    for (let j = 0; j < perCluster; j++, k++) {
+      const s = size * (0.6 + Math.random() * 0.4);
+      m4.makeScale(s, s * (0.62 + Math.random() * 0.3), 1);
+      m4.setPosition(
+        cx + (Math.random() - 0.5) * size * 1.1,
+        cy + (Math.random() - 0.5) * half * 2.1,
+        cz + (Math.random() - 0.5) * size * 1.1,
+      );
+      mesh.setMatrixAt(k, m4);
+    }
+  }
+  scene.add(mesh);
+  return { mesh, mat, cell: CELL };
+}
+
+export class Sky {
+  constructor(scene) {
+    this.scene = scene;
+    // ONE sun direction: elevation ~13 deg, azimuth +28 deg from -Z (ahead-right of player start)
+    const el = 13 * Math.PI / 180, az = 28 * Math.PI / 180;
+    this.sunDir = new THREE.Vector3(
+      Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el)
+    ).normalize();
+    this.sunElevSin = Math.sin(el);
+
+    // --- sky dome (follows camera, never fogged) ---
+    this.domeMat = new THREE.ShaderMaterial({
+      vertexShader: SKY_VERT,
+      fragmentShader: SKY_FRAG,
+      side: THREE.BackSide,
+      depthWrite: false,
+      fog: false,
+      uniforms: {
+        uSunDir: { value: this.sunDir },
+        uSunElev: { value: this.sunElevSin },
+        uNight: { value: 0 },
+        uFogColor: { value: new THREE.Color(0.70, 0.56, 0.42) },
+      },
+    });
+    this.dome = new THREE.Mesh(new THREE.SphereGeometry(30000, 48, 24), this.domeMat);
+    this.dome.frustumCulled = false;
+    this.dome.renderOrder = -10;
+    scene.add(this.dome);
+
+    // --- starfield: THREE.Points just inside the dome (see STAR_VERT/FRAG) ---
+    this.starTime = 0;
+    this.starMat = new THREE.ShaderMaterial({
+      vertexShader: STAR_VERT,
+      fragmentShader: STAR_FRAG,
+      transparent: true, depthWrite: false, fog: false,
+      blending: THREE.AdditiveBlending,
+      uniforms: {
+        uScale: { value: 1 },
+        uTime: { value: 0 },
+        uNight: { value: 0 },
+      },
+    });
+    this.stars = new THREE.Points(this.buildStarGeometry(), this.starMat);
+    this.stars.frustumCulled = false;
+    this.stars.renderOrder = -9;   // after the dome, before the world
+    scene.add(this.stars);
+    // keep sprite size angular-constant: match main.js' pixelRatio cap
+    const starScale = () => {
+      this.starMat.uniforms.uScale.value =
+        (innerHeight * Math.min(devicePixelRatio || 1, 1.75)) / 1080;
+    };
+    starScale();
+    addEventListener('resize', starScale);
+
+    // --- cloud deck: two translucent fbm planes for parallax ---
+    this.cloudMats = [];
+    const deck = (y, scale, thresh, drift, lit, shade, opacityMul) => {
+      const mat = new THREE.ShaderMaterial({
+        vertexShader: CLOUD_VERT,
+        fragmentShader: CLOUD_FRAG,
+        transparent: true, depthWrite: false, fog: false,
+        side: THREE.DoubleSide,
+        uniforms: {
+          uTime: { value: 0 },
+          uScale: { value: scale },
+          uThreshold: { value: thresh },
+          uDrift: { value: drift },
+          uColorLit: { value: new THREE.Color(...lit) },
+          uColorShade: { value: new THREE.Color(...shade) },
+          uNight: { value: 0 },
+          uAlpha: { value: 0.85 * opacityMul },
+          uSunDir: { value: this.sunDir },
+          uBoltPos: { value: new THREE.Vector3() },
+          uBoltT: { value: 0 },
+        },
+      });
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(44000, 44000), mat);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.y = y;
+      mesh.frustumCulled = false;
+      mesh.renderOrder = -5;
+      scene.add(mesh);
+      this.cloudMats.push(mat);
+      return mesh;
+    };
+    // flat decks and billboard puffs RETIRED: clouds are raymarched
+    // volumetrics in the postfx chain now. Keep cloudMats empty — weather
+    // and the bolt-lighting hooks guard on it.
+    this.cloudMats = [];
+    this.cloudLow = null;
+    this.cloudHigh = null;
+
+    // --- lighting: sun + sky hemisphere, one shared direction ---
+    this.sun = new THREE.DirectionalLight(0xffd9a8, 2.9);
+    this.sun.layers.enable(1);   // also lights the FX overlay pass
+    this.sun.position.copy(this.sunDir).multiplyScalar(10000);
+    scene.add(this.sun);
+    this.hemi = new THREE.HemisphereLight(0x9db8e8, 0x9a7350, 1.3);
+    this.hemi.layers.enable(1);
+    scene.add(this.hemi);
+
+    // --- distance haze (FogExp2), color = horizon band average ---
+    scene.fog = new THREE.FogExp2(new THREE.Color(0.70, 0.56, 0.42), 0.000034);
+    this.cloudTime = 0;
+  }
+
+  // ---- starfield geometry: main hemisphere + a faint milky-way band ----
+  buildStarGeometry() {
+    const R = 29000;              // just inside the 30000 dome
+    const MAIN = 2800, BAND = 5000;
+    const N = MAIN + BAND;
+    const pos = new Float32Array(N * 3);
+    const size = new Float32Array(N);
+    const bright = new Float32Array(N);
+    const col = new Float32Array(N * 3);
+    const phase = new Float32Array(N);
+    const speed = new Float32Array(N);
+
+    const cool = new THREE.Color(0.66, 0.74, 0.95);
+    const warm = new THREE.Color(0.98, 0.87, 0.72);
+    const tint = new THREE.Color();
+    const d = new THREE.Vector3();
+    let k = 0;
+    const push = (dir, b, s) => {
+      // fade the last degrees above the horizon into the airglow band;
+      // anything below arrives at brightness 0 and additively vanishes
+      const fade = smoothstep(0.03, 0.12, dir.y);
+      pos[k * 3] = dir.x * R; pos[k * 3 + 1] = dir.y * R; pos[k * 3 + 2] = dir.z * R;
+      tint.lerpColors(cool, warm, Math.random());
+      col[k * 3] = tint.r * 1.5; col[k * 3 + 1] = tint.g * 1.5; col[k * 3 + 2] = tint.b * 1.5;
+      bright[k] = b * fade;
+      size[k] = s;
+      phase[k] = Math.random() * Math.PI * 2;
+      speed[k] = 0.5 + Math.random() * 1.7;
+      k++;
+    };
+
+    // main field: area-uniform over the upper hemisphere, power-law brightness
+    // (many dim, few bright) so the sky reads deep
+    for (let i = 0; i < MAIN; i++) {
+      const y = 0.03 + Math.random() * 0.97;
+      const r = Math.sqrt(1 - y * y);
+      const az = Math.random() * Math.PI * 2;
+      let b = Math.pow(Math.random(), 3);
+      if (Math.random() < 0.02) b = 0.75 + Math.random() * 0.25;   // standouts
+      push(d.set(r * Math.cos(az), y, r * Math.sin(az)), b, 1.3 + b * 2.4);
+    }
+
+    // milky way: dense faint band around a tilted great circle
+    const n = new THREE.Vector3(0.45, 0.65, 0.61).normalize();
+    const u = new THREE.Vector3(0, 1, 0).cross(n).normalize();
+    const w = new THREE.Vector3().crossVectors(n, u);
+    for (let i = 0; i < BAND; i++) {
+      const t = Math.random() * Math.PI * 2;
+      // four-uniform sum: cheap gaussian-ish offset from the band plane
+      const off = (Math.random() + Math.random() + Math.random() + Math.random() - 2) * 0.18;
+      d.copy(u).multiplyScalar(Math.cos(t)).addScaledVector(w, Math.sin(t)).addScaledVector(n, off).normalize();
+      const b = Math.random() < 0.15 ? 0.35 + Math.random() * 0.25 : 0.08 + Math.random() * 0.22;
+      push(d, b, 1.0 + b * 1.4);
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('aSize', new THREE.BufferAttribute(size, 1));
+    geo.setAttribute('aBright', new THREE.BufferAttribute(bright, 1));
+    geo.setAttribute('aColor', new THREE.BufferAttribute(col, 3));
+    geo.setAttribute('aPhase', new THREE.BufferAttribute(phase, 1));
+    geo.setAttribute('aSpeed', new THREE.BufferAttribute(speed, 1));
+    return geo;
+  }
+
+  // ---- day/night cycle: day01 in 0..1 (0 sunrise, .25 noon, .5 sunset,
+  //      .75 midnight). Rotates the shared sun direction, swaps to blue
+  //      moonlight at night, dims clouds, and drives fog color/density
+  //      together with the weather parameters. ----
+  setCycle(day01, night01, weather) {
+    const ang = day01 * Math.PI * 2;
+    const elevSin = Math.sin(ang);
+    const elev = Math.asin(clamp(elevSin, -1, 1) * 0.999);
+    const az = (day01 * 360 + 200) * Math.PI / 180;
+    this.sunDir.set(Math.sin(az) * Math.cos(elev), Math.sin(elev), -Math.cos(az) * Math.cos(elev)).normalize();
+    this.sunElevSin = Math.max(-0.15, elevSin);
+    this.domeMat.uniforms.uSunDir.value.copy(this.sunDir);
+    this.domeMat.uniforms.uSunElev.value = this.sunElevSin;
+    this.domeMat.uniforms.uNight.value = night01;
+    this.starMat.uniforms.uNight.value = night01;
+
+    const dim = weather ? weather.dim : 1;
+    const dayF = clamp(elevSin * 4, 0, 1);
+    if (dayF > 0.02) {
+      this.sun.color.setRGB(1.0, 0.85 - night01 * 0.3, 0.66 - night01 * 0.4);
+      this.sun.intensity = 2.9 * Math.pow(dayF, 0.6) * dim;
+      this.sun.position.copy(this.sunDir).multiplyScalar(10000);
+    } else {
+      // moonlight: fixed blueish direction, faint
+      this.sun.color.setHex(0x8fa8d8);
+      this.sun.intensity = 0.4 * night01 * dim;
+      this.sun.position.set(-3000, 6000, 2000);
+    }
+    this.hemi.intensity = (1.3 * dayF + 0.42 * night01) * dim;
+    for (const m of this.cloudMats) m.uniforms.uNight.value = night01;
+    if (this.cloudField) this.cloudField.mat.uniforms.uNight.value = night01;
+
+    // fog follows the sun height, the night, and the weather graying
+    const fc = this.scene.fog.color;
+    fc.setRGB(0.70, 0.56, 0.42).lerp(_nc.setRGB(0.045, 0.06, 0.1), night01);
+    if (weather) {
+      fc.lerp(_gc.setRGB(0.42, 0.44, 0.47).multiplyScalar(1 - night01 * 0.85), weather.gray);
+      fc.multiplyScalar(dim);
+    }
+    // base calibrated for the layered haze: clear under ~8 km, silhouettes
+    // barely readable at the map diagonal (~34 km), ocean edge fully haze
+    this.scene.fog.density = 0.000055 * (weather ? weather.fogMul : 1);
+    this.domeMat.uniforms.uFogColor.value.copy(fc);
+  }
+
+  update(dt, cameraPos) {
+    this.cloudTime += dt;
+    for (const m of this.cloudMats) m.uniforms.uTime.value = this.cloudTime;
+    // dome + starfield ride with the camera; clouds x,z only -> parallax
+    this.dome.position.copy(cameraPos);
+    this.stars.position.copy(cameraPos);
+    this.starTime += dt;
+    this.starMat.uniforms.uTime.value = this.starTime;
+    this.domeMat.uniforms.uFogColor.value.copy(this.scene.fog.color);
+    if (this.cloudLow) {
+      this.cloudLow.position.x = cameraPos.x;
+      this.cloudLow.position.z = cameraPos.z;
+      this.cloudHigh.position.x = cameraPos.x;
+      this.cloudHigh.position.z = cameraPos.z;
+    }
+  }
+
+  dispose() {
+    this.dome.geometry.dispose(); this.domeMat.dispose();
+    this.stars.geometry.dispose(); this.starMat.dispose();
+    for (const m of this.cloudMats) { /* geometries shared per-mesh */ }
+    if (this.cloudLow) { this.cloudLow.geometry.dispose(); this.cloudHigh.geometry.dispose(); }
+    this.cloudMats.forEach(m => m.dispose());
+  }
+}
