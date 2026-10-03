@@ -231,6 +231,20 @@ export class HUD {
     c.clearRect(0, 0, this.w, this.h);
     if (S.state !== 'playing') return;
 
+    // missile-launch punch: the 3D world kicks with a radial speed-blur
+    // (weapons.fxPunch) — the HUD breathes with it: a quick scale-up that
+    // settles plus a decaying pixel jitter, so the whole screen reads as
+    // one shove instead of the overlay sitting frozen on top of it
+    const punch = Math.min(1, S.weapons?.fxPunch ?? 0);
+    if (punch > 0.003) {
+      const s = 1 + punch * 0.035;
+      const jx = (Math.random() - 0.5) * punch * 6;
+      const jy = (Math.random() - 0.5) * punch * 5;
+      c.translate(this.w / 2 + jx, this.h / 2 + jy);
+      c.scale(s, s);
+      c.translate(-this.w / 2, -this.h / 2);
+    }
+
     // weapon-switch slide: cards dart in from the side on kind change
     const kindNow = S.weapons.mslKind;
     if (kindNow !== this._mslKindSeen) {
