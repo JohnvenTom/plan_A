@@ -71,7 +71,8 @@ mslRT.depthTexture = new THREE.DepthTexture(480, 270);
 mslRT.depthTexture.type = THREE.UnsignedIntType;
 const mslRT2 = new THREE.WebGLRenderTarget(480, 270, { type: THREE.HalfFloatType, depthBuffer: false });
 window.__postfx = postfx;   // debug hook
-weather.onChange = (name) => hud.announce('天气变化', name, 1.6, 'info');
+const WX_EN = { '晴': 'CLEAR', '多云': 'CLOUDY', '阴': 'OVERCAST', '毛毛雨': 'DRIZZLE', '雨': 'RAIN', '雷暴': 'THUNDERSTORM', '浓雾': 'FOG', '狂风': 'GALE' };
+weather.onChange = (name) => hud.announce('WEATHER CHANGE', WX_EN[name] || name, 1.6, 'info');
 const input = new Input();
 weapons.playerRef = player;
 weapons.audio = audio;
@@ -111,8 +112,7 @@ const killCtx = {
   onKill(enemy, crashed) {
     G.kills++; G.score += (250 + enemies.wave * 25) * (enemy.ace ? 2 : 1);
     recorder.ev('kill', { victim: recorder.trackIdOf(enemy), ace: enemy.ace }, enemy.position);
-    hud.announce('摧毁目标', `TARGET DESTROYED  +${(250 + enemies.wave * 25) * (enemy.ace ? 2 : 1)}${enemy.ace ? ' · ACE x2' : ''}`, 2.2, 'kill');
-    hud.destroyed();
+    hud.announce('TARGET DESTROYED', '', 2.2, 'kill', false, { mult: enemy.ace ? 2 : 1, score: 250 + enemies.wave * 25 });
     audio.kill();
     effects.ring?.(enemy.position, 1.3);
     G.timeScale = 0.25;   // kill-cam micro slow-motion
@@ -139,7 +139,7 @@ function resetAll() {
   aaSites.reset();
   recorder.reset();
   hud.msgQueue.length = 0;
-  hud.announce('任务开始', 'OPERATION GOLDEN HOUR', 3.0, 'info');
+  hud.announce('OPERATION GOLDEN HOUR', 'MISSION START', 3.0, 'info');
 }
 
 function startGame() {
@@ -164,7 +164,7 @@ function setPaused(v) {
   audio.setRunning(!v);
   if (v) {
     hud.msgQueue.length = 0;
-    hud.announce('已暂停', '按 P / ESC 或 点击 继续', 9999, 'info', true);
+    hud.announce('PAUSED', 'PRESS P / ESC OR CLICK TO RESUME', 9999, 'info', true);
   } else {
     hud.clearSticky();
   }
@@ -234,7 +234,7 @@ function introStep(dt) {
   camera.lookAt(player.body.pos.x, player.body.pos.y + 4, player.body.pos.z);
   if (G.introT <= 0) {
     G.state = 'playing';
-    hud.announce('MISSION START', '任务开始 — 拦截入侵机群', 2.2, 'wave');
+    hud.announce('MISSION START', 'INTERCEPT THE INBOUND FORMATION', 2.2, 'wave');
   }
 }
 
@@ -288,21 +288,21 @@ function update(dt) {
       // the LOCK survives the kind switch — only the warm state is per-kind;
       // an IR shot may ride the same radar designation (and re-warm applies)
       weapons.cancelWarm();
-      hud.announce(weapons.mslKind === 'radar' ? '雷达弹' : '红外弹',
-        weapons.mslKind === 'radar' ? 'RADAR — 20km 即时锁定 · 预热后发射 · 39/箔条可避' : 'IR — 热源导引 · 预热后发射 · 热诱弹可避', 1.2, 'info');
+      hud.announce(weapons.mslKind === 'radar' ? 'RADAR MISSILE' : 'IR MISSILE',
+        weapons.mslKind === 'radar' ? '20KM INSTANT LOCK · PRE-HEAT TO FIRE · DEFEATABLE BY CHAFF' : 'HEAT SEEKING · PRE-HEAT TO FIRE · DEFEATABLE BY FLARE', 1.2, 'info');
     }
     if (input.pressed('cycleTarget')) weapons.headLockAttempt(player, enemies.enemies);
     if (input.pressed('radarRange')) {
       const steps = [5000, 10000, 20000];
       G.radarRange = steps[(steps.indexOf(G.radarRange ?? 10000) + 1) % steps.length];
-      hud.announce('雷达量程', `RNG ${G.radarRange / 1000} km`, 1.2, 'info');
+      hud.announce('RADAR RANGE', `RNG ${G.radarRange / 1000} KM`, 1.2, 'info');
     }
     if (input.pressed('debugWeather')) {
       G._wxIdx = ((G._wxIdx ?? -1) + 1) % ['晴', '多云', '阴', '毛毛雨', '雨', '雷暴', '浓雾', '狂风'].length;
       const names = ['晴', '多云', '阴', '毛毛雨', '雨', '雷暴', '浓雾', '狂风'];
       const keys = ['clear', 'cloudy', 'overcast', 'drizzle', 'rain', 'storm', 'fog', 'gale'];
       weather.force(keys[G._wxIdx]);
-      hud.announce('天气切换', names[G._wxIdx] + '（调试）', 1.2, 'info');
+      hud.announce('WEATHER CHANGE', `${(WX_EN[names[G._wxIdx]] || names[G._wxIdx])} (DEBUG)`, 1.2, 'info');
     }
     weapons.updateFireControl(dt, player, enemies.enemies);
 
@@ -320,7 +320,7 @@ function update(dt) {
     // the same drain feeds the flight recorder's combat-event log
     for (const ev of weapons.events) {
       if (ev.type === 'crit') {
-        hud.announce('致命攻击', 'CRITICAL HIT — 目标冒烟', 1.5, 'crit');
+        hud.announce('CRITICAL HIT', 'TARGET SMOKING', 1.5, 'crit');
         audio.crit();
       } else if (ev.type === 'nearMiss') {
         recorder.ev('nearMiss', {}, ev.pos);
@@ -341,7 +341,7 @@ function update(dt) {
       } else if (ev.type === 'intercept') {
         recorder.ev('intercept', {}, ev.pos);
         G.score += 100;
-        hud.announce('拦截成功', 'MISSILE INTERCEPTED  +100', 2.0, 'kill');
+        hud.announce('MISSILE INTERCEPTED', '', 2.0, 'kill', false, { mult: 1, score: 100 });
         audio.kill();
       }
     }
@@ -349,9 +349,9 @@ function update(dt) {
 
     // drain enemy-manager events into HUD announcements (+ timeline ticks)
     for (const ev of enemies.events) {
-      if (ev.type === 'wave') { recorder.ev('wave', { n: ev.wave }); hud.announce(`WAVE ${ev.wave}`, `敌机接近 — ${ev.count} 机`, 3.0, 'wave'); }
-      else if (ev.type === 'waveClear') { recorder.ev('waveClear', { n: ev.wave }); hud.announce('WAVE CLEAR', '敌机全灭 — 下一波接近中', 2.6, 'info'); }
-      else if (ev.type === 'ace') { recorder.ev('ace'); hud.announce('⚠ 王牌机参战', 'ACE — 高机动 · 击坠双倍分', 3.2, 'wave'); G.aceCut = 1.6; }
+      if (ev.type === 'wave') { recorder.ev('wave', { n: ev.wave }); hud.announce(`WAVE ${ev.wave}`, `HOSTILES INBOUND — ${ev.count}`, 3.0, 'wave'); }
+      else if (ev.type === 'waveClear') { recorder.ev('waveClear', { n: ev.wave }); hud.announce('WAVE CLEAR', 'ALL HOSTILES DOWN — NEXT WAVE INBOUND', 2.6, 'info'); }
+      else if (ev.type === 'ace') { recorder.ev('ace'); hud.announce('ACE ENGAGED', 'HIGH AGILITY — DOUBLE REWARD', 3.2, 'wave'); G.aceCut = 1.6; }
     }
     enemies.events.length = 0;
 
@@ -876,7 +876,7 @@ function frame() {
     G.lastFrameErrAt = G.lastFrameErrAt ?? -999;
     if (G.time - G.lastFrameErrAt > 2) {
       G.lastFrameErrAt = G.time;
-      try { hud.announce('⚠ 系统异常', String(err.message).slice(0, 44), 1.6, 'crit'); } catch (_) {}
+      try { hud.announce('SYSTEM ERROR', String(err.message).slice(0, 44), 1.6, 'crit'); } catch (_) {}
     }
   }
   input.endFrame();

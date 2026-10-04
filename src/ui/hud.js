@@ -36,10 +36,11 @@ export class HUD {
     this._lockPrev = null;      // lock-fly: previous locked target
     this._lockScreen = null;    // last frame's lock bracket screen pos
     this._lockFly = null;       // {from:{x,y}, t}
-    this._banner = null;        // DESTROYED sweep {t}
     this._mslKindSeen = null;   // weapon-switch slide animation
     this._mslSlide = 0;
     this._rainSeeds = Array.from({ length: 90 }, () => [Math.random(), Math.random(), Math.random()]);
+    // preload the knockout bar font so the first message doesn't fall back
+    if (document.fonts?.load) document.fonts.load('800 26px "Saira ExtraCondensed"');
   }
 
   resize() {
@@ -51,10 +52,13 @@ export class HUD {
     this.canvas.style.height = this.h + 'px';
   }
 
-  announce(text, sub = '', dur = 3.2, style = 'info', sticky = false) {
+  announce(text, sub = '', dur = 3.2, style = 'info', sticky = false, reward = null) {
     const live = this.msgQueue.filter(m => !m.dead);
     if (!sticky && live.length >= 6) return;   // saturated: drop, never grow
-    this.msgQueue.push({ text, sub, t: 0, dur, style, sticky, y: null, dead: false, fade: 0 });
+    // reward messages (kill/intercept) hold 6s so the drum roll plays out;
+    // everything else: 1.6x the requested duration, floor 3.2s
+    const d = sticky ? dur : (reward ? 6 : Math.max(dur * 1.6, 3.2));
+    this.msgQueue.push({ text, sub, t: 0, dur: d, style, sticky, y: null, dead: false, reward });
     // hard cap: force the oldest non-sticky message out
     const now = this.msgQueue.filter(m => !m.dead);
     if (now.length > 4) now[0].t = Math.max(now[0].t, now[0].dur);
@@ -67,9 +71,6 @@ export class HUD {
   // small transient line under the reticle: rejected SPACE presses explain
   // themselves here instead of a full center announcement
   hint(text) { this._hintMsg = { text, t: 0 }; }
-
-  // DESTROYED sweep banner
-  destroyed() { this._banner = { t: 0 }; }
 
   // world position -> screen px; returns {x, y, behind}
   proj(pos, camera) {
@@ -317,7 +318,6 @@ export class HUD {
     this.drawStatus(S);
     this.drawAlerts(dt, S);
     this.drawHint(dt);
-    this.drawBanner(dt);
     this.drawRain(dt, S);
     this.drawFlare(S);
     this.drawBlastFlare(S);
@@ -729,28 +729,45 @@ export class HUD {
 
   // ---- hit direction: superseded by drawHitDisc + radar red dots ----
 
-  // ---- DESTROYED sweep: a red bar with white letters slides across the kill ----
-  drawBanner(dt) {
-    const b = this._banner;
-    if (!b) return;
-    b.t += dt;
-    if (b.t > 1.5) { this._banner = null; return; }
-    const k = b.t / 1.5;
-    const cx = this.w / 2, cy = this.h * 0.34;
+  // ---- sweep bar (message queue): theme-blue strip expanding from the
+  // center, edges fading to nothing, letters knocked out so the scene shows
+  // through; text glides in from the right, whole bar fades near the end ----
+  _sweepBar(text, cx, cy, t, dur) {
     const barW = this.w * 0.42, barH = 40;
-    const slide = Math.min(1, b.t / 0.22);
-    const out = b.t > 1.1 ? (b.t - 1.1) / 0.4 : 0;
+    const slide = Math.min(1, t / 0.22);
+    const out = Math.max(0, (t - (dur - 0.4)) / 0.4);
+    if (out >= 1) return 1;
+    if (slide <= 0) return 0;   // first frame: nothing drawn yet, alpha 0
+    const x0 = cx - barW / 2 * slide, x1 = cx + barW / 2 * slide;
     const c = this.ctx;
+    // compose on an offscreen canvas so the knockout only erases the bar,
+    // not other HUD elements already drawn on the main canvas
+    if (!this._barCv) this._barCv = document.createElement('canvas');
+    const bc = this._barCv.getContext('2d');
+    this._barCv.width = Math.ceil((x1 - x0) * this.dpr);
+    this._barCv.height = Math.ceil(barH * this.dpr);
+    bc.scale(this.dpr, this.dpr);
+    // flat blue plateau across the middle 60%, fading to nothing at both ends
+    const bw = x1 - x0;
+    const g = bc.createLinearGradient(0, 0, bw, 0);
+    g.addColorStop(0, 'rgba(70,130,255,0)');
+    g.addColorStop(0.2, 'rgba(70,130,255,0.55)');
+    g.addColorStop(0.8, 'rgba(70,130,255,0.55)');
+    g.addColorStop(1, 'rgba(70,130,255,0)');
+    bc.fillStyle = g;
+    bc.fillRect(0, 0, bw, barH);
+    // knock the letters out so the scene shows through
+    bc.globalCompositeOperation = 'destination-out';
+    bc.font = '800 26px "Saira ExtraCondensed", Consolas, monospace';
+    bc.textAlign = 'center';
+    bc.textBaseline = 'middle';
+    bc.fillStyle = '#000';
+    bc.fillText(text, cx + (1 - slide) * 90 - out * 60 - x0, barH / 2);
     c.save();
     c.globalAlpha = Math.min(1, slide) * (1 - out);
-    c.fillStyle = 'rgba(120,20,12,0.78)';
-    c.fillRect(cx - barW / 2 * slide, cy - barH / 2, barW * slide, barH);
-    this.strokeRect(cx - barW / 2 * slide, cy - barH / 2, barW * slide, barH, RED, 1.5);
-    c.beginPath();
-    c.rect(cx - barW / 2 * slide, cy - barH / 2, barW * slide, barH);
-    c.clip();
-    this.text('DESTROYED', cx + (1 - slide) * 90 - out * 60, cy, 24, '#ffd9d4', 'center', 10);
+    c.drawImage(this._barCv, x0, cy - barH / 2, x1 - x0, barH);
     c.restore();
+    return out;
   }
 
   // ---- hostile missiles: an unmistakable SPINNING diamond marker ----
@@ -963,13 +980,8 @@ export class HUD {
     for (const m of this.msgQueue) {
       if (m.dead) continue;
       if (!m.sticky) m.t += dt;
-      m.dying = !m.sticky && m.t > m.dur;
-      if (m.dying) {
-        m.fade += dt / 0.24;
-        if (m.fade >= 1) { m.dead = true; continue; }
-      } else {
-        m.fade = Math.min(1, m.fade + dt / 0.06);
-      }
+      // the sweep bar itself fades over the last 0.4s; stay alive until done
+      if (!m.sticky && m.t > m.dur + 0.42) { m.dead = true; continue; }
       m.slot = slot++;
       live.push(m);
     }
@@ -979,27 +991,57 @@ export class HUD {
       const targetY = baseY + m.slot * slotH;
       if (m.y === null) m.y = targetY - 46;      // slide up into place
       m.y += (targetY - m.y) * Math.min(1, dt * 14);
-      // entry: easeOutBack overshoot on scale
-      const k = Math.min(1, m.t / 0.3);
-      const c1 = 1.70158, c3 = c1 + 1;
-      const eob = 1 + c3 * Math.pow(k - 1, 3) + c1 * Math.pow(k - 1, 2);
-      const scale = 0.55 + 0.45 * (k < 1 ? eob : 1);
-      const alpha = Math.min(1, m.t / 0.12) * (m.dying ? 1 - m.fade : 1);
-      const drift = m.dying ? -m.fade * 34 : 0;
-      const style = {
-        info: { col: CYAN, size: 26, sub: CYAN },
-        wave: { col: AMBER, size: 30, sub: CYAN },
-        kill: { col: AMBER, size: 30, sub: CYAN },
-        crit: { col: RED, size: 34, sub: RED },
-      }[m.style] || { col: CYAN, size: 26, sub: CYAN };
-      c.save();
-      c.translate(cx, m.y + drift);
-      c.scale(scale, scale);
-      c.globalAlpha = alpha;
-      this.text(m.text, 0, 0, style.size, style.col, 'center', m.style === 'crit' ? 18 : 14);
-      if (m.sub) this.text(m.sub, 0, 30, 14, style.sub, 'center', 8);
-      c.restore();
-      c.globalAlpha = 1;
+      const out = this._sweepBar(m.text, cx, m.y, m.t, m.dur);
+      const alpha = Math.min(1, m.t / 0.12) * (1 - out);
+      // small caption under the bar
+      if (m.sub) {
+        c.save();
+        c.globalAlpha = alpha;
+        this.text(m.sub, cx, m.y + 20 + 15, 13, CYAN, 'center', 8);
+        c.restore();
+      }
+      // reward rail: amber line expanding right of the bar, then x-mult and
+      // +score roll in digit-by-digit like the speedometer drums
+      if (m.reward) {
+        const t = m.t;
+        const railX = cx + this.w * 0.42 / 2 + 14;
+        const railW = 175 * Math.min(1, Math.max(0, (t - 0.25) / 0.3));
+        const lineY = m.y - 22;
+        if (railW > 0) {
+          c.save();
+          c.globalAlpha = alpha;
+          this.line(railX, lineY, railX + railW, lineY, AMBER, 2);
+          c.restore();
+        }
+        const mult = `x${m.reward.mult}`;
+        const score = `+${m.reward.score * m.reward.mult}`;
+        const rowY = lineY + 14;
+        const drum = (str, x0, start) => {
+          c.font = `800 17px "Saira ExtraCondensed", Consolas, monospace`;
+          c.textAlign = 'center';
+          c.textBaseline = 'middle';
+          const cw = c.measureText('0').width * 1.05;
+          let x = x0;
+          for (let i = 0; i < str.length; i++) {
+            const kk = Math.min(1, Math.max(0, (t - start - i * 0.055) / 0.3));
+            if (kk <= 0) { x += cw; continue; }
+            const e = 1 - Math.pow(1 - kk, 3);   // easeOutCubic rise
+            c.save();
+            c.beginPath();
+            c.rect(x - 1, rowY - 12, cw + 2, 24);
+            c.clip();
+            c.globalAlpha = alpha * Math.min(1, kk * 1.5);
+            c.shadowColor = AMBER; c.shadowBlur = 8;
+            c.fillStyle = AMBER;
+            c.fillText(str[i], x + cw / 2, rowY + (1 - e) * 24);
+            c.restore();
+            x += cw;
+          }
+          return x - x0;
+        };
+        const wMult = drum(mult, railX, 0.6);
+        drum(score, railX + wMult + 12, 0.72);
+      }
     }
   }
 
