@@ -1,4 +1,15 @@
 // weapons.js — guns (tracer pool + segment collision) and lock-on homing missiles
+//
+// TWO missile flight models, picked on the start page (weapons.setMode):
+//  'arcade' — the classic kinematics: constant boost to a scripted max speed,
+//    fixed turn rate, velocity glued to the body axis. Sealed as-is.
+//  'real'   — energy-managed point mass: true velocity vector, motor
+//    boost/sustain/burnout, drag k*rho*v^2 in the shared atmosphere, gravity,
+//    PN guidance (N=4 + 1G bias) clamped by a dynamic-pressure-scaled G limit,
+//    rail-rigid dead time, carrier-velocity inheritance, low-speed self-destruct.
+//    IR seekers add the blind-state machine: decoyed/cone-broken shots coast on
+//    an extrapolated ghost of the target, then re-open on pure heat sources
+//    (aircraft AND burning flares) every 0.5 s until they bite or die.
 import * as THREE from 'three';
 import { clamp } from '../core/utils.js';
 import { AIRCRAFT_HIT_R, MISSILE_FUSE_R } from '../core/utils.js';
@@ -7,6 +18,13 @@ import { terrainSurfaceAt, SEA_LEVEL } from '../world/terrain.js';
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
+const _r = new THREE.Vector3();      // real mode: LOS vector
+const _vr = new THREE.Vector3();     // real mode: relative velocity
+const _om = new THREE.Vector3();     // real mode: LOS rotation rate
+const _ac = new THREE.Vector3();     // real mode: lateral accel command
+const _tp = new THREE.Vector3();     // real mode: apparent aim point
+const ZERO = new THREE.Vector3();
+const ALT_UP = new THREE.Vector3(0, 0, 1);   // lookAt fallback near vertical flight
 const _q = new THREE.Quaternion();
 const _m = new THREE.Matrix4();
 const UP = new THREE.Vector3(0, 1, 0);
@@ -27,6 +45,31 @@ const BASKET_DOT = Math.cos(8 * Math.PI / 180);   // head-sight basket ±8°
 const LOCK_RANGE = 20000;
 const SEEKER_RANGE = 5200;                        // IR seeker heat detection
 const AMMO_REGEN = { ir: 5.5, radar: 8 };         // s per missile, per pool
+
+// ---------- realistic-mode bodies (B calibration) ----------
+// boost/sustain thrust (m/s^2) and durations, drag factor k (a_drag = k*rho*v^2
+// in the SAME atmosphere the jets fly), rated G with the dynamic-pressure
+// reference speed (full authority at vRef, ~25% at half speed, floored),
+// rail-rigid dead time, hard ttl. Sea-level figures: an IR round launched hot
+// (M1.5 carrier) burns out near 1000 m/s; the radar round sustains ~900 m/s at
+// sea level and ~1200 m/s up high; the AA wall round equilibrates at ~1369.
+const PN_N = 4;                                   // proportional navigation constant
+const G0 = 9.81;
+const CONE_DOT = Math.cos(35 * Math.PI / 180);    // IR seeker cone (+/-35 deg)
+const HEAT_RANGE = 6000;                          // re-open scan range (real IR)
+const RESCAN_T = 0.5;                             // searching re-open period
+const LOW_SPD = 140;                              // burnt-out brick threshold
+const REAL_BODIES = {
+  ir:    { boost: 240, boostT: 2.4, sus: 0,   susT: 0,  k: 7.9e-5, gRate: 40, vRef: 300, gFloor: 0.12, rigid: 0.3, ttl: 15 },
+  radar: { boost: 220, boostT: 3.2, sus: 81,  susT: 6,  k: 1.0e-4, gRate: 30, vRef: 350, gFloor: 0.12, rigid: 0.6, ttl: 30 },
+  aa:    { boost: 320, boostT: 4.0, sus: 150, susT: 12, k: 8.0e-5, gRate: 70, vRef: 300, gFloor: 0.20, rigid: 0.5, ttl: 40 },
+};
+// enemy rounds fly the same bodies ~50 m/s slower at burnout and 15% less G
+function realSpec(kind, fromPlayer) {
+  const s = REAL_BODIES[kind];
+  if (fromPlayer || kind === 'aa') return s;
+  return { ...s, boost: (s.boost * s.boostT - 50) / s.boostT, gRate: s.gRate * 0.85 };
+}
 
 // a guidance target counts only while it is a LIVE body: enemies flag death
 // with dying/dead, the player with alive, flares with neither (they die by
@@ -77,6 +120,7 @@ export class Weapons {
     this.scene = scene;
     this.effects = effects;
     this.audio = null;               // wired by main
+    this.mode = 'arcade';            // 'arcade' | 'real' — set by main at launch
 
     // player state — split missile pools: 6 IR light AAMs, 4 radar rounds
     this.ammo = { ir: 6, radar: 4 };
@@ -157,6 +201,10 @@ export class Weapons {
 
   freeTracer(mesh) { mesh.visible = false; mesh.scale.set(1, 1, 1); }
   freeMissile(ms) { ms.mesh.visible = false; ms.mesh.scale.setScalar(1); }
+
+  // flight-model switch, called once per mission start (main.js); live rounds
+  // carry the flag they launched with
+  setMode(m) { this.mode = m === 'real' ? 'real' : 'arcade'; }
 
   // ---------- guns ----------
   fireGun(origin, dir, speed, fromPlayer, dmg, spread) {
@@ -256,14 +304,29 @@ export class Weapons {
       const p = aspect > 0.5 ? 0.9 : aspect < -0.5 ? 0.2 : 0.5;
       for (let i = 0; i < n; i++) {
         if (Math.random() < p) {
-          ms.target = null;
-          ms.blind = 1.8;
+          this._breakLock(ms, 1.8);
           decoyed++;
           break;
         }
       }
     }
     return decoyed;
+  }
+
+  // lose the track the RIGHT way for the flight model: arcade just nulls the
+  // reference, real IR first snapshots the target state so the round can coast
+  // on the extrapolated ghost until its seeker re-opens
+  _breakLock(ms, blindT) {
+    if (ms.real && ms.kind === 'ir' && liveTarget(ms.target)) {
+      ms.mem = {
+        pos: (ms.target.position ?? ms.target.pos).clone(),
+        vel: (ms.target.vel ?? ZERO).clone(),
+        t: ms.life,
+      };
+    }
+    ms.target = null;
+    ms.blind = Math.max(ms.blind, blindT);
+    ms.inCone = false;
   }
 
   // X key: HEAD-SIGHT lock TOGGLE. With no lock: INSTANT lock on the enemy
@@ -485,37 +548,58 @@ export class Weapons {
     if (!mesh) return;
     mesh.visible = true;
     const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(quat);
-    // per-kind bodies: radar missiles are slower, heavier, longer-legged,
-    // wider-locking (20 km) and turn more lazily than IR missiles; AA rounds
-    // (map-boundary batteries) never run out of motor and turn far too hard
-    // to outmaneuver — the boundary is a wall, not a duel
-    const body = kind === 'aa'
+    const real = this.mode === 'real';
+    // per-kind bodies. ARCADE: radar missiles are slower, heavier,
+    // longer-legged, wider-locking (20 km) and turn more lazily than IR
+    // missiles; AA rounds (map-boundary batteries) never run out of motor and
+    // turn far too hard to outmaneuver — the boundary is a wall, not a duel.
+    // REAL: same personalities re-expressed as energy (see REAL_BODIES) —
+    // the AA wall keeps its job through crushing numbers, not cheats
+    const spec = real ? realSpec(kind, fromPlayer) : null;
+    const body = real
+      ? { maxSpeed: 0, turn: 0,
+          dmg: kind === 'aa' ? 60 : fromPlayer ? (kind === 'radar' ? 80 : 60) : (kind === 'radar' ? 55 : 38),
+          ttl: spec.ttl,
+          lockRange: kind === 'aa' ? 0 : kind === 'radar' ? 20000 : 5200 }
+      : kind === 'aa'
       ? { maxSpeed: 900, turn: 4.5, dmg: 60, ttl: Infinity, lockRange: 0 }
       : kind === 'radar'
       ? { maxSpeed: fromPlayer ? 780 : 650, turn: fromPlayer ? 2.5 : 2.2, dmg: fromPlayer ? 80 : 55, ttl: 16, lockRange: 20000 }
       : { maxSpeed: fromPlayer ? 880 : 700, turn: fromPlayer ? 3.4 : 2.55, dmg: fromPlayer ? 60 : 38, ttl: 8.5, lockRange: 5200 };
+    // launch velocity: arcade rails everything out at a fixed 200 m/s; real
+    // rounds inherit the carrier's full velocity plus a small separation kick
+    // along the rail (AA cells eject at ~50 m/s before ignition)
+    const vel = real
+      ? (owner && owner.vel ? owner.vel.clone().addScaledVector(fwd, 30) : fwd.clone().multiplyScalar(50))
+      : fwd.clone().multiplyScalar(200);
     this.missiles.push({
       pos: origin.clone(),
       prev: origin.clone(),   // last-frame position: segment fuse reference
       quat: quat.clone(),
-      vel: fwd.clone().multiplyScalar(200),
-      speed: 200,
+      vel,
+      speed: vel.length(),
       life: 0,
       ttl: body.ttl,
       fromPlayer,
       kind,
+      real,
+      spec,                                 // realistic body card (null in arcade)
+      motorEnd: spec ? spec.boostT + spec.susT : 0,
       maxSpeed: body.maxSpeed,
       turnRate: body.turn,
       dmg: body.dmg,
       target,
       mesh,
       smokeT: 0,
-      blind: 0,            // >0: decoyed/notched, flying straight
+      blind: 0,            // decoyed/notched, flying blind
       notchT: 0,           // sustained beam/terrain time (radar only)
       mpF: 0,              // multipath strength 0..1 (target hugging the deck)
       mpT: 0,              // multipath lock-decay accumulator (radar only)
       owner: owner || null,          // launcher: immune to its own missile
       armT: 0.35,                    // fuse arming time (s) after launch
+      mem: null,            // real IR ghost snapshot {pos, vel, t}
+      rescanT: 0,           // real IR searching re-open countdown
+      inCone: false,        // real IR edge-triggered seeker-cone state
     });
     // only the PLAYER'S own launches are audible in first person
     if (this.audio && fromPlayer) {
@@ -557,6 +641,7 @@ export class Weapons {
   }
 
   steerMissile(ms, dt) {
+    if (ms.real) return this._stepReal(ms, dt);
     // accelerate, then steer toward a lead point with a turn-rate clamp
     ms.speed = Math.min(ms.speed + 620 * dt, ms.maxSpeed);
     if (ms.blind > 0) {
@@ -583,6 +668,98 @@ export class Weapons {
     }
     ms.vel.copy(_v.set(0, 0, -1).applyQuaternion(ms.quat)).multiplyScalar(ms.speed);
     ms.pos.addScaledVector(ms.vel, dt);
+  }
+
+  // ---------- realistic-mode integrator: point-mass true-vector flight ------
+  // Thrust acts along the flight line, drag is k*rho*v^2 against it, gravity
+  // always pulls; steering is a LATERAL acceleration from pure PN (a = N·Ω×v)
+  // plus a 1G gravity bias, clamped by the dynamic-pressure-scaled G limit.
+  // Speed, turn radius, coast-out and the terminal dive all fall out of the
+  // forces — nothing here is scripted. Guidance sources: live target, or (IR
+  // only, after a break) the ghost extrapolated from the snapshot in ms.mem.
+  _stepReal(ms, dt) {
+    const sp = ms.spec;
+    const v = ms.vel.length();
+    const rho = 1 - clamp(ms.pos.y / 15000, 0, 1) * 0.6;   // the jets' atmosphere
+    const vDir = v > 1 ? _v.copy(ms.vel).multiplyScalar(1 / v)
+      : _v.set(0, 0, -1).applyQuaternion(ms.quat);
+
+    // motor: boost, sustain, then silence
+    const aT = ms.life < sp.boostT ? sp.boost
+      : ms.life < sp.boostT + sp.susT ? sp.sus : 0;
+
+    // ---- lateral command ----
+    _ac.set(0, 0, 0);
+    let guiding = false;
+    if (ms.life >= sp.rigid) {                 // rail-rigid dead time first
+      const live = liveTarget(ms.target);
+      if (live) {
+        _tp.copy(ms.target.position ?? ms.target.pos);
+        guiding = true;
+      } else if (ms.mem && ms.kind === 'ir') {
+        _tp.copy(ms.mem.pos).addScaledVector(ms.mem.vel, ms.life - ms.mem.t);
+        guiding = true;
+      }
+      if (guiding) {
+        // radar multipath: the seeker centroid sinks toward the mirror image
+        if (ms.kind === 'radar' && ms.mpF > 0) {
+          const d = ms.pos.distanceTo(_tp);
+          _tp.y -= ms.mpF * (30 + Math.min(60, 800 / Math.max(d, 1)) * 14);
+        }
+        _r.copy(_tp).sub(ms.pos);
+        const rl = _r.length();
+        if (rl > 4) {
+          _vr.copy(live ? ms.target.vel : ms.mem.vel).sub(ms.vel);
+          _om.copy(_r).cross(_vr).divideScalar(rl * rl);      // LOS rate
+          _ac.copy(_om).cross(ms.vel).multiplyScalar(PN_N);   // always ⊥ velocity
+        }
+        _ac.y += G0;   // gravity bias: hold the line without spending turn G
+      }
+    }
+    // available G falls with dynamic pressure — a slow round flies like one
+    const gAvail = sp.gRate * clamp((v / sp.vRef) * (v / sp.vRef), sp.gFloor, 1);
+    const aMax = gAvail * G0;
+    const al = _ac.length();
+    if (al > aMax) _ac.multiplyScalar(aMax / al);
+    _ac.addScaledVector(vDir, -_ac.dot(vDir));   // lateral only: rotate, don't brake
+
+    // ---- forces & integration ----
+    const drag = sp.k * rho * v * v;
+    ms.vel.addScaledVector(vDir, (aT - drag) * dt);
+    ms.vel.y -= G0 * dt;
+    ms.vel.addScaledVector(_ac, dt);
+    ms.pos.addScaledVector(ms.vel, dt);
+    ms.speed = ms.vel.length();
+    // body chases the velocity vector (rendering + seeker boresight)
+    if (ms.speed > 25) {
+      const up = Math.abs(ms.vel.y / ms.speed) > 0.98 ? ALT_UP : UP;
+      _m.lookAt(_v2.set(0, 0, 0), _v3.copy(ms.vel), up);
+      ms.quat.setFromRotationMatrix(_m);
+    }
+  }
+
+  // real-mode IR seeker re-open: pure heat-source scan — every aircraft AND
+  // every burning flare inside the +/-35 deg cone, angle-closest wins, the
+  // original target holds no privilege (a still-burning flare gets re-bitten)
+  scanHeat(ms, player, enemies) {
+    _v.set(0, 0, -1).applyQuaternion(ms.quat);   // boresight = velocity line
+    let best = null, bestDot = CONE_DOT;
+    const consider = (pos, src) => {
+      _v2.copy(pos).sub(ms.pos);
+      const d = _v2.length();
+      if (d > HEAT_RANGE || d < 60) return;
+      const dot = _v2.divideScalar(d).dot(_v);
+      if (dot > bestDot) { bestDot = dot; best = src; }
+    };
+    const considerBody = (t) => {
+      if (!liveTarget(t) || t === ms.owner) return;
+      if (ms.fromPlayer && t === player) return;   // no self-hits
+      consider(t.position, t);
+    };
+    considerBody(player);
+    for (const e of enemies) considerBody(e);
+    for (const f of this.flareList) consider(f.pos, f);
+    return best;
   }
 
   update(dt, player, enemies, effects) {
@@ -714,16 +891,39 @@ export class Weapons {
         }
       }
       // a missile biting a flare chases it until the flare burns out, then
-      // goes decoyed-blind (IR re-acquires after 1.8 s — anyone, any aircraft)
+      // goes decoyed-blind (IR re-acquires after 1.8 s — anyone, any aircraft
+      // in arcade; in real mode the burnt flare's ghost is snapshotted first)
       if (ms.target && ms.target.isFlare && !this.flareList.includes(ms.target)) {
-        ms.target = null;
-        if (ms.kind === 'ir') ms.blind = Math.max(ms.blind, 1.8);
+        this._breakLock(ms, ms.kind === 'ir' ? 1.8 : 0);
       }
       if (ms.blind > 0) {
         ms.blind -= dt;
         // IR seekers re-acquire after the blind period; a radar missile that
         // got notched or terrain-masked stays dumb permanently (blind = 1e9)
-        if (ms.blind <= 0 && ms.kind === 'ir') this.reacquire(ms, player, enemies);
+        if (ms.blind <= 0 && ms.kind === 'ir') {
+          if (ms.real) { ms.target = this.scanHeat(ms, player, enemies); ms.rescanT = RESCAN_T; }
+          else this.reacquire(ms, player, enemies);
+        }
+      } else if (ms.real && ms.kind === 'ir' && !liveTarget(ms.target)) {
+        // SEARCHING: ghost-coasting with the seeker re-opening on pure heat
+        // every RESCAN_T until something bites, the ttl or the ground does
+        ms.rescanT -= dt;
+        if (ms.rescanT <= 0) {
+          ms.rescanT = RESCAN_T;
+          ms.target = this.scanHeat(ms, player, enemies);
+        }
+      }
+      // real IR seeker cone (±35°, edge-triggered: only LOSING a cone that
+      // was held breaks the track — off-boresight launches may fly INTO it)
+      if (ms.real && ms.kind === 'ir' && ms.blind <= 0 && ms.life >= ms.spec.rigid
+        && liveTarget(ms.target) && !ms.target.isFlare) {
+        _v.set(0, 0, -1).applyQuaternion(ms.quat);
+        _v2.copy(ms.target.position ?? ms.target.pos).sub(ms.pos).normalize();
+        const inCone = _v2.dot(_v) > CONE_DOT;
+        if (ms.inCone && !inCone) this._breakLock(ms, 1.8);   // beamed out
+        ms.inCone = inCone;
+      } else if (ms.real && (!liveTarget(ms.target) || ms.target.isFlare)) {
+        ms.inCone = false;
       }
       // radar guidance environment: the 三九 notch and terrain masking.
       // WITHOUT chaff the beam must be near-perfect (±17°); WITH a chaff
@@ -777,10 +977,13 @@ export class Weapons {
       // same sub-pixel cure as tracers: a 0.16 m fuselage vanishes past
       // ~1.5 km; grow it mildly with range (PIP rides close, stays ~1x)
       ms.mesh.scale.setScalar(Math.min(2.6, Math.max(1, ms.pos.distanceTo(player.position) / 900)));
+      // trail: thick smoke + flame while the motor burns; after burnout the
+      // round leaves only a thin, broken strand — that IS the energy readout
+      const burning = !ms.real || ms.life <= ms.motorEnd;
       ms.smokeT += dt;
-      if (ms.smokeT > 0.016) {
+      if (ms.smokeT > (burning ? 0.016 : 0.05)) {
         ms.smokeT = 0;
-        effects.missileTrail(ms.pos, ms.vel.clone().multiplyScalar(-0.02));
+        effects.missileTrail(ms.pos, ms.vel.clone().multiplyScalar(-0.02), burning);
       }
       if (!ms.fromPlayer && player.alive && (ms.target === player || (ms.blind > 0 && ms.blind < 5))) {
         if (ms.kind === 'radar') this.radarInbound = true;
@@ -850,6 +1053,9 @@ export class Weapons {
       const ground = Math.max(terrainSurfaceAt(ms.pos.x, ms.pos.z), SEA_LEVEL);
       if (!boom && ms.pos.y < ground) boom = true;
       if (!boom && ms.life > ms.ttl) boom = true;
+      // real mode, motor spent and dragging to a crawl: the round is debris —
+      // detonate it instead of dragging a dead plume across the sky
+      if (!boom && ms.real && ms.kind !== 'aa' && ms.life > ms.motorEnd && ms.vel.length() < LOW_SPD) boom = true;
       if (boom) {
         const overSea = terrainSurfaceAt(boomPos.x, boomPos.z) < SEA_LEVEL + 1;
         if (overSea) effects.waterColumn?.(boomPos, 1.2);

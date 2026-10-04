@@ -135,6 +135,11 @@ function flashKill() {
 
 function resetAll() {
   G.kills = 0; G.score = 0; G.time = 0; G.deathTimer = 0; G.paused = false; G.training = false;
+  // missile flight model for this run: locked at launch, from the title-page
+  // mode strip (persisted in settings)
+  weapons.setMode(settings.mslRealistic ? 'real' : 'arcade');
+  G.mslRealistic = !!settings.mslRealistic;
+  recorder.mslMode = G.mslRealistic ? 'real' : 'arcade';
   player.reset();
   enemies.reset();
   weapons.reset();
@@ -351,7 +356,8 @@ function introStep(dt) {
     if (G.introT <= 0) {
       G.state = 'playing';
       hud.announce(G.training ? 'RANGE HOT' : 'MISSION START',
-        G.training ? G.trainHot : 'INTERCEPT THE INBOUND FORMATION', 2.2, 'wave');
+        (G.training ? G.trainHot : 'INTERCEPT THE INBOUND FORMATION')
+        + (G.mslRealistic ? ' — 拟真弹道' : ''), 2.2, 'wave');
     }
 }
 
@@ -810,6 +816,7 @@ function renderHUD(pipRect) {
     state: G.state === 'intro' ? 'playing' : G.state,
     paused: G.paused,
     training: G.training,
+    mslReal: !!G.mslRealistic,
     player, camera,
     enemies: enemies.enemies,
     weapons,
@@ -1066,7 +1073,7 @@ const OPTIONS = [
   { key: 'volSfx', label: '音效 — 武器/爆炸/警报', kind: 'slider', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
   { key: 'volEngine', label: '引擎与风声', kind: 'slider', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
 ];
-const settings = { nearMissWhip: true, blastFlare: true, blastGhosts: true, volMaster: 1, volSfx: 1, volEngine: 1 };      // defaults
+const settings = { nearMissWhip: true, blastFlare: true, blastGhosts: true, volMaster: 1, volSfx: 1, volEngine: 1, mslRealistic: false };      // defaults
 try { Object.assign(settings, JSON.parse(localStorage.getItem('sb_opts') || '{}')); } catch { /* fresh start */ }
 const saveSettings = () => { try { localStorage.setItem('sb_opts', JSON.stringify(settings)); } catch { /* private mode */ } };
 window.__settings = settings;                 // debug hook
@@ -1194,6 +1201,45 @@ for (const type of ['mousedown', 'mouseup', 'click']) {
   trainingEntry.addEventListener(type, e => e.stopPropagation());
 }
 trainingEntry.addEventListener('click', () => trainMenu.classList.toggle('hidden'));
+// missile flight-model strip: 街机 (classic kinematics) vs 拟真 (energy-
+// managed). Same swallow-the-click dance — the title screen starts a mission
+// on ANY window-level mousedown, so the chips must never leak a click through
+const modeChips = document.querySelectorAll('#mode-strip .mode-chip');
+const real = () => !!settings.mslRealistic;
+const refreshModeUI = () => {
+  for (const ch of modeChips) ch.classList.toggle('sel', (ch.dataset.mode === 'real') === real());
+  trainingEntry.innerHTML = `训练场<span class="mode-badge${real() ? '' : ' arcade'}">${real() ? '拟真' : '街机'}</span>`;
+};
+for (const ch of modeChips) {
+  for (const type of ['mousedown', 'mouseup', 'click']) {
+    ch.addEventListener(type, e => e.stopPropagation());
+  }
+  ch.addEventListener('click', () => {
+    settings.mslRealistic = ch.dataset.mode === 'real';
+    saveSettings();
+    refreshModeUI();
+  });
+}
+refreshModeUI();
+// briefing fold: the controls grid lives behind the BRIEFING toggle (same
+// swallow-the-click dance — a leaked mousedown would start the mission)
+const briefingToggle = document.getElementById('briefing-toggle');
+for (const type of ['mousedown', 'mouseup', 'click']) {
+  briefingToggle.addEventListener(type, e => e.stopPropagation());
+}
+briefingToggle.addEventListener('click', () => {
+  titleEl.classList.toggle('controls-open');
+});
+// title telemetry line: real UTC clock in briefing clothing
+const teleEl = document.getElementById('title-tele');
+const fmtTele = () => {
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  teleEl.textContent = `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} `
+    + `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}Z · 34°12'N 122°38'E · WX CLEAR · F-14A READY`;
+};
+fmtTele();
+setInterval(() => { if (G.state === 'title') fmtTele(); }, 15000);
 for (const opt of trainMenu.querySelectorAll('.train-opt')) {
   for (const type of ['mousedown', 'mouseup', 'click']) {
     opt.addEventListener(type, e => e.stopPropagation());

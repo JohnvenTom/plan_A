@@ -36,7 +36,7 @@ function newTrack(id, kind, extra = {}) {
 }
 
 export class Recorder {
-  constructor() { this.reset(); }
+  constructor() { this.mslMode = 'arcade'; this.reset(); }
 
   reset() {
     this.active = false;
@@ -189,6 +189,7 @@ export class Recorder {
     return {
       v: 1, app: 'sky-baroness',
       date: this.date,
+      mslMode: this.mslMode || 'arcade',   // flight model the round was flown under
       duration: Math.round(this.time * 100) / 100,
       result: this.result,
       tracks: this.tracks.map(tr => ({

@@ -19,10 +19,17 @@
     align-items: center; justify-content: center; pointer-events: none;
     font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
     color: #e8f2ff; text-shadow: 0 0 18px rgba(120, 200, 255, .55);
-    background: radial-gradient(ellipse at 50% 60%, rgba(8, 18, 38, .18), rgba(2, 6, 16, .78));
+    background: radial-gradient(ellipse at 50% 42%, rgba(6, 14, 30, .05), rgba(2, 6, 16, .58));
     transition: opacity .5s ease; z-index: 10;
   }
   .overlay.hidden { opacity: 0; visibility: hidden; }
+  /* title: mission-briefing frame over the live golden-hour world */
+  .title-hud { position: relative; padding: 30px 58px 22px; text-align: center; }
+  .hud-c { position: absolute; width: 26px; height: 26px; border: 2px solid rgba(255, 210, 122, .7); }
+  .hud-c.tl { top: 0; left: 0; border-right: none; border-bottom: none; }
+  .hud-c.tr { top: 0; right: 0; border-left: none; border-bottom: none; }
+  .hud-c.bl { bottom: 0; left: 0; border-right: none; border-top: none; }
+  .hud-c.br { bottom: 0; right: 0; border-left: none; border-top: none; }
   .title-en {
     font-family: Georgia, "Times New Roman", serif;
     font-size: clamp(40px, 7vw, 88px); letter-spacing: .35em; font-weight: 700;
@@ -32,17 +39,63 @@
     font-size: clamp(18px, 2.6vw, 30px); letter-spacing: 1.6em; margin: 10px 0 0 1.6em;
     color: #9fd0ff; font-weight: 300;
   }
-  .mission { margin-top: 34px; font-size: 15px; letter-spacing: .5em; color: #ffd27a; }
+  .mission { margin-top: 26px; font-size: 15px; letter-spacing: .5em; color: #ffd27a; }
+  .title-tele {
+    margin-top: 12px; font: 11px Consolas, monospace; letter-spacing: .18em;
+    color: #6f87a8; text-shadow: none;
+  }
   .controls {
-    margin-top: 30px; display: grid; grid-template-columns: auto auto; gap: 7px 26px;
-    font-size: 14px; color: #cfe3ff; background: rgba(10, 22, 44, .55);
-    border: 1px solid rgba(120, 180, 255, .25); padding: 20px 34px; border-radius: 6px;
+    display: grid; grid-template-columns: auto auto; gap: 7px 26px;
+    font-size: 13.5px; color: #cfe3ff; background: rgba(10, 22, 44, .62);
+    border: 1px solid rgba(120, 180, 255, .25); padding: 18px 30px; border-radius: 6px;
+    max-height: 0; opacity: 0; overflow: hidden; margin-top: 0;
+    transition: max-height .35s ease, opacity .3s ease, margin-top .35s ease, padding .35s ease;
+    padding-top: 0; padding-bottom: 0; pointer-events: none;
+  }
+  #title.controls-open .controls {
+    max-height: 560px; opacity: 1; margin-top: 20px; padding-top: 18px; padding-bottom: 18px;
   }
   .controls b { color: #ffe9c4; font-family: Consolas, monospace; font-weight: 600; }
+  .briefing-toggle {
+    margin-top: 24px; font: 13px Consolas, monospace; letter-spacing: .25em; color: #9fd0ff;
+    border: 1px solid rgba(143, 224, 255, .3); border-radius: 4px; padding: 7px 20px;
+    cursor: pointer; pointer-events: auto; background: rgba(10, 22, 44, .55);
+    transition: all .15s ease;
+  }
+  .briefing-toggle .bt-en { color: #ffd27a; margin-right: 6px; }
+  .briefing-toggle:hover { color: #fff; border-color: #ffe9c4; }
+  #title.controls-open .briefing-toggle .bt-arrow { display: inline-block; transform: rotate(180deg); }
+  .title-row { display: flex; gap: 14px; margin-top: 18px; }
+  .title-row .replay-entry { margin-top: 0; }
   .start-hint {
-    margin-top: 34px; font-size: 17px; letter-spacing: .4em; color: #fff;
+    margin-top: 30px; font-size: 17px; letter-spacing: .4em; color: #ffe9c4;
+    text-shadow: 0 0 14px rgba(255, 210, 122, .6);
     animation: pulse 1.6s ease-in-out infinite;
   }
+  /* missile flight-model picker: arcade (classic kinematics) vs real
+     (energy-managed point mass) — one choice for mission AND range */
+  .mode-strip {
+    margin-top: 26px; display: inline-flex; gap: 10px; align-items: center;
+  }
+  .mode-strip .mode-cap { font-size: 12px; letter-spacing: .3em; color: #6f87a8; margin-right: 4px; }
+  .mode-chip {
+    font-size: 14px; letter-spacing: .25em; color: #9fd0ff; cursor: pointer;
+    pointer-events: auto;                 // .overlay is pointer-events:none
+    border: 1px solid rgba(143, 224, 255, .3); border-radius: 4px; padding: 7px 22px;
+    background: rgba(10, 22, 44, .55); transition: all .15s ease;
+  }
+  .mode-chip:hover { color: #fff; border-color: #ffe9c4; }
+  .mode-chip.sel {
+    color: #0a1428; background: #ffd27a; border-color: #ffd27a; font-weight: 600;
+    box-shadow: 0 0 18px rgba(255, 210, 122, .45);
+  }
+  .mode-chip.sel.real-chip { background: #8fe0ff; border-color: #8fe0ff; box-shadow: 0 0 18px rgba(143, 224, 255, .5); }
+  .mode-badge {
+    display: inline-block; margin-left: 10px; padding: 1px 8px; border-radius: 3px;
+    font-size: 11px; letter-spacing: .15em; vertical-align: 1px;
+    color: #0a1428; background: #8fe0ff; font-weight: 600;
+  }
+  .mode-badge.arcade { background: #ffd27a; }
   @keyframes pulse { 50% { opacity: .25; } }
   .big-stat { font-family: Consolas, monospace; font-size: clamp(30px, 5vw, 54px); color: #ffe9c4; }
   .sub-stat { margin-top: 14px; font-size: 16px; letter-spacing: .4em; color: #9fd0ff; }
@@ -326,9 +379,23 @@
   </div>
 
   <div class="overlay" id="title">
-    <div class="title-en">SKY BARONESS</div>
-    <div class="title-zh">皇 牌 空 战</div>
-    <div class="mission">OPERATION GOLDEN HOUR — 拦截入侵机群</div>
+    <div class="title-hud">
+      <i class="hud-c tl"></i><i class="hud-c tr"></i><i class="hud-c bl"></i><i class="hud-c br"></i>
+      <div class="title-en">SKY BARONESS</div>
+      <div class="title-zh">皇 牌 空 战</div>
+      <div class="mission">▸ OPERATION GOLDEN HOUR — 拦截入侵机群</div>
+      <div class="title-tele" id="title-tele">----‐--‐ --:--Z · 34°12'N 122°38'E · WX CLEAR · F-14A READY</div>
+    </div>
+
+    <div class="mode-strip" id="mode-strip">
+      <span class="mode-cap">武器物理</span>
+      <span class="mode-chip" data-mode="arcade">街机 ARCADE</span>
+      <span class="mode-chip real-chip" data-mode="real">拟真 REALISTIC</span>
+    </div>
+
+    <div class="start-hint">► 按 回车 或 点击 开始任务 ◄</div>
+
+    <div class="briefing-toggle" id="briefing-toggle"><span class="bt-en">BRIEFING</span> 作战简报 <span class="bt-arrow">▾</span></div>
     <div class="controls">
       <span><b>鼠标</b> 引导圈+视角跟随鼠标指向,机头自动追圈</span><span><b>左键</b> 机炮</span>
       <span><b>空格</b> 发射导弹(预热后) / 冷态时代替ALT发起预热</span><span><b>R</b> 切换红外弹/雷达弹 · <b>X</b> 头瞄锁定(再按取消)</span>
@@ -338,10 +405,14 @@
       <span><b>A / D</b> 手动横滚(覆盖)</span><span><b>Q / E</b> 方向舵</span>
       <span><b>C 长按</b> 自由视角环视</span><span><b>V</b> 视角档位 · <b>Z</b> 放大</span>
       <span><b>F</b> FBW迎角限制开/关(关闭可拉入真失速/尾旋)</span><span>失速:推杆加速 · 尾旋:反舵(Q/E)+顶杆改出</span>
-      <span><b>P / ESC</b> 暂停</span><span>左下角「设置」可自定义键位与游戏选项(近失弹甩镜等)</span>
+      <span><b>导弹物理</b> 街机=经典手感 · 拟真=能量管理/燃尽掉速/动压过载/热源复锁</span><span><b>P / ESC</b> 暂停</span>
+      <span>左下角「设置」可自定义键位与游戏选项(近失弹甩镜等)</span>
     </div>
-    <div class="start-hint">— 按 回车 或 点击 开始任务 —</div>
-    <div class="replay-entry" id="training-entry">训练场</div>
+
+    <div class="title-row">
+      <div class="replay-entry" id="training-entry">训练场</div>
+      <div class="replay-entry" id="replay-entry">导入战报回看</div>
+    </div>
     <div id="train-menu" class="hidden">
       <div class="replay-entry train-opt" data-mode="multipath">多径靶场 — 雷达弹 vs 低空目标</div>
       <div class="replay-entry train-opt" data-mode="defense">防御训练 — 39 / 箔条 / 热诱弹 / 贴地</div>
@@ -351,7 +422,6 @@
       <div class="replay-entry train-opt" data-mode="stall">失速与尾旋 — 关限器·偏离·反舵改出</div>
       <div class="replay-entry train-opt" data-mode="freeflight">自由飞行 — 空域无目标</div>
     </div>
-    <div class="replay-entry" id="replay-entry">导入战报回看</div>
     <input type="file" id="replay-file" accept=".json,application/json" hidden>
   </div>
 

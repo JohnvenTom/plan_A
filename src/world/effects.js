@@ -689,15 +689,25 @@ export class Effects {
     });
   }
 
-  missileTrail(pos, vel) {
-    this.spawn(this.smoke, {
-      pos, vel, life: 1.9 + this.rng() * 0.5, drag: 0.92, gravity: -1.2, turb: 1.2,
-      c0: [0.88, 0.86, 0.84], c1: [0.55, 0.54, 0.53], a0: 0.62, a1: 0,
-      s0: 3.2, s1: 26,
-    });
-    this.spawn(this.add, {
-      pos, life: 0.07, c0: [3.2, 1.9, 0.7], c1: [1.2, 0.5, 0.1], s0: 8, s1: 3,
-    });
+  missileTrail(pos, vel, burning = true) {
+    if (burning) {
+      this.spawn(this.smoke, {
+        pos, vel, life: 1.9 + this.rng() * 0.5, drag: 0.92, gravity: -1.2, turb: 1.2,
+        c0: [0.88, 0.86, 0.84], c1: [0.55, 0.54, 0.53], a0: 0.62, a1: 0,
+        s0: 3.2, s1: 26,
+      });
+      this.spawn(this.add, {
+        pos, life: 0.07, c0: [3.2, 1.9, 0.7], c1: [1.2, 0.5, 0.1], s0: 8, s1: 3,
+      });
+    } else {
+      // motor spent: no flame, just a thin wispy strand that reads as
+      // "this round is coasting on borrowed energy" from a distance
+      this.spawn(this.smoke, {
+        pos, vel, life: 1.0 + this.rng() * 0.4, drag: 0.94, gravity: -1.2, turb: 1.2,
+        c0: [0.8, 0.79, 0.78], c1: [0.6, 0.6, 0.6], a0: 0.3, a1: 0,
+        s0: 1.6, s1: 10,
+      });
+    }
   }
 
   // level 0: light white wisps (fresh damage) · 1: grey · 2: black plume

@@ -959,6 +959,22 @@ export class HUD {
     if (S.weapons.radarInbound && blink) {
       this.text('⚠ RADAR ⚠ 39机动/箔条!', cx, this.h / 2 - 150, 22, RED, 'center', 12);
     }
+    // realistic-mode training readout: the nearest inbound's energy state —
+    // speed, motor phase, range. The energy game is invisible without a
+    // number, so the range gets one (real-mode training courses only)
+    if (S.training && S.mslReal && (S.weapons.inboundWarning || S.weapons.radarInbound)) {
+      let m0 = null, d0 = Infinity;
+      for (const ms of S.weapons.missiles) {
+        if (ms.fromPlayer) continue;
+        const d = ms.pos.distanceTo(S.player.position);
+        if (d < d0) { d0 = d; m0 = ms; }
+      }
+      if (m0 && m0.real) {
+        const burn = m0.life <= m0.motorEnd;
+        this.text(`${Math.round(m0.speed)} m/s · ${burn ? '燃烧' : '燃尽'} · ${(d0 / 1000).toFixed(1)} km`,
+          cx, this.h / 2 - 124, 14, AMBER, 'center', 8);
+      }
+    }
     // enemy fire-control phases (only when nothing of ours is inbound):
     // amber while the enemy builds the 1.15 s lock, red-ish while warming
     if (!S.weapons.inboundWarning && !S.weapons.radarInbound) {
