@@ -642,11 +642,11 @@ function renderFrame(dt) {
       const c = weapons.missiles[i];
       if (c.fromPlayer && c.target && !c.target.dying) { m = c; break; }
     }
-    // no live round to ride: the SEEKER PREVIEW — radar selected + X-lock
-    // held shows the not-yet-launched round's eye slaved to the lock (an IR
-    // seeker genuinely cannot see past the rail, so IR gets no preview)
+    // no live round to ride: the LOCK PREVIEW — any X-lock held slaves the
+    // PIP eye to the target, whatever sits on the rail (the lock belongs to
+    // the aircraft's radar, not to the round: IR may fire off it too)
     let lockT = null;
-    if (!m && weapons.mslKind === 'radar' && weapons.lockState.locked
+    if (!m && weapons.lockState.locked
       && weapons.lockState.target && !weapons.lockState.target.dying) {
       lockT = weapons.lockState.target;
     }
@@ -660,7 +660,7 @@ function renderFrame(dt) {
       G._pipSrc = src;
       G._pipWasLive = true;
       G.pipMsl = m;                                    // null in preview mode
-      G.pipLabel = m ? 'MSL CAM' : 'SEEKER';
+      G.pipLabel = m ? 'MSL CAM' : 'PREVIEW';
       G.pipOpen = Math.min(1, G.pipOpen + dt * 5.5);
       G.pipGlitch = Math.max(0, G.pipGlitch - dt * 2.2);
       G.pipZoom = 1;
@@ -681,10 +681,13 @@ function renderFrame(dt) {
         _pv.copy(mm.vel).normalize();
         mslCam.position.copy(mm.pos).addScaledVector(_pv, 7.5).add(_pv2.set(0, 1.1, 0));
       } else {
-        // rail preview: the seeker eye rides the radome ~6 m ahead, sharing
-        // the carrier's attitude — launch then swaps in the real round's
-        // own camera (one glitch burst covers the cut)
-        mslCam.position.copy(player.position).addScaledVector(player.forward(_pv2), 6);
+        // rail preview: the eye rides a chin mount — 1.5 m ahead of and
+        // 0.8 m below the model's own nose anchor, clear of the skin on any
+        // airframe — launch then swaps in the real round's own camera (one
+        // glitch burst covers the cut)
+        player.model.anchors.nose.getWorldPosition(mslCam.position);
+        mslCam.position.addScaledVector(player.forward(_pv2), 1.5)
+          .addScaledVector(_pv2.set(0, 1, 0).applyQuaternion(player.body.quat), -0.8);
       }
       _pv2.copy(pvT.position ?? pvT.pos);
       if (_pv2.distanceToSquared(mslCam.position) < 1) _pv2.copy(mslCam.position).addScaledVector(_pv, 100);
