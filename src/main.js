@@ -642,18 +642,32 @@ function renderFrame(dt) {
       const c = weapons.missiles[i];
       if (c.fromPlayer && c.target && !c.target.dying) { m = c; break; }
     }
-    // AC7 fault-open / fault-close: fast CRT expand on launch, glitchy
-    // collapse when the missile (or its target) is gone
-    if (m) {
+    // no live round to ride: the SEEKER PREVIEW — radar selected + X-lock
+    // held shows the not-yet-launched round's eye slaved to the lock (an IR
+    // seeker genuinely cannot see past the rail, so IR gets no preview)
+    let lockT = null;
+    if (!m && weapons.mslKind === 'radar' && weapons.lockState.locked
+      && weapons.lockState.target && !weapons.lockState.target.dying) {
+      lockT = weapons.lockState.target;
+    }
+    // AC7 fault-open / fault-close: fast CRT expand, glitchy collapse when
+    // the source is gone — and a glitch burst on any source HANDOFF (lock
+    // preview -> launched round, re-lock onto something else)
+    const src = m || lockT;
+    if (src) {
       if (!G._pipWasLive) { G.pipGlitch = 1; G.pipFov = 58; }   // opening burst: fresh ride starts wide
+      else if (G._pipSrc !== undefined && G._pipSrc !== src) G.pipGlitch = 1;
+      G._pipSrc = src;
       G._pipWasLive = true;
-      G.pipMsl = m;
+      G.pipMsl = m;                                    // null in preview mode
+      G.pipLabel = m ? 'MSL CAM' : 'SEEKER';
       G.pipOpen = Math.min(1, G.pipOpen + dt * 5.5);
       G.pipGlitch = Math.max(0, G.pipGlitch - dt * 2.2);
       G.pipZoom = 1;
     } else {
       if (G._pipWasLive) G.pipGlitch = 1;           // closing burst
       G._pipWasLive = false;
+      G._pipSrc = undefined;
       G.pipOpen = Math.max(0, G.pipOpen - dt * 3.2);
       G.pipGlitch = Math.max(0, G.pipGlitch - dt * 2.6);
       G.pipZoom = Math.min(1.15, G.pipZoom + dt * 0.9);
@@ -661,10 +675,18 @@ function renderFrame(dt) {
     // ride only a LIVE missile that still has a target — decoyed missiles
     // null their target and freed missiles may already be recycled
     const mm = G.pipMsl;
-    if (G.pipOpen > 0.01 && mm && weapons.missiles.includes(mm) && mm.target) {
-      _pv.copy(mm.vel).normalize();
-      mslCam.position.copy(mm.pos).addScaledVector(_pv, 7.5).add(_pv2.set(0, 1.1, 0));
-      _pv2.copy(mm.target.position ?? mm.target.pos);
+    const pvT = mm && weapons.missiles.includes(mm) ? mm.target : lockT;
+    if (G.pipOpen > 0.01 && pvT && !pvT.dying) {
+      if (mm && weapons.missiles.includes(mm)) {
+        _pv.copy(mm.vel).normalize();
+        mslCam.position.copy(mm.pos).addScaledVector(_pv, 7.5).add(_pv2.set(0, 1.1, 0));
+      } else {
+        // rail preview: the seeker eye rides the radome ~6 m ahead, sharing
+        // the carrier's attitude — launch then swaps in the real round's
+        // own camera (one glitch burst covers the cut)
+        mslCam.position.copy(player.position).addScaledVector(player.forward(_pv2), 6);
+      }
+      _pv2.copy(pvT.position ?? pvT.pos);
       if (_pv2.distanceToSquared(mslCam.position) < 1) _pv2.copy(mslCam.position).addScaledVector(_pv, 100);
       // seeker-cam target framing: hold the target at a constant angular
       // share of the frame (~1/8 of vertical, ref 160 m) by narrowing the
@@ -853,7 +875,7 @@ function renderHUD(pipRect) {
     radarRange: G.radarRange,
     rain: weather.cur.rain,
     inCloud: weather.cur.gray > 0.28 && Math.abs(player.position.y - 2750) < 380,
-    pipRect, pipOn: !!pipRect,
+    pipRect, pipOn: !!pipRect, pipLabel: G.pipLabel,
     sunUV: (() => { _pv.copy(camera.position).addScaledVector(sky.sunDir, 30000).project(camera); return [_pv.x * 0.5 + 0.5, -_pv.y * 0.5 + 0.5]; })(),
     sunVis: (() => { camera.getWorldDirection(_pv2); return _pv2.dot(sky.sunDir) > 0.3 && sky.sunDir.y > 0 ? Math.min(1, _pv2.dot(sky.sunDir)) : 0; })(),
     killGhosts: effects.killFlares.map(f => {
@@ -1108,7 +1130,7 @@ const saveSettings = () => { try { localStorage.setItem('sb_opts', JSON.stringif
 window.__settings = settings;                 // debug hook
 window.__audio = audio;                       // debug hook (intro-sound verify)
 window.__hud = hud;                           // debug hook (HUD readout verify)
-window.__pip = () => ({ fov: G.pipFov, open: G.pipOpen, live: !!G.pipMsl && weapons.missiles.includes(G.pipMsl) });   // debug hook
+window.__pip = () => ({ fov: G.pipFov, open: G.pipOpen, live: !!G.pipMsl && weapons.missiles.includes(G.pipMsl), label: G.pipLabel || null });   // debug hook
 
 // settings -> live systems (audio inits on first gesture; applyVolumes is
 // safe to call before and after)

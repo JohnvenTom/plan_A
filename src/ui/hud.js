@@ -1339,11 +1339,12 @@ export class HUD {
 
   // ---- missile-cam PIP label only: the frame itself is drawn INSIDE the
   // WebGL quad's shader, so border and picture are the same object and can
-  // never disagree in size ----
+  // never disagree in size. SEEKER tag = rail preview slaved to the radar
+  // lock; MSL CAM = riding a launched round ----
   drawPipFrame(S) {
     const r = S.pipRect;
     if (!r || !S.pipOn) return;
-    this.text('MSL CAM', r.x + 10, r.y + 13, 11, 'rgba(159,232,255,0.9)', 'left', 4);
+    this.text(S.pipLabel === 'SEEKER' ? 'SEEKER 锁定预览' : 'MSL CAM', r.x + 10, r.y + 13, 11, 'rgba(159,232,255,0.9)', 'left', 4);
   }
 
   // ---- cinematic letterbox: animated rise/fall (ACE cut, near-miss whip) ----
