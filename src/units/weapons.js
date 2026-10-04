@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { clamp } from '../core/utils.js';
 import { AIRCRAFT_HIT_R, MISSILE_FUSE_R } from '../core/utils.js';
-import { terrainHeightAt, SEA_LEVEL } from '../world/terrain.js';
+import { terrainSurfaceAt, SEA_LEVEL } from '../world/terrain.js';
 
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
@@ -512,6 +512,8 @@ export class Weapons {
       smokeT: 0,
       blind: 0,            // >0: decoyed/notched, flying straight
       notchT: 0,           // sustained beam/terrain time (radar only)
+      mpF: 0,              // multipath strength 0..1 (target hugging the deck)
+      mpT: 0,              // multipath lock-decay accumulator (radar only)
       owner: owner || null,          // launcher: immune to its own missile
       armT: 0.35,                    // fuse arming time (s) after launch
     });
@@ -569,7 +571,11 @@ export class Weapons {
       const dist = ms.pos.distanceTo(tp);
       const tLead = clamp(dist / 800, 0, 2.0);
       // both sides expose their true velocity vector on the flight body
-      _v.copy(tp).addScaledVector(ms.target.vel, tLead).sub(ms.pos).normalize();
+      _v.copy(tp).addScaledVector(ms.target.vel, tLead).sub(ms.pos);
+      // multipath mirror: seeker centroid drifts toward the reflected image
+      // below the surface — the aim point sinks with how low the target files
+      if (ms.kind === 'radar' && ms.mpF > 0) _v.y -= ms.mpF * (30 + Math.min(60, 800 / Math.max(dist, 1)) * 14);
+      _v.normalize();
       _m.lookAt(ms.pos, _v2.copy(ms.pos).add(_v), UP);   // -Z of the matrix faces the aim point
       _q.setFromRotationMatrix(_m);
       const maxTurn = ms.turnRate * (ms.life > 0.35 ? 1 : 0.25);
@@ -635,7 +641,7 @@ export class Weapons {
         }
       }
       // ground hit
-      if (!hit && r.pos.y < Math.max(terrainHeightAt(r.pos.x, r.pos.z), SEA_LEVEL)) {
+      if (!hit && r.pos.y < Math.max(terrainSurfaceAt(r.pos.x, r.pos.z), SEA_LEVEL)) {
         hit = true;
         effects.gunTrailAir(r.pos);
       }
@@ -738,7 +744,7 @@ export class Weapons {
             const px = ms.pos.x + (ntp.x - ms.pos.x) * t;
             const py = ms.pos.y + (ntp.y - ms.pos.y) * t;
             const pz = ms.pos.z + (ntp.z - ms.pos.z) * t;
-            if (terrainHeightAt(px, pz) > py + 15) { masked = true; break; }
+            if (terrainSurfaceAt(px, pz) > py + 15) { masked = true; break; }
           }
         }
         let chaffNear = false;
@@ -748,7 +754,18 @@ export class Weapons {
         const beamLimit = chaffNear ? 0.6 : 0.3;
         const needTime = chaffNear ? 0.7 : 0.9;
         if (beam < beamLimit || masked) ms.notchT += dt; else ms.notchT = 0;
-        if (ms.notchT > needTime) {
+        // multipath: a target hugging the deck (<120 m AGL) ghosts its mirror
+        // image below the surface — the seeker chases the reflection down and
+        // slowly loses the true track. Symmetric: works on the player's radar
+        // missiles against low enemies exactly as it does on theirs. Own
+        // accumulator: pure low flight must accumulate WITHOUT the notch
+        // reset wiping it, and it bleeds off when the target pops back up.
+        const tAGL = ntp.y - Math.max(terrainSurfaceAt(ntp.x, ntp.z), SEA_LEVEL);
+        ms.mpF = tAGL < 120 ? clamp(1 - tAGL / 120, 0, 1) : 0;
+        ms.mpT = ms.mpF > 0
+          ? (ms.mpT || 0) + dt * 0.6 * ms.mpF
+          : Math.max(0, (ms.mpT || 0) - dt * 1.5);   // pop-up: seeker recovers
+        if (ms.notchT > needTime || ms.mpT > 1.0) {
           ms.target = null;
           ms.blind = 1e9;    // permanent lock loss
         }
@@ -830,11 +847,11 @@ export class Weapons {
       // anti-missile intercept: only the PLAYER's rounds fuse on hostile
       // missiles (snapshot the list — intercept kills mark targets _dead)
       if (ms.fromPlayer) for (const t of this.missiles.slice()) fuseHit(t);
-      const ground = Math.max(terrainHeightAt(ms.pos.x, ms.pos.z), SEA_LEVEL);
+      const ground = Math.max(terrainSurfaceAt(ms.pos.x, ms.pos.z), SEA_LEVEL);
       if (!boom && ms.pos.y < ground) boom = true;
       if (!boom && ms.life > ms.ttl) boom = true;
       if (boom) {
-        const overSea = terrainHeightAt(boomPos.x, boomPos.z) < SEA_LEVEL + 1;
+        const overSea = terrainSurfaceAt(boomPos.x, boomPos.z) < SEA_LEVEL + 1;
         if (overSea) effects.waterColumn?.(boomPos, 1.2);
         else effects.explosion?.(boomPos, 0.8);
         this.freeMissile(ms);

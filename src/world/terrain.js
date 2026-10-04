@@ -52,6 +52,35 @@ export function terrainHeightAt(x, z) {
   return h;
 }
 
+// vertex-height grid mirroring the RENDERED mesh: the gameplay surface rides
+// the same triangles the player sees, so what you skim visually is what you
+// hit — the raw analytic terrain has ~330 m detail finer than the ~103 m
+// cells, which the mesh interpolates away (invisible crests caused crashes)
+const VERTS = SEGMENTS + 1;
+const STEP = WORLD_SIZE / SEGMENTS;
+let surfaceGrid = null;
+
+export function terrainSurfaceAt(x, z) {
+  if (!surfaceGrid) {
+    surfaceGrid = new Float32Array(VERTS * VERTS);
+    for (let j = 0; j < VERTS; j++)
+      for (let i = 0; i < VERTS; i++)
+        surfaceGrid[j * VERTS + i] =
+          terrainHeightAt(-WORLD_SIZE / 2 + i * STEP, -WORLD_SIZE / 2 + j * STEP);
+  }
+  const gx = (x + WORLD_SIZE / 2) / STEP, gz = (z + WORLD_SIZE / 2) / STEP;
+  const i = clamp(Math.floor(gx), 0, SEGMENTS - 1), j = clamp(Math.floor(gz), 0, SEGMENTS - 1);
+  const hA = surfaceGrid[j * VERTS + i];
+  const hD = surfaceGrid[j * VERTS + i + 1];         // +x corner
+  const hB = surfaceGrid[(j + 1) * VERTS + i];       // +z corner
+  const hC = surfaceGrid[(j + 1) * VERTS + i + 1];
+  const u = clamp(gx - i, 0, 1), v = clamp(gz - j, 0, 1);
+  // PlaneGeometry splits each cell along the (i,j+1)-(i+1,j) diagonal (u+v=1):
+  // lower triangle (A,D,B), upper triangle (B,C,D)
+  if (u + v <= 1) return hA * (1 - u - v) + hD * u + hB * v;
+  return hC * (u + v - 1) + hD * (1 - v) + hB * (1 - u);
+}
+
 // biome palettes (scene-linear): per-height bands [beach, low, mid, high, peak]
 const BIOME_PALETTES = {
   temperate: [[0.72, 0.62, 0.42], [0.22, 0.33, 0.13], [0.19, 0.26, 0.11], [0.30, 0.26, 0.22], [0.80, 0.80, 0.86]],
@@ -144,6 +173,7 @@ float tnoise(vec2 p){
   mesh.receiveShadow = false;
   mesh.userData.fogTime = fogTime;   // main.js feeds the mist drift clock
   scene.add(mesh);
+  terrainSurfaceAt(0, 0);   // prewarm the gameplay grid during load
   return mesh;
 }
 

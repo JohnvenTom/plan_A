@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { Input, DEFAULT_BINDINGS, ACTION_LABELS, codeLabel } from './core/input.js';
 import { Sky } from './world/sky.js';
 import { Weather } from './world/weather.js';
-import { buildTerrain, buildOcean } from './world/terrain.js';
+import { buildTerrain, buildOcean, terrainHeightAt } from './world/terrain.js';
 import { Player } from './units/player.js';
 import { loadF14 } from './units/f14.js';
 import { EnemyManager } from './units/enemies.js';
@@ -85,6 +85,8 @@ const goEl = document.getElementById('gameover');
 // ---------- game state ----------
 const G = {
   state: 'title',           // title | intro | playing | gameover | debrief
+  training: false,          // training range: drones over the sea, no threats
+  trainMode: 'multipath',   // which course is loaded
   kills: 0, score: 0,
   time: 0, deathTimer: 0, paused: false, menuOpen: false,
   smokeT: 0,
@@ -115,10 +117,10 @@ const killCtx = {
     hud.announce('TARGET DESTROYED', '', 2.2, 'kill', false, { mult: enemy.ace ? 2 : 1, score: 250 + enemies.wave * 25 });
     audio.kill();
     effects.ring?.(enemy.position, 1.3);
-    G.timeScale = 0.25;   // kill-cam micro slow-motion
-    flashKill();
+    if (G.training && enemy.respSpec) enemies.queueRespawn(enemy.respSpec);
+    else { G.timeScale = 0.25; flashKill(); }   // kill-cam only in real combat
   },
-  enemyGun: (e, p) => weapons.enemyGun(e, p),
+  enemyGun: (e, p) => { G._egunNow?.add(e); weapons.enemyGun(e, p); },   // + recorder burst diff
   enemyMissile: (e, p) => weapons.enemyMissile(e, p),
 };
 
@@ -132,7 +134,7 @@ function flashKill() {
 }
 
 function resetAll() {
-  G.kills = 0; G.score = 0; G.time = 0; G.deathTimer = 0; G.paused = false;
+  G.kills = 0; G.score = 0; G.time = 0; G.deathTimer = 0; G.paused = false; G.training = false;
   player.reset();
   enemies.reset();
   weapons.reset();
@@ -147,10 +149,114 @@ function startGame() {
   resetAll();
   recorder.start();
   debrief.hide();
+  trainMenu?.classList.add('hidden');
   G.state = 'intro';
   G.introT = 3.2;
   G.timeScale = 1;
   // swoop starts ahead-right of the jet and settles into the chase camera
+  G.introFrom = player.body.pos.clone()
+    .add(new THREE.Vector3(-70, 14, 26).applyQuaternion(player.body.quat));
+  titleEl.classList.add('hidden');
+  goEl.classList.add('hidden');
+  try { const r = canvas.requestPointerLock?.(); if (r && r.catch) r.catch(() => {}); } catch (_) { /* fallback: delta mode */ }
+}
+
+// ---------- training range over open water: six courses, one sea patch -----
+// drones = passive orbits (spec.launch turns one into a missile launcher);
+// fighters = full-AI guns-only sparring partners
+const TRAINING_MODES = {
+  multipath: {
+    title: 'TRAINING RANGE', sub: 'MULTIPATH TEST — LOW TARGETS DEFEAT RADAR MISSILES',
+    hot: 'TARGETS ON STATION — 50 / 90 / 200 M AGL',
+    drones: [
+      { alt: 50, radius: 1600, speed: 235 },   // deep in the multipath band
+      { alt: 90, radius: 2300, speed: 250 },   // edge of the band
+      { alt: 200, radius: 3000, speed: 270 },  // above 120 m AGL: radar works
+    ],
+  },
+  defense: {
+    title: 'DEFENSE COURSE', sub: 'INBOUND MIXED MISSILES — 39 / CHAFF / FLARE / DECK',
+    hot: 'LAUNCHERS ON STATION — RADAR AND IR ALTERNATING',
+    drones: [
+      { alt: 900, radius: 2600, speed: 260, launch: { interval: 12, kind: 'alt' } },
+      { alt: 1200, radius: 3000, speed: 260, launch: { interval: 12, kind: 'alt' } },
+    ],
+  },
+  intercept: {
+    title: 'INTERCEPT COURSE', sub: 'GUN THE INBOUND MISSILES DOWN',
+    hot: 'STEADY RADAR MISSILE STREAM — WATCH THE RWR',
+    drones: [
+      { alt: 800, radius: 3000, speed: 280, launch: { interval: 8, kind: 'radar' } },
+    ],
+  },
+  gunnery: {
+    title: 'GUNNERY RANGE', sub: 'PREDICTABLE CIRCUITS — LEAD THE TRACERS',
+    hot: 'THREE CIRCUITS AT DIFFERENT SPEEDS',
+    drones: [
+      { alt: 400, radius: 1800, speed: 180 },
+      { alt: 700, radius: 2400, speed: 250 },
+      { alt: 1000, radius: 3000, speed: 320 },
+    ],
+  },
+  dogfight: {
+    title: 'DOGFIGHT COURSE', sub: 'GUNS-ONLY BANDITS — NO MISSILES',
+    hot: 'TWO SPARRING PARTNERS — THEY BITE BACK',
+    fighters: [{ range: 7000 }, { range: 7600 }],
+  },
+  freeflight: {
+    title: 'FREE FLIGHT', sub: 'OPEN RANGE — NO TARGETS',
+    hot: 'OPEN WATER — FLY',
+  },
+};
+// the range center must keep EVERY drone ring clear of terrain along its
+// FULL circle — spot-checking a few points let islands sneak between samples
+// and drones flew straight into them. The island chain is dense: inside
+// r≈12 km NO clear ring exists at any size, so the range sits on the open
+// ocean beyond it (the terrain mask sinks to pure sea out there).
+function findSeaRange(cfg) {
+  const rings = (cfg?.drones || []).map(d => ({ R: d.radius, floor: d.alt }));
+  for (const clear of [70, 40, 10]) {
+    for (let r = 12500; r <= 15000; r += 250)
+      for (let a = 0; a < Math.PI * 2; a += Math.PI / 24) {
+        const x = Math.cos(a) * r, z = Math.sin(a) * r;
+        let ok = true;
+        for (const g of rings) {
+          for (let t = 0; t < Math.PI * 2; t += Math.PI / 48) {
+            if (terrainHeightAt(x + Math.cos(t) * g.R, z + Math.sin(t) * g.R) > g.floor - clear) { ok = false; break; }
+          }
+          if (!ok) break;
+        }
+        // + player spawn patch: water or flat sea (the analytic ocean beyond
+        // the chain is EXACTLY 0 — a strict < 0 test rejects the whole open
+        // ocean, keep the bound above zero)
+        if (ok && terrainHeightAt(x - 4200, z + 2600) < 5) return { x, z };
+      }
+  }
+  return { x: 0, z: 13500 };   // last-ditch: dead ahead into open ocean
+}
+function startTraining(mode = 'multipath') {
+  const cfg = TRAINING_MODES[mode] || TRAINING_MODES.multipath;
+  G.trainMode = mode;
+  audio.init(); audio.resume(); audio.setRunning(true);
+  resetAll();
+  recorder.start();
+  debrief.hide();
+  G.training = true;
+  enemies.training = true;
+  trainMenu.classList.add('hidden');
+  const range = findSeaRange(cfg);
+  // spawn SW of the ring at a safe height, nose pointed at its center
+  const px = range.x - 4200, pz = range.z + 2600;
+  const h = Math.atan2(-(range.x - px), -(range.z - pz));
+  player.body.setState(new THREE.Vector3(px, 750, pz), h, 280);
+  (cfg.drones || []).forEach((d, i) => enemies.spawnTrainingDrone({ ...d, center: range, phase: i * 2.1 }));
+  if (cfg.fighters) for (const f of cfg.fighters) enemies.spawnTrainingFighter(player, f);
+  hud.msgQueue.length = 0;
+  hud.announce(cfg.title, cfg.sub, 4.0, 'wave');
+  G.trainHot = cfg.hot;
+  G.state = 'intro';
+  G.introT = 3.2;
+  G.timeScale = 1;
   G.introFrom = player.body.pos.clone()
     .add(new THREE.Vector3(-70, 14, 26).applyQuaternion(player.body.quat));
   titleEl.classList.add('hidden');
@@ -193,8 +299,9 @@ function enterDebrief(outcome) {
     time: recorder.time, crashed: !!player.crashed,
     gunFired: recorder.stats.gunFired, mslFired: recorder.stats.mslFired,
     hits: recorder.stats.hits,
+    egunFired: recorder.stats.egunFired, pBursts: recorder.stats.pBursts, eBursts: recorder.stats.eBursts,
   });
-  debrief.show(recorder.toRecord(), { onRestart: startGame, onTitle: backToTitle });
+  debrief.show(recorder.toRecord(), { onRestart: G.training ? () => startTraining(G.trainMode) : startGame, onTitle: backToTitle });
 }
 
 // an imported record file (title-page entry) skips the live recorder entirely
@@ -210,6 +317,7 @@ function backToTitle() {
   resetAll();          // park the jets so the title backdrop is a clean sky
   G.state = 'title';
   titleEl.classList.remove('hidden');
+  trainMenu?.classList.add('hidden');
 }
 
 
@@ -232,10 +340,11 @@ function introStep(dt) {
   camera.position.lerpVectors(G.introFrom, player.camPos, e);
   camera.up.set(0, 1, 0);
   camera.lookAt(player.body.pos.x, player.body.pos.y + 4, player.body.pos.z);
-  if (G.introT <= 0) {
-    G.state = 'playing';
-    hud.announce('MISSION START', 'INTERCEPT THE INBOUND FORMATION', 2.2, 'wave');
-  }
+    if (G.introT <= 0) {
+      G.state = 'playing';
+      hud.announce(G.training ? 'RANGE HOT' : 'MISSION START',
+        G.training ? G.trainHot : 'INTERCEPT THE INBOUND FORMATION', 2.2, 'wave');
+    }
 }
 
 function updateEnvironment(dt) {
@@ -271,12 +380,18 @@ function update(dt) {
       if (G.deathTimer > 2.4) gameOver();
     }
 
-    // out-of-area enforcement
-    if (player.outOfAreaTime > 15) player.applyDamage(999);
+    // out-of-area enforcement (the training range is free flight)
+    if (!G.training && player.outOfAreaTime > 15) player.applyDamage(999);
 
     // player weapons
     const firing = input.down('fireGun');
     weapons.playerGun(player, dt, firing && player.alive, enemies.enemies);
+    // player gun burst edges -> flight recorder (per-burst, not per-round)
+    const firingGun = firing && player.alive;
+    if (firingGun !== G._pGunPrev) {
+      recorder.gunBurst('p', firingGun, player.position, player);
+      G._pGunPrev = firingGun;
+    }
     if (input.pressed('fireMissile')) weapons.mslFirePress(player);
     if (input.pressed('mslWarmup')) weapons.mslWarmPress();
     if (input.pressed('flares')) {
@@ -307,8 +422,17 @@ function update(dt) {
     weapons.updateFireControl(dt, player, enemies.enemies);
 
     // world
+    G._egunNow = new Set();          // who is firing guns this frame (filled by killCtx)
     enemies.update(dt, player, player.alive ? killCtx : { effects });
-    aaSites.update(dt, player, weapons, effects);
+    // enemy gun burst edges: diff this frame's firing set against last frame's
+    {
+      const prev = G._egunPrev ?? (G._egunPrev = new Set());
+      for (const e of G._egunNow) if (!prev.has(e)) recorder.gunBurst('e', true, e.position, e);
+      for (const e of prev) if (!G._egunNow.has(e)) recorder.gunBurst('e', false, e.position, e);
+      prev.clear();
+      for (const e of G._egunNow) prev.add(e);
+    }
+    if (!G.training) aaSites.update(dt, player, weapons, effects);   // range mode: flak off
     weapons.update(dt, player, enemies.enemies, effects);
 
     // flight recorder: 20 Hz samples + entity bookkeeping, post-sim so every
@@ -383,10 +507,12 @@ function update(dt) {
       effects.vortexFeed('p', _v, _v2, vI, player.stalling);
     }
     G.smokeT += dt;
-    if (player.hp < 55 && G.smokeT > 0.06 && player.alive) {
+    if (player.hp < 80 && G.smokeT > 0.06 && player.alive) {
+      // same three-band ladder as the enemies: white 80-55, grey 55-25, black 25
       G.smokeT = 0;
       player.model.anchors.tail.getWorldPosition(_v);
-      effects.damageSmoke(_v, _v2.set(0, 0, 0), player.hp < 25);
+      effects.damageSmoke(_v, _v2.set(0, 0, 0),
+        player.hp < 25 ? 2 : player.hp < 55 ? 1 : 0);
     }
     for (const e of enemies.enemies) {
       if (!e.dying) {
@@ -398,9 +524,18 @@ function update(dt) {
         const em = machOf(e.speed, e.position.y);
         effects.vaporCone(e, em >= 0.98 && em <= 1.05);
       }
-      if ((e.hp < 25 || e.pilotHit) && !e.dying && Math.random() < 0.5) {
-        e.model.anchors.tail.getWorldPosition(_v);
-        effects.damageSmoke(_v, _v2.set(0, 0, 0), true);
+      if (!e.dying) {
+        // damage smoke ramps in three bands: white wisps from 80% hp, grey
+        // from 50%, black plume from 25%; cockpit crit smokes at least mid
+        const r = e.hpR ?? 1;
+        const lvl = r < 0.25 ? 2 : (r < 0.5 || e.pilotHit) ? 1 : r < 0.8 ? 0 : -1;
+        if (lvl >= 0) {
+          const k = lvl === 0 ? (0.8 - r) / 0.3 : lvl === 1 ? 1 : 1;
+          if (Math.random() < 0.25 * k + 0.3 * lvl) {
+            e.model.anchors.tail.getWorldPosition(_v);
+            effects.damageSmoke(_v, _v2.set(0, 0, 0), lvl);
+          }
+        }
       }
     }
 
@@ -652,6 +787,7 @@ function renderHUD(pipRect) {
   hud.draw(G.paused ? 0 : 1 / 60, {
     state: G.state === 'intro' ? 'playing' : G.state,
     paused: G.paused,
+    training: G.training,
     player, camera,
     enemies: enemies.enemies,
     weapons,
@@ -1028,6 +1164,20 @@ for (const type of ['mousedown', 'mouseup', 'click']) {
   replayEntry.addEventListener(type, e => e.stopPropagation());
 }
 replayEntry.addEventListener('click', () => replayFile.click());
+// training range entry: same swallow-the-click dance as the replay button —
+// the title screen starts a mission on ANY mousedown
+const trainingEntry = document.getElementById('training-entry');
+const trainMenu = document.getElementById('train-menu');
+for (const type of ['mousedown', 'mouseup', 'click']) {
+  trainingEntry.addEventListener(type, e => e.stopPropagation());
+}
+trainingEntry.addEventListener('click', () => trainMenu.classList.toggle('hidden'));
+for (const opt of trainMenu.querySelectorAll('.train-opt')) {
+  for (const type of ['mousedown', 'mouseup', 'click']) {
+    opt.addEventListener(type, e => e.stopPropagation());
+  }
+  opt.addEventListener('click', () => startTraining(opt.dataset.mode));
+}
 replayFile.addEventListener('change', () => {
   const f = replayFile.files && replayFile.files[0];
   replayFile.value = '';

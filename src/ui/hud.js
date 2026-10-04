@@ -962,13 +962,14 @@ export class HUD {
       this.text('DAMAGE CRITICAL', cx, this.h / 2 + 180, 18, RED, 'center');
     }
     // approaching the map rim: amber heads-up BEFORE the batteries open up
-    if (!S.player.outOfArea && S.player.edgeDist < COMBAT_RADIUS_M * 0.15) {
+    // (the training range is free flight — no rim, no batteries)
+    if (!S.training && !S.player.outOfArea && S.player.edgeDist < COMBAT_RADIUS_M * 0.15) {
       const d = Math.max(0, S.player.edgeDist);
       if (blink) this.text('接近战区边界 — 建议转向', cx, 120, 17, AMBER, 'center', 8);
       this.text(`EDGE ${Math.round(d / 100) * 100}m`, cx, 146, 13, AMBER, 'center', 6);
     }
     // out of area
-    if (S.player.outOfArea) {
+    if (!S.training && S.player.outOfArea) {
       const left = Math.max(0, 15 - S.player.outOfAreaTime);
       if (blink) this.text('脱离战区 — 返回作战空域', cx, 120, 20, AMBER, 'center', 10);
       this.text(`WARNING ${left.toFixed(0)}`, cx, 148, 16, RED, 'center', 8);

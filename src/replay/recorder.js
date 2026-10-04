@@ -51,13 +51,38 @@ export class Recorder {
     this.events = [];
     this.result = null;          // set via setResult() at mission end
     this.date = new Date().toISOString();
-    this.stats = { gunFired: 0, mslFired: 0, hits: 0 };
+    this.stats = { gunFired: 0, mslFired: 0, hits: 0, egunFired: 0, pBursts: 0, eBursts: 0 };
+    this._openBursts = new Map(); // side:ref -> open gunFire event (per shooter)
     this.player = null;          // player track, created on first sample()
   }
 
   start() { this.reset(); this.active = true; }
 
-  stop() { this.active = false; }
+  stop() {
+    this.active = false;
+    // seal any gun burst still open at mission end so its dur is real
+    for (const e of this._openBursts.values()) e.dur = Math.round((this.time - e.t) * 100) / 100;
+    this._openBursts.clear();
+  }
+
+  // ---- gun bursts (both sides): one event per burst, opened on the first
+  // trigger pull and patched with its duration when the guns go quiet ----
+  gunBurst(side, on, pos, shooter = null) {
+    if (!this.active) return;   // open bursts are sealed by stop()
+    const key = side + ':' + (shooter ? this._entityMap.get(shooter)?.id ?? 'x' : 'p');
+    if (on) {
+      if (this._openBursts.has(key)) return;
+      const e = this.ev('gunFire', { side, m: shooter ? this.trackIdOf(shooter) : null }, pos);
+      this._openBursts.set(key, e);
+      this.stats[side === 'p' ? 'pBursts' : 'eBursts']++;
+    } else {
+      const e = this._openBursts.get(key);
+      if (!e) return;
+      e.dur = Math.round((this.time - e.t) * 100) / 100;
+      if (!e.m && shooter) e.m = this.trackIdOf(shooter);
+      this._openBursts.delete(key);
+    }
+  }
 
   // ---- mission summary: grade is derived here so live + imported records
   // score identically ----
@@ -129,11 +154,14 @@ export class Recorder {
       tr.sealed = true;
     }
 
-    // gun-round diff: new player tracers since last tick = rounds fired
+    // gun-round diff: new tracers since last tick = rounds fired (BOTH sides —
+    // the player's feed the hit-accuracy stats, the enemy's the new tally)
     const seen = this._roundSeen;
     const cur = new Set();
-    for (const r of weapons.rounds) if (r.fromPlayer) cur.add(r);
-    for (const r of cur) if (!seen.has(r)) this.stats.gunFired++;
+    for (const r of weapons.rounds) {
+      cur.add(r);
+      if (!seen.has(r)) { if (r.fromPlayer) this.stats.gunFired++; else this.stats.egunFired++; }
+    }
     this._roundSeen = cur;
   }
 

@@ -2,7 +2,7 @@
 // Two Points layers: additive (fire/spark/flash) + alpha smoke. Seeded RNG keeps
 // the ?t=N freeze harness reproducible.
 import * as THREE from 'three';
-import { SEA_LEVEL, terrainHeightAt } from './terrain.js';
+import { SEA_LEVEL, terrainSurfaceAt } from './terrain.js';
 
 const _wp = new THREE.Vector3();
 const _rp = new THREE.Vector3();
@@ -700,11 +700,15 @@ export class Effects {
     });
   }
 
-  damageSmoke(pos, vel, dark) {
+  // level 0: light white wisps (fresh damage) · 1: grey · 2: black plume
+  damageSmoke(pos, vel, level = 1) {
+    const tint = level >= 2 ? [0.08, 0.08, 0.08]
+      : level >= 1 ? [0.2, 0.19, 0.18]
+      : [0.82, 0.84, 0.86];
     this.spawn(this.smoke, {
       pos, vel, life: 1.3 + this.rng() * 0.6, drag: 0.95, gravity: -3, turb: 2,
-      c0: dark ? [0.08, 0.08, 0.08] : [0.2, 0.19, 0.18], c1: [0.3, 0.3, 0.3], a0: 0.55, a1: 0,
-      s0: 2.5, s1: 16,
+      c0: tint, c1: [0.3, 0.3, 0.3], a0: level === 0 ? 0.34 : 0.55, a1: 0,
+      s0: level === 0 ? 1.8 : 2.5, s1: level === 0 ? 12 : 16,
     });
   }
 
@@ -891,7 +895,7 @@ export class Effects {
       f.t -= dt;
       if (f.t <= 0) { this.fireEmitters.splice(i, 1); continue; }
       const k = Math.min(1, f.t / 1.2);            // die-down envelope
-      const base = Math.max(terrainHeightAt(f.pos.x, f.pos.z), SEA_LEVEL);
+      const base = Math.max(terrainSurfaceAt(f.pos.x, f.pos.z), SEA_LEVEL);
       f.fa += dt; f.sa += dt; f.la += dt;
       if (f.fa > 0.05) {
         f.fa = 0;
@@ -962,7 +966,7 @@ export class Effects {
         });
       }
       // landing: sea splash or a small ground fire; timeout just fades out
-      const g = Math.max(terrainHeightAt(c.m.position.x, c.m.position.z), SEA_LEVEL);
+      const g = Math.max(terrainSurfaceAt(c.m.position.x, c.m.position.z), SEA_LEVEL);
       if (c.m.position.y < g + 1.2) {
         if (g <= SEA_LEVEL + 1) this.waterColumn(c.m.position, 0.45);
         else { this.explosion(c.m.position, 0.5); this.groundFire(c.m.position, false, 0.7); }

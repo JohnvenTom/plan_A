@@ -246,9 +246,13 @@
       background: #ffe9c4; box-shadow: 0 0 10px rgba(255, 233, 196, .8); pointer-events: none;
     }
     #db-ticks i, #db-dots i { position: absolute; pointer-events: none; }
-    #db-ticks .tk { top: 8px; width: 1px; height: 11px; background: #ffd27a; opacity: .8; }
-    #db-ticks .tk.clear { background: #8fa5bd; opacity: .4; }
-    #db-ticks .tk.ace { background: #ffd24d; height: 14px; top: 6px; box-shadow: 0 0 6px rgba(255,210,77,.8); }
+  #db-ticks .tk { top: 8px; width: 1px; height: 11px; background: #ffd27a; opacity: .8; }
+  #db-ticks .tk.clear { background: #8fa5bd; opacity: .4; }
+  #db-ticks .tk.ace { background: #ffd24d; height: 14px; top: 6px; box-shadow: 0 0 6px rgba(255,210,77,.8); }
+  /* gun bursts: frequent + minor — thin half-height ticks, side-colored */
+  #db-ticks .tk.gun { height: 5px; top: 11px; opacity: .55; }
+  #db-ticks .tk.gun.p { background: #9adfff; }
+  #db-ticks .tk.gun.e { background: #ff9a8a; }
     #db-dots .dot {
       top: 14px; width: 6px; height: 6px; margin-left: -3px; border-radius: 50%;
       border: 1.5px solid #fff; background: rgba(5, 7, 15, .8); pointer-events: auto; cursor: pointer;
@@ -271,6 +275,10 @@
       cursor: pointer; pointer-events: auto;
     }
     .replay-entry:hover { color: #fff; border-color: #ffe9c4; }
+    /* training range: the mode picker folds out under the 训练场 button */
+    #train-menu { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+    #train-menu.hidden { display: none; }
+    #train-menu .train-opt { margin-top: 0; }
     /* ---------- themed scrollbars: cyan-tech thin, auto-hide when idle.
        Chromium: the thumb is transparent until its panel is hovered, then a
        dim cyan sliver that lights up on direct hover; Firefox falls back to
@@ -332,6 +340,15 @@
       <span><b>P / ESC</b> 暂停</span><span>左下角「设置」可自定义键位与游戏选项(近失弹甩镜等)</span>
     </div>
     <div class="start-hint">— 按 回车 或 点击 开始任务 —</div>
+    <div class="replay-entry" id="training-entry">训练场</div>
+    <div id="train-menu" class="hidden">
+      <div class="replay-entry train-opt" data-mode="multipath">多径靶场 — 雷达弹 vs 低空目标</div>
+      <div class="replay-entry train-opt" data-mode="defense">防御训练 — 39 / 箔条 / 热诱弹 / 贴地</div>
+      <div class="replay-entry train-opt" data-mode="intercept">拦弹训练 — 机炮拦截来袭导弹</div>
+      <div class="replay-entry train-opt" data-mode="gunnery">机炮靶场 — 可预测盘旋靶机</div>
+      <div class="replay-entry train-opt" data-mode="dogfight">缠斗训练 — 机炮格斗(无导弹)</div>
+      <div class="replay-entry train-opt" data-mode="freeflight">自由飞行 — 空域无目标</div>
+    </div>
     <div class="replay-entry" id="replay-entry">导入战报回看</div>
     <input type="file" id="replay-file" accept=".json,application/json" hidden>
   </div>

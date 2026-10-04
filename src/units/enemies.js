@@ -6,7 +6,7 @@ import { clamp } from '../core/utils.js';
 import { GROUND_CLEAR_AGL } from '../core/utils.js';
 import { buildJet } from './jet.js';
 import { FlightBody } from './flightmodel.js';
-import { terrainHeightAt, SEA_LEVEL } from '../world/terrain.js';
+import { terrainSurfaceAt, SEA_LEVEL } from '../world/terrain.js';
 
 const _aim = new THREE.Vector3();
 const _tmp = new THREE.Vector3();
@@ -25,11 +25,15 @@ class Enemy {
     this.flashT = 0;
 
     const agility = clamp(0.75 + wave * 0.08, 0.75, 1.3) + (ace ? 0.18 : 0);
-    this.body = new FlightBody({ power: agility, thrustMax: 8.2 });
+    this.basePower = agility;
+    this.baseThrust = 8.2;
+    this.body = new FlightBody({ power: agility, thrustMax: this.baseThrust });
     this.body.setState(spawnPos, heading, 190 + Math.random() * 60);
     this.body.throttle = 0.72;
 
     this.hp = ace ? 210 : Math.min(130, 100 + wave * 5);   // one missile (60) leaves it smoking
+    this.hpMax = this.hp;
+    this.updateDamageState();
     this.pilotHit = false;
     this.flareCount = 18;
     this.flareT = 0;
@@ -71,9 +75,20 @@ class Enemy {
   forward(out) { return this.body.forward(out); }
   upVec(out) { return this.body.upVec(out); }
 
+  // damage debilitates continuously: control authority, engine thrust and the
+  // AI's speed target all sag with the remaining hp fraction — a half-dead
+  // jet flies like one (maneuver floors at 55%, thrust/speed at 75%)
+  updateDamageState() {
+    const r = clamp(this.hp / this.hpMax, 0, 1);
+    this.hpR = r;
+    this.body.power = this.basePower * (0.55 + 0.45 * r);
+    this.body.thrustMax = this.baseThrust * (0.75 + 0.25 * r);
+  }
+
   applyDamage(n) {
     if (this.dying) return false;
     this.hp -= n;
+    this.updateDamageState();
     if (this.hp <= 0) {
       // 70% detonate on the spot, 30% fall out of the fireball in a spin
       this.dying = Math.random() < 0.30;
@@ -103,7 +118,7 @@ class Enemy {
       b.throttle = 1;
       b.update(dt);
       if (ctx && ctx.effects && Math.random() < 0.75) {
-        ctx.effects.damageSmoke(b.pos, _tmp.copy(b.vel).multiplyScalar(-0.02), true);
+        ctx.effects.damageSmoke(b.pos, _tmp.copy(b.vel).multiplyScalar(-0.02), 2);
         // the wreck BURNS: licking flame rides the black smoke trail
         // (fresh vector: spawn() keeps vel by reference, shared temps alias)
         if (Math.random() < 0.55) {
@@ -121,7 +136,7 @@ class Enemy {
           ctx.effects.debris?.(_tmp, 4);
         }
       }
-      const ground = Math.max(terrainHeightAt(b.pos.x, b.pos.z), SEA_LEVEL);
+      const ground = Math.max(terrainSurfaceAt(b.pos.x, b.pos.z), SEA_LEVEL);
       if (b.pos.y < ground + GROUND_CLEAR_AGL || this.deadTime > 9) {
         this.dead = true;
         if (ctx && ctx.effects) {
@@ -138,6 +153,47 @@ class Enemy {
           ctx.effects.ring?.(b.pos, 1.4);
         }
         // (kill credit already fired at the fatal hit — impact is pure fx)
+      }
+      this.syncModel(dt);
+      return;
+    }
+
+    // training drone: a passive orbit over the sea range — no pursuit, no
+    // weapons, no evasion; the multipath lesson IS the player's loadout call
+    if (this.training) {
+      const T = this.training;
+      this._orbitT = (this._orbitT || 0) + dt;
+      // always chase a point ~20° AHEAD on the circle: the lead point
+      // carries the correct altitude, so both axes self-correct (a pure
+      // tangent aim has no vertical term — the path sags below the nose and
+      // the instructor's DC trim eats any constant climb bias we add)
+      const ang = (T.phase || 0) + this._orbitT * T.speed / T.radius;
+      const lead = ang + 0.35;
+      _aim.set(T.center.x + Math.cos(lead) * T.radius, T.alt, T.center.z + Math.sin(lead) * T.radius)
+        .sub(b.pos).normalize();
+      b.aimAt(_aim, dt);
+      b.throttle = clamp(0.5 + (T.speed - b.airspeed) * 0.008, 0.15, 1);
+      b.burner = 0;
+      b.update(dt);
+      // sea impact still counts (a drone that slices the water goes down)
+      const groundHit = Math.max(terrainSurfaceAt(b.pos.x, b.pos.z), SEA_LEVEL);
+      if (b.pos.y < groundHit + GROUND_CLEAR_AGL) {
+        this.killCredited = true;
+        this.dying = true;
+        this.deadTime = 0;
+      }
+      // launcher drone (defense/intercept courses): periodic missile shots at
+      // the player — the orbit itself stays passive, only the missiles bite
+      if (T.launch && player.alive && ctx && ctx.enemyMissile
+          && b.pos.distanceTo(player.position) < 12000) {
+        this._launchT = (this._launchT ?? T.launch.interval * 0.5) - dt;
+        if (this._launchT <= 0) {
+          this._launchT = T.launch.interval;
+          if (T.launch.kind === 'alt') this._altK = !this._altK;
+          this.mslKind = T.launch.kind === 'alt' ? (this._altK ? 'ir' : 'radar')
+            : (T.launch.kind || 'radar');
+          ctx.enemyMissile(this, player);
+        }
       }
       this.syncModel(dt);
       return;
@@ -233,20 +289,22 @@ class Enemy {
     }
 
     // --- ground avoidance override ---
-    const ground = Math.max(terrainHeightAt(b.pos.x, b.pos.z), SEA_LEVEL);
+    const ground = Math.max(terrainSurfaceAt(b.pos.x, b.pos.z), SEA_LEVEL);
     if (b.pos.y - ground < 450) {
       _aim.set(b.pos.x - _fwd.x * 800, b.pos.y + 3500, b.pos.z - _fwd.z * 800).sub(b.pos).normalize();
     }
 
     b.aimAt(_aim, dt);
-    b.throttle = clamp(0.5 + (targetSpeed - b.airspeed) * 0.008, 0.15, 1);
+    // wounded airframe: the AI also SETTLES for a lower speed it can sustain
+    const tgtSpd = targetSpeed * (0.75 + 0.25 * (this.hpR ?? 1));
+    b.throttle = clamp(0.5 + (tgtSpd - b.airspeed) * 0.008, 0.15, 1);
     b.burner = 0;
     b.update(dt);
 
     // live plane flew into the dirt (avoidance can't always save it): ride the
     // existing wreck flow for the fall + impact fx, but no kill credit — the
     // ground shot it down, not the player
-    const groundHit = Math.max(terrainHeightAt(b.pos.x, b.pos.z), SEA_LEVEL);
+    const groundHit = Math.max(terrainSurfaceAt(b.pos.x, b.pos.z), SEA_LEVEL);
     if (b.pos.y < groundHit + GROUND_CLEAR_AGL) {
       this.killCredited = true;
       this.dying = true;
@@ -270,21 +328,23 @@ class Enemy {
     //     then warm the seeker for 1 s — 2.15 s total pre-launch telegraph
     //     (the player's own head-sight lock is instant; enemy fire control is
     //     deliberately conservative). Radar shooters track from 10 km, IR
-    //     shooters from 2.6 km. ---
-    const lockRange = this.mslKind === 'radar' ? 10000 : 2600;
-    const canTrack = (this.state !== 'patrol' || this.mslKind === 'radar') && dist < lockRange && aimDot > 0.90;
-    if (canTrack) {
-      this.lockT += dt;
-      if (this.lockT >= 1.15) this.warmT += dt;
-    } else {
-      this.lockT = 0;
-      this.warmT = 0;
-    }
-    if (this.missileCooldown <= 0 && this.warmT >= 1.0) {
-      this.missileCooldown = 7 + Math.random() * 7;
-      this.lockT = 0;
-      this.warmT = 0;
-      if (ctx && ctx.enemyMissile) ctx.enemyMissile(this, player);
+    //     shooters from 2.6 km. Guns-only sparring partners skip all of it. ---
+    if (!this.noMissile) {
+      const lockRange = this.mslKind === 'radar' ? 10000 : 2600;
+      const canTrack = (this.state !== 'patrol' || this.mslKind === 'radar') && dist < lockRange && aimDot > 0.90;
+      if (canTrack) {
+        this.lockT += dt;
+        if (this.lockT >= 1.15) this.warmT += dt;
+      } else {
+        this.lockT = 0;
+        this.warmT = 0;
+      }
+      if (this.missileCooldown <= 0 && this.warmT >= 1.0) {
+        this.missileCooldown = 7 + Math.random() * 7;
+        this.lockT = 0;
+        this.warmT = 0;
+        if (ctx && ctx.enemyMissile) ctx.enemyMissile(this, player);
+      }
     }
     this.syncModel(dt);
   }
@@ -316,6 +376,8 @@ export class EnemyManager {
     this.waveTimer = 0;
     this.waveActive = false;
     this.events = [];
+    this.training = false;      // range mode: no waves, drones + respawns
+    this.respawnQueue = [];     // [{at, spec}] pending drone respawns
   }
 
   reset() {
@@ -325,7 +387,39 @@ export class EnemyManager {
     this.waveActive = false;
     this.waveTimer = 2.5;
     this.events.length = 0;
+    this.training = false;
+    this.respawnQueue.length = 0;
   }
+
+  // training range: one passive drone inserted onto its orbit, already
+  // flying the tangent so it settles in without a visible join. spec.launch
+  // turns it into an orbiting missile launcher (defense/intercept courses)
+  spawnTrainingDrone(spec) {
+    const ang = spec.phase || 0;
+    const pos = new THREE.Vector3(
+      spec.center.x + Math.cos(ang) * spec.radius, spec.alt,
+      spec.center.z + Math.sin(ang) * spec.radius);
+    const e = new Enemy(this.scene, pos, Math.PI - ang, 1, false);
+    e.training = spec;
+    e.respSpec = { kind: 'drone', spec };
+    this.enemies.push(e);
+  }
+
+  // guns-only sparring partner: full AI state machine, missiles removed
+  spawnTrainingFighter(player, spec) {
+    const a = spec.phase ?? Math.random() * Math.PI * 2;
+    const r = spec.range ?? 7000;
+    const pos = new THREE.Vector3(
+      player.position.x + Math.cos(a) * r,
+      Math.min(player.position.y + 600, 4200),
+      player.position.z + Math.sin(a) * r);
+    const e = new Enemy(this.scene, pos, Math.random() * Math.PI * 2, 1, false);
+    e.noMissile = true;
+    e.respSpec = { kind: 'fighter', spec };
+    this.enemies.push(e);
+  }
+
+  queueRespawn(rs) { this.respawnQueue.push({ at: 8, rs }); }
 
   spawnWave(player) {
     this.wave++;
@@ -364,9 +458,19 @@ export class EnemyManager {
       this.waveTimer = 6;
       this.events.push({ type: 'waveClear', wave: this.wave });
     }
-    if (!this.waveActive) {
+    if (!this.waveActive && !this.training) {
       this.waveTimer -= dt;
       if (this.waveTimer <= 0 && player.alive) this.spawnWave(player);
+    }
+    // training range: drones come back on their orbits after a beat
+    for (let i = this.respawnQueue.length - 1; i >= 0; i--) {
+      this.respawnQueue[i].at -= dt;
+      if (this.respawnQueue[i].at <= 0) {
+        const rs = this.respawnQueue[i].rs;
+        if (rs.kind === 'drone') this.spawnTrainingDrone({ ...rs.spec, phase: Math.random() * Math.PI * 2 });
+        else this.spawnTrainingFighter(player, rs.spec);
+        this.respawnQueue.splice(i, 1);
+      }
     }
   }
 }

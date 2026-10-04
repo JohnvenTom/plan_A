@@ -8,7 +8,7 @@
 // DOM note: the 3D build (buildRecord) is pure three.js and runs headless;
 // show()/frame() additionally bind the #debrief DOM overlay.
 import * as THREE from 'three';
-import { terrainHeightAt, SEA_LEVEL } from '../world/terrain.js';
+import { terrainSurfaceAt, SEA_LEVEL } from '../world/terrain.js';
 import { PLAYER_COLOR, ACE_COLOR, MSL_COLOR_P, MSL_COLOR_E, ENEMY_PALETTE } from './recorder.js';
 
 const COMBAT_R = 14000;
@@ -26,6 +26,7 @@ const EV_GLYPHS = {
   intercept: { draw: diamond, size: 200, label: '拦截成功' },
   damage:    { draw: triDown, size: 210, label: '受击' },
   crash:     { draw: circX,   size: 330, label: '坠机' },
+  gunFire:   { draw: burst3,  size: 120, label: '机炮射击' },
 };
 const EV_COLOR = {
   flare: 0xffe9a0, nearMiss: 0xffb347, intercept: 0x53e3ff,
@@ -54,6 +55,12 @@ function glyphTexture(type) {
   return tex;
 }
 function tri(g) { g.beginPath(); g.moveTo(48, 14); g.lineTo(82, 74); g.lineTo(14, 74); g.closePath(); g.stroke(); }
+function burst3(g) {
+  // tracer burst: muzzle streak + three shells flying line-astern
+  g.beginPath(); g.moveTo(8, 48); g.lineTo(26, 48); g.stroke();
+  g.lineWidth = 4;
+  for (const x of [44, 64, 84]) { g.beginPath(); g.arc(x, 48, 5, 0, Math.PI * 2); g.fill(); }
+}
 function triDown(g) { g.beginPath(); g.moveTo(48, 82); g.lineTo(82, 22); g.lineTo(14, 22); g.closePath(); g.fill(); }
 function xmark(g) { g.beginPath(); g.moveTo(26, 26); g.lineTo(70, 70); g.moveTo(70, 26); g.lineTo(26, 70); g.stroke(); }
 function circX(g) {
@@ -151,6 +158,27 @@ export class Debrief {
     this.tracks = [];            // prepared per-record view models
     this.markers = [];           // {ev, sprite, colorHex, label}
     this._dom = null;            // bound overlay (show())
+
+    // ---- replayed gun bursts actually FIRE: pooled tracer streaks spawned
+    // from the shooter's interpolated pose while the playhead is inside the
+    // burst's [t, t+dur] window (both sides, colors matching live tracers).
+    // Camera-facing additive QUADS, not lines: WebGL line width is stuck at
+    // 1 px, which made the old LineSegments invisible at replay zoom. ----
+    this._tracers = [];
+    this._tracerAcc = new Map(); // gunFire event -> spawn accumulator
+    this._gunEv = [];
+    this._tracerCap = 420;
+    this._tracerMesh = new THREE.InstancedMesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial({
+        transparent: true, blending: THREE.AdditiveBlending,
+        depthWrite: false, side: THREE.DoubleSide,
+      }),
+      this._tracerCap);
+    this._tracerMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this._tracerMesh.frustumCulled = false;
+    this._tracerMesh.count = 0;
+    this.scene.add(this._tracerMesh);
     this._lsn = [];              // [target, type, fn] added while active
   }
 
@@ -158,7 +186,7 @@ export class Debrief {
     // terrain wireframe over the combat area; sea clamps to the y=0 grid so
     // the floor reads as one continuous reference plane
     const pts = [];
-    const hy = (x, z) => Math.max(terrainHeightAt(x, z), SEA_LEVEL);
+    const hy = (x, z) => Math.max(terrainSurfaceAt(x, z), SEA_LEVEL);
     for (let x = -GRID_EXT; x <= GRID_EXT; x += GRID_STEP) {
       for (let z = -GRID_EXT; z < GRID_EXT; z += GRID_STEP) {
         pts.push(x, hy(x, z), z, x, hy(x, z + GRID_STEP), z + GRID_STEP);
@@ -201,6 +229,9 @@ export class Debrief {
     this.record = rec;
     this.tracks = [];
     this.markers = [];
+    this._tracers.length = 0;
+    this._tracerAcc.clear();
+    this._gunEv = rec.events.filter(e => e.type === 'gunFire');
     const g = new THREE.Group();
     this.recGroup = g;
     this.scene.add(g);
@@ -265,7 +296,7 @@ export class Debrief {
       let color = EV_COLOR[ev.type];
       if (ev.type === 'kill' && trackById.has(ev.victim)) color = trackById.get(ev.victim).color;
       else if (ev.type === 'crash') color = PLAYER_COLOR;
-      else if (ev.type === 'launch') color = ev.side === 'p' ? MSL_COLOR_P : MSL_COLOR_E;
+      else if (ev.type === 'launch' || ev.type === 'gunFire') color = ev.side === 'p' ? MSL_COLOR_P : MSL_COLOR_E;
       const mat = new THREE.SpriteMaterial({
         map: glyphTexture(ev.type), color, transparent: true,
         depthTest: false, depthWrite: false,
@@ -310,6 +341,8 @@ export class Debrief {
       ['总得分 SCORE', res.score ?? 0],
       ['存活 TIME', fmtT(res.time ?? rec.duration)],
       ['命中率 ACC', acc],
+      ['我方机炮 GUNS', `${res.pBursts ?? 0}段 · ${res.gunFired ?? 0}发`],
+      ['敌方机炮 HOSTILE', `${res.eBursts ?? 0}段 · ${res.egunFired ?? 0}发`],
     ].map(([k, v], i) =>
       `<div class="row" style="animation-delay:${0.12 * i + 0.3}s"><span>${k}</span><b>${v}</b></div>`).join('');
     this._scoreShown = 0;
@@ -345,6 +378,8 @@ export class Debrief {
       if (ev.type === 'wave') ticks += `<i class="tk wave" style="left:${p}%"></i>`;
       else if (ev.type === 'ace') ticks += `<i class="tk ace" style="left:${p}%"></i>`;
       else if (ev.type === 'waveClear') ticks += `<i class="tk clear" style="left:${p}%"></i>`;
+      // gun bursts are frequent: thin side-colored ticks, not fat event dots
+      else if (ev.type === 'gunFire') ticks += `<i class="tk gun ${ev.side}" style="left:${p}%" title="机炮射击 T+${fmtT(ev.t)}"></i>`;
       else if (EV_GLYPHS[ev.type]) {
         const c = markerHex(this.tracks, ev);
         const big = ev.type === 'kill' || ev.type === 'crash' ? ' big' : '';
@@ -406,6 +441,10 @@ export class Debrief {
     // tracks: interpolate cone pose at the playhead
     for (const vm of this.tracks) this._updateTrack(vm, p.t);
 
+    // replayed gun fire flies in mission time (frozen when paused)
+    const sdt = p.playing ? dt * (p.intro ? p.introSpeed : p.speed) : 0;
+    this._updateTracers(sdt, p.t);
+
     // markers: past events visible, fade-in over 0.3 s, distance-compensated
     const camDist = this.camera.position.distanceTo(this._camLook);
     for (const mk of this.markers) {
@@ -430,8 +469,73 @@ export class Debrief {
     }
   }
 
-  _updateTrack(vm, t) {
-    const s = vm.samples, n = vm.n;
+  // spawn + advance replayed tracers: while the playhead sits inside a
+  // gunFire burst, streaks pour from the shooter's pose at ~28 rps (mission
+  // time), fly ~1100 m/s along the nose with a touch of spread, fade out
+  _updateTracers(sdt, t) {
+    const tr = this._tracers;
+    for (const ev of this._gunEv) {
+      const dur = ev.dur || 0.25;
+      if (t < ev.t || t > ev.t + dur) { this._tracerAcc.delete(ev); continue; }
+      if (sdt <= 0) continue;
+      const vm = this._trackById(ev.m)
+        || (ev.side === 'p' ? this.tracks.find(v => v.meta.kind === 'player') : null);
+      if (!vm || !vm.visibleAtT) continue;
+      _v1.set(0, 0, -1).applyQuaternion(vm.quat);   // nose direction
+      let acc = Math.min(30, (this._tracerAcc.get(ev) || 0) + sdt * 28);
+      while (acc >= 1 && tr.length < this._tracerCap) {
+        acc -= 1;
+        const s = 0.006;
+        tr.push({
+          x: vm.pos.x + _v1.x * 12, y: vm.pos.y + _v1.y * 12, z: vm.pos.z + _v1.z * 12,
+          vx: (_v1.x + (Math.random() - .5) * s) * 1100,
+          vy: (_v1.y + (Math.random() - .5) * s) * 1100,
+          vz: (_v1.z + (Math.random() - .5) * s) * 1100,
+          life: 0.7, side: ev.side,
+        });
+      }
+      this._tracerAcc.set(ev, acc);
+    }
+    // integrate, then lay each tracer out as a camera-facing quad whose
+    // length/width scale with view distance — readable from follow-cam to
+    // full-battlefield overview
+    for (let i = tr.length - 1; i >= 0; i--) {
+      const b = tr[i];
+      b.life -= sdt;
+      if (b.life <= 0) { tr.splice(i, 1); continue; }
+      if (sdt > 0) { b.x += b.vx * sdt; b.y += b.vy * sdt; b.z += b.vz * sdt; }
+    }
+    const mesh = this._tracerMesh, camPos = this.camera.position;
+    let n = 0;
+    for (const b of tr) {
+      if (n >= this._tracerCap) break;
+      const inv = 1 / Math.hypot(b.vx, b.vy, b.vz);
+      _v1.set(b.vx * inv, b.vy * inv, b.vz * inv);          // streak axis
+      const camDist = camPos.distanceTo(_v2.set(b.x, b.y, b.z));
+      const L = Math.max(80, camDist * 0.045);              // ~4.5% of view distance
+      const W = Math.max(2.4, camDist * 0.0024);
+      // billboard: plane X along the streak, Y perpendicular to the view ray
+      _v2.copy(camPos).sub(_v3.set(b.x, b.y, b.z)).normalize();   // view dir
+      _v3.crossVectors(_v1, _v2);
+      if (_v3.lengthSq() < 1e-6) _v3.set(0, 1, 0).cross(_v1);    // dead-on view fallback
+      _v3.normalize();
+      _v2.crossVectors(_v3, _v1).normalize();               // right-handed basis
+      _m4.makeBasis(_v1, _v3, _v2);
+      _m4.scale(_vs.set(L, W, 1));
+      _m4.setPosition(_v1.x * -L / 2 + b.x, _v1.y * -L / 2 + b.y, _v1.z * -L / 2 + b.z);
+      mesh.setMatrixAt(n, _m4);
+      const fade = Math.min(1, b.life / 0.25);
+      mesh.setColorAt(n, b.side === 'p'
+        ? _col.setRGB(0.4 * fade, 0.9 * fade, 1 * fade)
+        : _col.setRGB(1 * fade, 0.5 * fade, 0.35 * fade));
+      n++;
+    }
+    mesh.count = n;
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  }
+
+  _updateTrack(vm, t) {    const s = vm.samples, n = vm.n;
     // 0.3 s bracket pad: the playhead resting exactly on `duration` sits one
     // sample-step past the last pose — without the pad every cone would
     // blink out on the final frame of the entry sweep
@@ -521,6 +625,9 @@ export class Debrief {
   // ---------- playback control ----------
   seek(t) {
     this.play.t = Math.max(0, Math.min(this.record.duration, t));
+    // tracers belong to the timeline: a jump invalidates every streak in flight
+    this._tracers.length = 0;
+    this._tracerAcc.clear();
   }
   setPlaying(v) {
     this.play.playing = v;
@@ -769,6 +876,9 @@ const _v1 = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
 const _q2 = new THREE.Quaternion();
+const _m4 = new THREE.Matrix4();
+const _vs = new THREE.Vector3();
+const _col = new THREE.Color();
 const _mouse = new THREE.Vector2();
 
 function trackColor(tr) {
@@ -789,7 +899,7 @@ function markerHex(tracks, ev) {
   let c = EV_COLOR[ev.type];
   if (ev.type === 'kill') c = trackByIdColor(tracks, ev.victim);
   else if (ev.type === 'crash') c = PLAYER_COLOR;
-  else if (ev.type === 'launch') c = ev.side === 'p' ? MSL_COLOR_P : MSL_COLOR_E;
+  else if (ev.type === 'launch' || ev.type === 'gunFire') c = ev.side === 'p' ? MSL_COLOR_P : MSL_COLOR_E;
   return c.toString(16).padStart(6, '0');
 }
 // imported files may lack a result block — derive the basics from the events

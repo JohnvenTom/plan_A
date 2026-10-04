@@ -9,7 +9,7 @@
 // Every launch is staged: the cell hatch opens, a round rises from the cell,
 // then it ignites with a flash and a smoke column.
 import * as THREE from 'three';
-import { terrainHeightAt, SEA_LEVEL } from '../world/terrain.js';
+import { terrainSurfaceAt, SEA_LEVEL } from '../world/terrain.js';
 
 const COMBAT_RADIUS = 14000;          // keep in sync with player.js
 const FIRE_MARGIN = 800;              // leniency: batteries hold fire until
@@ -226,11 +226,11 @@ export class AASites {
       let ang = k * Math.PI / 3;
       for (let t = 0; t < 12; t++) {
         const x = Math.cos(ang) * COMBAT_RADIUS, z = Math.sin(ang) * COMBAT_RADIUS;
-        if (terrainHeightAt(x, z) < SEA_LEVEL + 1) break;
+        if (terrainSurfaceAt(x, z) < SEA_LEVEL + 1) break;
         ang += Math.PI / 36;   // nudge ~5° until sea
       }
       const x = Math.cos(ang) * COMBAT_RADIUS, z = Math.sin(ang) * COMBAT_RADIUS;
-      const y = Math.max(terrainHeightAt(x, z), SEA_LEVEL);
+      const y = Math.max(terrainSurfaceAt(x, z), SEA_LEVEL);
       const parts = BUILDERS[Math.floor(Math.random() * BUILDERS.length)]();
       parts.group.position.set(x, y, z);
       parts.group.rotation.y = Math.atan2(x, z);   // face the map center

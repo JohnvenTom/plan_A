@@ -8,7 +8,7 @@ import { GROUND_CLEAR_AGL } from '../core/utils.js';
 import { cornerSpeedKMH } from './flightmodel.js';
 import { buildJet } from './jet.js';
 import { FlightBody } from './flightmodel.js';
-import { terrainHeightAt, SEA_LEVEL } from '../world/terrain.js';
+import { terrainSurfaceAt, SEA_LEVEL } from '../world/terrain.js';
 
 const COMBAT_RADIUS = 14000;   // meters from world center
 const AIM_DIST = 4000;         // draw/projection distance for the aim point
@@ -234,7 +234,7 @@ export class Player {
     if (this.model.setControlSurfaces) this.model.setControlSurfaces(b.ctl);
 
     // ---- terrain & limits ----
-    const ground = Math.max(terrainHeightAt(b.pos.x, b.pos.z), SEA_LEVEL);
+    const ground = Math.max(terrainSurfaceAt(b.pos.x, b.pos.z), SEA_LEVEL);
     if (b.pos.y < ground + GROUND_CLEAR_AGL) {
       this.applyDamage(999);
       this.crashed = true;
@@ -369,7 +369,7 @@ export class Player {
     const desired = this._v2.copy(viewDir).multiplyScalar(-dist * boom).add(this.body.pos);
     desired.y += hOff + lift;
     this.camPos.copy(desired);
-    const ground = Math.max(terrainHeightAt(this.camPos.x, this.camPos.z), SEA_LEVEL);
+    const ground = Math.max(terrainSurfaceAt(this.camPos.x, this.camPos.z), SEA_LEVEL);
     if (this.camPos.y < ground + 4) this.camPos.y = ground + 4;
 
     this.upVec(this._v2);
