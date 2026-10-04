@@ -1307,6 +1307,11 @@ export class HUD {
     c.globalCompositeOperation = 'lighter';
     for (const ms of S.weapons.missiles) {
       if (!ms.fromPlayer) continue;
+      // the glint IS the burning motor seen through the glass: real-mode
+      // rounds go dark at burnout (their trail already thinned out — a
+      // coasting brick must not wear a live plume). Arcade motors never
+      // burn out, so they keep the streak for the whole flight
+      if (ms.real && ms.life > ms.motorEnd) continue;
       const d = ms.pos.distanceTo(S.player.position);
       const k = clamp((2000 - d) / 1600, 0, 1);       // full <= 400 m, gone at 2 km
       if (k <= 0.02) continue;

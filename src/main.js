@@ -97,6 +97,7 @@ const G = {
   pipOpen: 0,               // missile-cam CRT open progress
   pipGlitch: 0,             // missile-cam signal-fault burst
   pipZoom: 1,               // missile-cam impact zoom
+  pipFov: 58,               // missile-cam live FOV (target-framing zoom)
   pipMsl: null,             // missile the PIP rides
   radarRange: 10000,        // bottom-right radar range: 5/10/20 km (M cycles)
   exposure: 1,              // smoothed auto-exposure
@@ -644,7 +645,7 @@ function renderFrame(dt) {
     // AC7 fault-open / fault-close: fast CRT expand on launch, glitchy
     // collapse when the missile (or its target) is gone
     if (m) {
-      if (!G._pipWasLive) G.pipGlitch = 1;          // opening burst
+      if (!G._pipWasLive) { G.pipGlitch = 1; G.pipFov = 58; }   // opening burst: fresh ride starts wide
       G._pipWasLive = true;
       G.pipMsl = m;
       G.pipOpen = Math.min(1, G.pipOpen + dt * 5.5);
@@ -665,6 +666,16 @@ function renderFrame(dt) {
       mslCam.position.copy(mm.pos).addScaledVector(_pv, 7.5).add(_pv2.set(0, 1.1, 0));
       _pv2.copy(mm.target.position ?? mm.target.pos);
       if (_pv2.distanceToSquared(mslCam.position) < 1) _pv2.copy(mslCam.position).addScaledVector(_pv, 100);
+      // seeker-cam target framing: hold the target at a constant angular
+      // share of the frame (~1/8 of vertical, ref 160 m) by narrowing the
+      // FOV with range — clamped 3°..58° and smoothed so the zoom reads as
+      // a servo, not a jitter. Beyond ~6 km it pins at 3°, where a fighter
+      // is still ~10 px tall in the 480×270 picture
+      const tDist = _pv2.distanceTo(mslCam.position);
+      const fovT = clamp(2 * Math.atan(160 / Math.max(tDist, 30)) * 180 / Math.PI, 3, 58);
+      G.pipFov += (fovT - G.pipFov) * Math.min(1, dt * 3);
+      mslCam.fov = G.pipFov;
+      mslCam.updateProjectionMatrix();
       mslCam.up.set(0, 1, 0);
       mslCam.lookAt(_pv2);
       renderer.setRenderTarget(mslRT);
@@ -1097,6 +1108,7 @@ const saveSettings = () => { try { localStorage.setItem('sb_opts', JSON.stringif
 window.__settings = settings;                 // debug hook
 window.__audio = audio;                       // debug hook (intro-sound verify)
 window.__hud = hud;                           // debug hook (HUD readout verify)
+window.__pip = () => ({ fov: G.pipFov, open: G.pipOpen, live: !!G.pipMsl && weapons.missiles.includes(G.pipMsl) });   // debug hook
 
 // settings -> live systems (audio inits on first gesture; applyVolumes is
 // safe to call before and after)
