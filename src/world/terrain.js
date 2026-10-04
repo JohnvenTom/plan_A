@@ -61,6 +61,11 @@ const STEP = WORLD_SIZE / SEGMENTS;
 let surfaceGrid = null;
 
 export function terrainSurfaceAt(x, z) {
+  // past the mesh bounds (±12 km) the only ground is the ocean plane: index
+  // clamping would otherwise pick up island heights from the border row and
+  // raise invisible terrain over open water (analytic h is 0 out there)
+  const half = WORLD_SIZE / 2;
+  if (x < -half || x > half || z < -half || z > half) return SEA_LEVEL;
   if (!surfaceGrid) {
     surfaceGrid = new Float32Array(VERTS * VERTS);
     for (let j = 0; j < VERTS; j++)
