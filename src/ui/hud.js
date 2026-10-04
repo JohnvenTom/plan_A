@@ -16,6 +16,7 @@ const AMBER = '#ffc866';
 const _hv = new THREE.Vector3();
 const _hv2 = new THREE.Vector3();
 const _hv3 = new THREE.Vector3();
+const _hv4 = new THREE.Vector3();
 // 120° front cone edge warning: amber past 50° off the nose, flashing
 // red past 56° (lock breaks / launch gate closes at 60°)
 const CONE_WARN = Math.cos(50 * Math.PI / 180);
@@ -613,6 +614,42 @@ export class HUD {
     }
   }
 
+  // ---- closure + nose-relative heading tag (X-locked targets) ----
+  // To the LEFT of the lock frame: signed radial closure in m/s (+ = eating
+  // in, - = being opened on), and beneath it a small solid arrow rotating
+  // continuously to the target's heading in the NOSE frame — up = flying
+  // our heading, down = inbound toward us, sideways = crossing.
+  _closureTag(S, t, rightX, cy, col) {
+    const p = S.player;
+    const tp = t.position ?? t.pos;
+    const los = _hv.copy(tp).sub(p.position);
+    const d = los.length() || 1;
+    los.divideScalar(d);
+    const rel = _hv2.copy(t.vel).sub(p.vel);
+    const closure = -rel.dot(los);
+    const vFwd = rel.dot(p.forward(_hv3));
+    const vRight = rel.dot(p.body.rightVec(_hv4));
+    this.text(`${closure >= 0 ? '+' : ''}${Math.round(closure)} m/s`, rightX, cy + 4, 11, col, 'right', 3);
+    this._dirArrow(rightX - 14, cy + 18, Math.atan2(vRight, vFwd), col);
+  }
+
+  // small filled arrow, ang 0 = straight up, clockwise positive
+  _dirArrow(x, y, ang, col) {
+    const c = this.ctx;
+    c.save();
+    c.translate(x, y);
+    c.rotate(ang);
+    c.fillStyle = col; c.shadowColor = col; c.shadowBlur = 4;
+    c.beginPath();
+    c.moveTo(0, -5);
+    c.lineTo(3.6, 3);
+    c.lineTo(0, 1.4);
+    c.lineTo(-3.6, 3);
+    c.closePath();
+    c.fill();
+    c.restore();
+  }
+
   // ---- target frames: AC7 brackets + RNG, off-screen arrows ----
   // The guidance target's frame is the 120° cone edge display: normal red
   // inside the cone, amber past 50° off the nose, flashing red past 56°
@@ -673,6 +710,8 @@ export class HUD {
             if (isGuide) this.text(atEdge ? 'CONE — 即将断锁' : 'CONE', px + size / 2 + 8, py - size / 2 + 22, 11, edgeCol, 'left', 4);
             // distance readout rolls drum-style like the cockpit gauges
             this.drawDrum('lockRng', (dist / 1000).toFixed(1), px + size / 2 + 12, py - size / 2 + 7, 11, col, dt);
+            // closure + nose-relative heading tag on the LEFT of the frame
+            this._closureTag(S, e, px - size / 2 - 8, py, col);
           } else {
             this.text(`RNG ${(dist / 1000).toFixed(1)}`, px + size / 2 + 8, py - size / 2 + 7, 11, col, 'left', 3);
           }
@@ -781,6 +820,7 @@ export class HUD {
   // rides the missile on-screen; clamps to a screen-edge ellipse when the
   // threat leaves the frame so it never becomes unreadable
   drawMissileMarkers(S) {
+    const ls = S.weapons.lockState;
     for (const ms of S.weapons.missiles) {
       if (ms.fromPlayer) continue;
       const dist = ms.pos.distanceTo(S.player.position);
@@ -790,6 +830,9 @@ export class HUD {
       if (!s.behind && s.x > 24 && s.x < this.w - 24 && s.y > 24 && s.y < this.h - 24) {
         this._diamond(s.x, s.y, r, RED, false, spin);
         this.text(`${(dist / 1000).toFixed(1)}km`, s.x, s.y + r + 13, 11, RED, 'center', 4);
+        // X-locked inbound (gun intercept): closure + heading tag — the
+        // closure number IS the gunnery lead cue for the intercept
+        if (ls.target === ms) this._closureTag(S, ms, s.x - r - 10, s.y, RED);
       } else {
         const dx = s.behind ? this.w / 2 - s.x : s.x - this.w / 2;
         const dy = s.behind ? this.h / 2 - s.y : s.y - this.h / 2;

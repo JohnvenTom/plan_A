@@ -158,21 +158,55 @@ class Enemy {
       return;
     }
 
-    // training drone: a passive orbit over the sea range — no pursuit, no
-    // weapons, no evasion; the multipath lesson IS the player's loadout call
+    // training drone: a passive flight over the sea range — no pursuit, no
+    // weapons, no evasion; the multipath lesson IS the player's loadout call.
+    // Custom-range drones carry a WAYPOINT CHAIN: they chase each waypoint
+    // in order (per-leg speed/alt overrides live on the waypoint), then
+    // either loop back to the first or settle into an orbit around the last
     if (this.training) {
       const T = this.training;
-      this._orbitT = (this._orbitT || 0) + dt;
-      // always chase a point ~20° AHEAD on the circle: the lead point
-      // carries the correct altitude, so both axes self-correct (a pure
-      // tangent aim has no vertical term — the path sags below the nose and
-      // the instructor's DC trim eats any constant climb bias we add)
-      const ang = (T.phase || 0) + this._orbitT * T.speed / T.radius;
-      const lead = ang + 0.35;
-      _aim.set(T.center.x + Math.cos(lead) * T.radius, T.alt, T.center.z + Math.sin(lead) * T.radius)
-        .sub(b.pos).normalize();
+      let spd = T.speed;
+      let useOrbit = true;   // ring courses + settled chains + bare targets
+      if (T.path && T.path.length && !this._settle) {
+        if (this._wpIdx === undefined) this._wpIdx = 0;
+        let wp = T.path[this._wpIdx];
+        if (Math.hypot(wp.x - b.pos.x, wp.z - b.pos.z) < 300) {   // captured
+          if (this._wpIdx < T.path.length - 1) this._wpIdx++;
+          else if (T.tail === 'loop' && T.path.length > 1) this._wpIdx = 0;
+          else {
+            // chain spent: settle into an orbit around the final waypoint
+            this._settle = {
+              center: { x: wp.x, z: wp.z },
+              radius: clamp((wp.speed ?? T.speed) * 4, 800, 2000),
+              phase: Math.atan2(b.pos.z - wp.z, b.pos.x - wp.x),
+              alt: wp.alt ?? T.alt,
+              speed: wp.speed ?? T.speed,
+            };
+          }
+          wp = T.path[this._wpIdx];
+        }
+        if (!this._settle) {
+          useOrbit = false;
+          _aim.set(wp.x, wp.alt ?? T.alt, wp.z).sub(b.pos).normalize();
+          spd = wp.speed ?? T.speed;
+        }
+      }
+      if (useOrbit) {
+        const O = this._settle || T;
+        const R = O.radius || clamp((T.speed ?? 240) * 4, 800, 2000);
+        this._orbitT = (this._orbitT || 0) + dt;
+        // always chase a point ~20° AHEAD on the circle: the lead point
+        // carries the correct altitude, so both axes self-correct (a pure
+        // tangent aim has no vertical term — the path sags below the nose and
+        // the instructor's DC trim eats any constant climb bias we add)
+        const ang = (O.phase || 0) + this._orbitT * O.speed / R;
+        const lead = ang + 0.35;
+        _aim.set(O.center.x + Math.cos(lead) * R, O.alt, O.center.z + Math.sin(lead) * R)
+          .sub(b.pos).normalize();
+        spd = O.speed;
+      }
       b.aimAt(_aim, dt);
-      b.throttle = clamp(0.5 + (T.speed - b.airspeed) * 0.008, 0.15, 1);
+      b.throttle = clamp(0.5 + (spd - b.airspeed) * 0.008, 0.15, 1);
       b.burner = 0;
       b.update(dt);
       // sea impact still counts (a drone that slices the water goes down)
@@ -395,11 +429,21 @@ export class EnemyManager {
   // flying the tangent so it settles in without a visible join. spec.launch
   // turns it into an orbiting missile launcher (defense/intercept courses)
   spawnTrainingDrone(spec) {
-    const ang = spec.phase || 0;
-    const pos = new THREE.Vector3(
-      spec.center.x + Math.cos(ang) * spec.radius, spec.alt,
-      spec.center.z + Math.sin(ang) * spec.radius);
-    const e = new Enemy(this.scene, pos, Math.PI - ang, 1, false);
+    let pos, heading;
+    if (spec.path && spec.path.length) {
+      // custom range: spawn ON the placed point, nose toward the first
+      // waypoint (heading convention: 0 = -Z north, atan2(-dx,-dz))
+      pos = new THREE.Vector3(spec.center.x, spec.alt, spec.center.z);
+      const w = spec.path[0];
+      heading = Math.atan2(-(w.x - pos.x), -(w.z - pos.z));
+    } else {
+      const ang = spec.phase || 0;
+      pos = new THREE.Vector3(
+        spec.center.x + Math.cos(ang) * (spec.radius || 0), spec.alt,
+        spec.center.z + Math.sin(ang) * (spec.radius || 0));
+      heading = Math.PI - ang;
+    }
+    const e = new Enemy(this.scene, pos, heading, 1, false);
     e.training = spec;
     e.respSpec = { kind: 'drone', spec };
     this.enemies.push(e);
@@ -407,12 +451,18 @@ export class EnemyManager {
 
   // guns-only sparring partner: full AI state machine, missiles removed
   spawnTrainingFighter(player, spec) {
-    const a = spec.phase ?? Math.random() * Math.PI * 2;
-    const r = spec.range ?? 7000;
-    const pos = new THREE.Vector3(
-      player.position.x + Math.cos(a) * r,
-      Math.min(player.position.y + 600, 4200),
-      player.position.z + Math.sin(a) * r);
+    let pos;
+    if (spec.x !== undefined) {
+      // custom range: absolute map placement
+      pos = new THREE.Vector3(spec.x, Math.min(spec.alt ?? 3000, 4200), spec.z);
+    } else {
+      const a = spec.phase ?? Math.random() * Math.PI * 2;
+      const r = spec.range ?? 7000;
+      pos = new THREE.Vector3(
+        player.position.x + Math.cos(a) * r,
+        Math.min(player.position.y + 600, 4200),
+        player.position.z + Math.sin(a) * r);
+    }
     const e = new Enemy(this.scene, pos, Math.random() * Math.PI * 2, 1, false);
     e.noMissile = true;
     e.respSpec = { kind: 'fighter', spec };

@@ -16,6 +16,7 @@ import { GameAudio } from './core/audio.js';
 import { clamp, smoothstep, machOf } from './core/utils.js';
 import { Recorder, parseRecord } from './replay/recorder.js';
 import { Debrief } from './replay/debrief.js';
+import { RangeEditor, scenarioToCourse } from './ui/editor.js';
 
 const q = new URLSearchParams(location.search);
 const FREEZE_T = q.has('t') ? Math.max(0, parseFloat(q.get('t')) || 0) : null;
@@ -245,8 +246,8 @@ function findSeaRange(cfg) {
   }
   return { x: 0, z: 13500 };   // last-ditch: dead ahead into open ocean
 }
-function startTraining(mode = 'multipath') {
-  const cfg = TRAINING_MODES[mode] || TRAINING_MODES.multipath;
+function startTraining(mode = 'multipath', cfgOverride) {
+  const cfg = cfgOverride || TRAINING_MODES[mode] || TRAINING_MODES.multipath;
   G.trainMode = mode;
   audio.init(); audio.resume(); audio.setRunning(true);
   resetAll();
@@ -255,14 +256,18 @@ function startTraining(mode = 'multipath') {
   G.training = true;
   enemies.training = true;
   trainMenu.classList.add('hidden');
-  const range = findSeaRange(cfg);
   // spawn SW of the ring at a safe height, nose pointed at its center;
   // courses can override the state (the stall course starts high and slow)
   const sp = cfg.spawn || {};
-  const px = range.x - 4200, pz = range.z + 2600;
-  const h = Math.atan2(-(range.x - px), -(range.z - pz));
+  // custom ranges carry an ABSOLUTE spawn (editor-placed position+heading);
+  // built-in courses keep the range-relative SW offset
+  const range = sp.x !== undefined ? { x: sp.x, z: sp.z } : findSeaRange(cfg);
+  const px = sp.x !== undefined ? sp.x : range.x - 4200;
+  const pz = sp.z !== undefined ? sp.z : range.z + 2600;
+  const h = sp.x !== undefined ? (sp.heading ?? 0) * Math.PI / 180
+    : Math.atan2(-(range.x - px), -(range.z - pz));
   player.spawnAt(new THREE.Vector3(px, sp.alt ?? 750, pz), h, sp.speed ?? 280);
-  (cfg.drones || []).forEach((d, i) => enemies.spawnTrainingDrone({ ...d, center: range, phase: i * 2.1 }));
+  (cfg.drones || []).forEach((d, i) => enemies.spawnTrainingDrone({ ...d, center: d.center ?? range, phase: i * 2.1 }));
   if (cfg.fighters) for (const f of cfg.fighters) enemies.spawnTrainingFighter(player, f);
   hud.msgQueue.length = 0;
   hud.announce(cfg.title, cfg.sub, 4.0, 'wave');
@@ -287,6 +292,12 @@ function setPaused(v) {
   } else {
     hud.clearSticky();
   }
+}
+
+// custom range: the editor hands over a validated scenario, we fly it as a
+// training course through the exact same pipeline as the built-ins
+function startCustomTraining(sc) {
+  startTraining('custom', scenarioToCourse(sc));
 }
 
 // death now leads straight into the replay debrief — the old DOM stats
@@ -339,6 +350,11 @@ const DAY_LEN = 1200;                      // seconds for a full day (20 min)
 function introStep(dt) {
   G.introT -= dt;
   player.update(dt, INTRO_INPUT);
+  // drive the continuous layers through the fly-in too — without this the
+  // whole swoop played in dead silence and the engine popped in only when
+  // the state flipped to 'playing' (player.update already ran, so the hum
+  // tracks the jet's real throttle/airspeed as the camera settles)
+  audio.update(dt, player, weapons, G.cloud ?? 0);
   enemies.update(dt, player, { effects });
   effects.update(dt, camera);
   sky.update(dt, camera.position);
@@ -921,7 +937,9 @@ function frame() {
 
   try {
   if (G.state === 'title') {
-    if (input.pressedRaw('Enter') || input.mousePressed(0)) startGame();
+    // any overlay that owns the screen (settings menu, range editor) must
+    // swallow the start trigger — a click there is UI, not "begin mission"
+    if (!G.menuOpen && !rangeEditor.isOpen() && (input.pressedRaw('Enter') || input.mousePressed(0))) startGame();
     // idle orbit so the title screen isn't static
     G.time += dt;
     const a = G.time * 0.05;
@@ -1077,6 +1095,8 @@ const settings = { nearMissWhip: true, blastFlare: true, blastGhosts: true, volM
 try { Object.assign(settings, JSON.parse(localStorage.getItem('sb_opts') || '{}')); } catch { /* fresh start */ }
 const saveSettings = () => { try { localStorage.setItem('sb_opts', JSON.stringify(settings)); } catch { /* private mode */ } };
 window.__settings = settings;                 // debug hook
+window.__audio = audio;                       // debug hook (intro-sound verify)
+window.__hud = hud;                           // debug hook (HUD readout verify)
 
 // settings -> live systems (audio inits on first gesture; applyVolumes is
 // safe to call before and after)
@@ -1103,6 +1123,7 @@ function renderOptions() {
       val.textContent = o.fmt(settings[o.key]);
       const sld = document.createElement('input');
       sld.type = 'range';
+      sld.name = `opt-${o.key}`; sld.id = `opt-${o.key}`;   // autofill audit
       sld.min = o.min; sld.max = o.max; sld.step = o.step;
       sld.value = settings[o.key];
       sld.oninput = () => {
@@ -1244,7 +1265,10 @@ for (const opt of trainMenu.querySelectorAll('.train-opt')) {
   for (const type of ['mousedown', 'mouseup', 'click']) {
     opt.addEventListener(type, e => e.stopPropagation());
   }
-  opt.addEventListener('click', () => startTraining(opt.dataset.mode));
+  opt.addEventListener('click', () => {
+    if (opt.dataset.mode === 'custom') { trainMenu.classList.add('hidden'); rangeEditor.open(); return; }
+    startTraining(opt.dataset.mode);
+  });
 }
 replayFile.addEventListener('change', () => {
   const f = replayFile.files && replayFile.files[0];
@@ -1256,10 +1280,14 @@ replayFile.addEventListener('change', () => {
     showImportedRecord(rec);
   });
 });
-// ESC: closes the menu, otherwise toggles pause (when the pointer lock
-// consumes ESC, the pointerlockchange handler pauses instead)
+// the custom-range editor (instantiated after the DOM blocks above so its
+// root element exists; swallows its own clicks, sets no game state)
+const rangeEditor = new RangeEditor({ onStart: startCustomTraining });
+window.__rangeEditor = rangeEditor;   // debug/test hook
+// ESC: closes the editor, then the menu, otherwise toggles pause
 addEventListener('keydown', e => {
   if (e.code === 'Escape') {
+    if (rangeEditor.isOpen()) { rangeEditor.close(); return; }
     if (G.menuOpen) closeMenu();
     else if (G.state === 'playing') setPaused(!G.paused);
   }

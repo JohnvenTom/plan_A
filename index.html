@@ -96,6 +96,89 @@
     color: #0a1428; background: #8fe0ff; font-weight: 600;
   }
   .mode-badge.arcade { background: #ffd27a; }
+  /* ---------- custom range editor (briefing style) ---------- */
+  #editor {
+    position: fixed; inset: 0; z-index: 25; display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(ellipse at 50% 40%, rgba(4, 10, 24, .82), rgba(2, 5, 14, .94));
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  #editor.hidden { display: none; }
+  .ed-panel {
+    position: relative; padding: 22px 26px; border: 1px solid rgba(143, 224, 255, .25);
+    background: rgba(8, 18, 38, .92); border-radius: 8px;
+    box-shadow: 0 0 60px rgba(120, 200, 255, .08);
+  }
+  .ed-title { font-size: 18px; letter-spacing: .3em; color: #ffe9c4; margin-bottom: 16px; }
+  .ed-title .ed-en { color: #ffd27a; font-family: Consolas, monospace; margin-right: 10px; font-size: 14px; }
+  .ed-body { display: flex; gap: 18px; align-items: flex-start; }
+  .ed-mapwrap { display: flex; flex-direction: column; gap: 8px; }
+  .ed-map { border: 1px solid rgba(143, 224, 255, .3); border-radius: 4px; cursor: default; }
+  .ed-map.placing { cursor: crosshair; }
+  .ed-hint { font: 12px Consolas, monospace; color: #6f87a8; letter-spacing: .1em; min-height: 16px; }
+  .ed-elev { font: 12px Consolas, monospace; color: #9fd0ff; letter-spacing: .12em; min-height: 16px; }
+  .ed-elev.bad { color: #ff9a8a; }
+  .ed-elevline { font: 11px Consolas, monospace; color: #6f87a8; margin-bottom: 8px; letter-spacing: .08em; }
+  .ed-elevline.bad { color: #ff9a8a; }
+  .ed-wpi.bad { color: #ff9a8a; }
+  .ed-side { width: 316px; display: flex; flex-direction: column; gap: 12px; }
+  .ed-tools { display: flex; flex-wrap: wrap; gap: 6px; }
+  .ed-tool {
+    font-size: 12px; letter-spacing: .1em; color: #9fd0ff; padding: 5px 10px;
+    border: 1px solid rgba(143, 224, 255, .3); border-radius: 3px; cursor: pointer;
+    transition: all .12s ease;
+  }
+  .ed-tool:hover { color: #fff; border-color: #ffe9c4; }
+  .ed-tool.sel { color: #0a1428; background: #8fe0ff; border-color: #8fe0ff; font-weight: 600; }
+  .ed-tool.ed-danger { color: #ff9a8a; border-color: rgba(255, 120, 90, .4); }
+  .ed-tool.ed-danger:hover { color: #fff; background: rgba(255, 90, 40, .25); }
+  .ed-props {
+    min-height: 240px; max-height: 340px; overflow-y: auto; padding: 12px;
+    border: 1px solid rgba(143, 224, 255, .2); border-radius: 4px; background: rgba(10, 22, 44, .5);
+  }
+  .ed-phead { font-size: 14px; color: #ffe9c4; letter-spacing: .15em; margin-bottom: 10px; }
+  .ed-pnone { font-size: 12px; color: #6f87a8; line-height: 1.8; }
+  .ed-prow { display: flex; align-items: center; justify-content: space-between; margin: 6px 0; }
+  .ed-plabel { font-size: 12px; color: #9fd0ff; letter-spacing: .1em; }
+  .ed-pnum, .ed-psel {
+    width: 110px; background: rgba(5, 12, 26, .8); color: #e8f2ff;
+    border: 1px solid rgba(143, 224, 255, .3); border-radius: 3px; padding: 4px 6px;
+    font: 12px Consolas, monospace;
+  }
+  .ed-psel { width: 140px; }
+  .ed-psep { font-size: 12px; color: #ffd27a; margin: 12px 0 4px; letter-spacing: .15em; }
+  .ed-pnote { font-size: 11px; color: #6f87a8; margin-top: 8px; line-height: 1.6; }
+  .ed-wprow { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+  .ed-wpi { font: 11px Consolas, monospace; color: #6f87a8; width: 24px; }
+  .ed-wprow .ed-pnum { flex: 1; width: 0; }
+  .ed-wpdel { color: #ff9a8a; cursor: pointer; padding: 0 4px; font-size: 12px; }
+  .ed-wpdel:hover { color: #fff; }
+  .ed-sbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .ed-name {
+    width: 130px; background: rgba(5, 12, 26, .8); color: #ffe9c4;
+    border: 1px solid rgba(143, 224, 255, .3); border-radius: 3px; padding: 5px 8px;
+    font-size: 13px;
+  }
+  .ed-btn {
+    font-size: 12px; letter-spacing: .1em; color: #9fd0ff; padding: 5px 10px;
+    border: 1px solid rgba(143, 224, 255, .3); border-radius: 3px; cursor: pointer;
+  }
+  .ed-btn:hover { color: #fff; border-color: #ffe9c4; }
+  .ed-list {
+    flex: 1; min-width: 100px; background: rgba(5, 12, 26, .8); color: #e8f2ff;
+    border: 1px solid rgba(143, 224, 255, .3); border-radius: 3px; padding: 5px 6px;
+    font: 12px Consolas, monospace;
+  }
+  .ed-go {
+    text-align: center; font-size: 16px; letter-spacing: .3em; color: #0a1428;
+    background: #ffd27a; border-radius: 4px; padding: 10px; cursor: pointer; font-weight: 700;
+    box-shadow: 0 0 22px rgba(255, 210, 122, .35); transition: all .15s ease;
+  }
+  .ed-go:hover { background: #ffe9c4; box-shadow: 0 0 30px rgba(255, 210, 122, .55); }
+  .ed-close {
+    position: absolute; top: 10px; right: 14px; color: #6f87a8; cursor: pointer;
+    font-size: 18px; padding: 4px 8px;
+  }
+  .ed-close:hover { color: #fff; }
   @keyframes pulse { 50% { opacity: .25; } }
   .big-stat { font-family: Consolas, monospace; font-size: clamp(30px, 5vw, 54px); color: #ffe9c4; }
   .sub-stat { margin-top: 14px; font-size: 16px; letter-spacing: .4em; color: #9fd0ff; }
@@ -414,6 +497,7 @@
       <div class="replay-entry" id="replay-entry">导入战报回看</div>
     </div>
     <div id="train-menu" class="hidden">
+      <div class="replay-entry train-opt" data-mode="custom">自定义靶场 — 放置/路径/速度 全自定义</div>
       <div class="replay-entry train-opt" data-mode="multipath">多径靶场 — 雷达弹 vs 低空目标</div>
       <div class="replay-entry train-opt" data-mode="defense">防御训练 — 39 / 箔条 / 热诱弹 / 贴地</div>
       <div class="replay-entry train-opt" data-mode="intercept">拦弹训练 — 机炮拦截来袭导弹</div>
@@ -424,6 +508,8 @@
     </div>
     <input type="file" id="replay-file" accept=".json,application/json" hidden>
   </div>
+
+  <div id="editor" class="hidden"></div>
 
   <div class="overlay hidden" id="gameover">
     <div class="title-en" id="go-title">MISSION FAILED</div>
