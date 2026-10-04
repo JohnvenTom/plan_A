@@ -14,6 +14,8 @@ import { HUD } from './ui/hud.js';
 import { PostFX } from './world/postfx.js';
 import { GameAudio } from './core/audio.js';
 import { clamp, smoothstep, machOf } from './core/utils.js';
+import { Recorder, parseRecord } from './replay/recorder.js';
+import { Debrief } from './replay/debrief.js';
 
 const q = new URLSearchParams(location.search);
 const FREEZE_T = q.has('t') ? Math.max(0, parseFloat(q.get('t')) || 0) : null;
@@ -46,6 +48,9 @@ const weapons = new Weapons(scene, effects);
 const enemies = new EnemyManager(scene);
 const aaSites = new AASites(scene);
 const hud = new HUD(document.getElementById('hud'));
+// flight recorder + the post-mission replay page it feeds
+const recorder = new Recorder();
+const debrief = new Debrief();
 window.__hud = hud;   // debug hook
 window.__weapons = weapons;   // debug hook
 window.__player = player;     // debug hook
@@ -54,6 +59,8 @@ window.__aaSites = aaSites;   // debug hook
 window.__weather = weather;   // debug hook
 window.__scene = scene;       // debug hook (screenshot harness: __renderer.render(__scene, __player.camera))
 window.__renderer = renderer; // debug hook
+window.__recorder = recorder; // debug hook
+window.__debrief = debrief;   // debug hook
 const audio = new GameAudio();
 // post-processing stack + missile-cam picture-in-picture rig
 const postfx = new PostFX(renderer);
@@ -76,7 +83,7 @@ const goEl = document.getElementById('gameover');
 
 // ---------- game state ----------
 const G = {
-  state: 'title',           // title | intro | playing | gameover
+  state: 'title',           // title | intro | playing | gameover | debrief
   kills: 0, score: 0,
   time: 0, deathTimer: 0, paused: false, menuOpen: false,
   smokeT: 0,
@@ -103,6 +110,7 @@ const killCtx = {
   deployFlares: (owner, n) => weapons.deployFlares(owner, n),
   onKill(enemy, crashed) {
     G.kills++; G.score += (250 + enemies.wave * 25) * (enemy.ace ? 2 : 1);
+    recorder.ev('kill', { victim: recorder.trackIdOf(enemy), ace: enemy.ace }, enemy.position);
     hud.announce('摧毁目标', `TARGET DESTROYED  +${(250 + enemies.wave * 25) * (enemy.ace ? 2 : 1)}${enemy.ace ? ' · ACE x2' : ''}`, 2.2, 'kill');
     hud.destroyed();
     audio.kill();
@@ -129,6 +137,7 @@ function resetAll() {
   enemies.reset();
   weapons.reset();
   aaSites.reset();
+  recorder.reset();
   hud.msgQueue.length = 0;
   hud.announce('任务开始', 'OPERATION GOLDEN HOUR', 3.0, 'info');
 }
@@ -136,6 +145,8 @@ function resetAll() {
 function startGame() {
   audio.init(); audio.resume(); audio.setRunning(true);
   resetAll();
+  recorder.start();
+  debrief.hide();
   G.state = 'intro';
   G.introT = 3.2;
   G.timeScale = 1;
@@ -159,19 +170,46 @@ function setPaused(v) {
   }
 }
 
+// death now leads straight into the replay debrief — the old DOM stats
+// screen is retired (the debrief page carries the same numbers and more)
 function gameOver() {
-  G.state = 'gameover';
+  enterDebrief('failed');
+}
+
+// seal the recording and open the flight-record replay page; outcome is
+// 'failed' (shot down / crashed) or 'ended' (manual end from the pause menu)
+function enterDebrief(outcome) {
+  G.state = 'debrief';
+  G.paused = false;
+  closeMenu();
   audio.setRunning(false);
   if (document.pointerLockElement) document.exitPointerLock();
   hud.msgQueue.length = 0;
-  document.getElementById('go-score').textContent = String(G.kills);
-  document.getElementById('go-stats').innerHTML = [
-    ['击坠', G.kills], ['波次', enemies.wave], ['得分', G.score], ['存活', Math.round(G.time) + ' s'],
-  ].map(([k, v], i) => `<div class="row" style="animation-delay:${0.15 * i}s"><span>${k}</span><b>${v}</b></div>`).join('');
-  const win = false;
-  document.getElementById('go-title').textContent = 'MISSION FAILED';
-  document.getElementById('go-sub').textContent = player.crashed ? '机体触地坠毁' : '机体损毁';
-  goEl.classList.remove('hidden');
+  hud.clearSticky?.();
+  recorder.stop();
+  recorder.setResult({
+    outcome,
+    kills: G.kills, score: G.score, wave: enemies.wave,
+    time: recorder.time, crashed: !!player.crashed,
+    gunFired: recorder.stats.gunFired, mslFired: recorder.stats.mslFired,
+    hits: recorder.stats.hits,
+  });
+  debrief.show(recorder.toRecord(), { onRestart: startGame, onTitle: backToTitle });
+}
+
+// an imported record file (title-page entry) skips the live recorder entirely
+function showImportedRecord(rec) {
+  G.state = 'debrief';
+  titleEl.classList.add('hidden');
+  goEl.classList.add('hidden');
+  debrief.show(rec, { onRestart: startGame, onTitle: backToTitle });
+}
+
+function backToTitle() {
+  debrief.hide();
+  resetAll();          // park the jets so the title backdrop is a clean sky
+  G.state = 'title';
+  titleEl.classList.remove('hidden');
 }
 
 
@@ -221,6 +259,8 @@ function update(dt) {
     player.update(dt, input, {});
     if (!player.alive) {
       if (G.deathTimer === 0) {
+        recorder.ev('crash', { crashed: !!player.crashed }, player.position);
+        recorder.stop();
         effects.explosion(player.position, 2.2);
         effects.wreckBurst?.(player.position, player.body.vel, 2.0);
         audio.explosion(1);
@@ -239,7 +279,10 @@ function update(dt) {
     weapons.playerGun(player, dt, firing && player.alive, enemies.enemies);
     if (input.pressed('fireMissile')) weapons.mslFirePress(player);
     if (input.pressed('mslWarmup')) weapons.mslWarmPress();
-    if (input.pressed('flares')) weapons.deployFlares(player, 3);
+    if (input.pressed('flares')) {
+      weapons.deployFlares(player, 3);
+      recorder.ev('flare', {}, player.position);
+    }
     if (input.pressed('cycleMissile')) {
       weapons.mslKind = weapons.mslKind === 'ir' ? 'radar' : 'ir';
       // the LOCK survives the kind switch — only the warm state is per-kind;
@@ -268,13 +311,19 @@ function update(dt) {
     aaSites.update(dt, player, weapons, effects);
     weapons.update(dt, player, enemies.enemies, effects);
 
+    // flight recorder: 20 Hz samples + entity bookkeeping, post-sim so every
+    // position is the settled end-of-frame state
+    recorder.sample(dt, { player, enemies: enemies.enemies, weapons });
+
     // weapon feedback events -> HUD stack / camera / audio (ONE drain: an
-    // earlier blanket clear here silently ate the nearMiss/hitTing events)
+    // earlier blanket clear here silently ate the nearMiss/hitTing events);
+    // the same drain feeds the flight recorder's combat-event log
     for (const ev of weapons.events) {
       if (ev.type === 'crit') {
         hud.announce('致命攻击', 'CRITICAL HIT — 目标冒烟', 1.5, 'crit');
         audio.crit();
       } else if (ev.type === 'nearMiss') {
+        recorder.ev('nearMiss', {}, ev.pos);
         // the whip + letterbox are optional (settings panel); the whoosh,
         // shake and threat feel stay on regardless
         if (settings.nearMissWhip) {
@@ -284,8 +333,13 @@ function update(dt) {
         player.camShake = Math.min(1, player.camShake + 0.22);
         audio.nearMiss();
       } else if (ev.type === 'hitTing') {
+        recorder.stats.hits++;
+        recorder.ev('hit', { w: ev.w, victim: recorder.trackIdOf(ev.tg) }, ev.pos);
         audio.hitTing();
+      } else if (ev.type === 'playerHit') {
+        recorder.ev('damage', { w: ev.w, dmg: ev.dmg }, ev.pos);
       } else if (ev.type === 'intercept') {
+        recorder.ev('intercept', {}, ev.pos);
         G.score += 100;
         hud.announce('拦截成功', 'MISSILE INTERCEPTED  +100', 2.0, 'kill');
         audio.kill();
@@ -293,11 +347,11 @@ function update(dt) {
     }
     weapons.events.length = 0;
 
-    // drain enemy-manager events into HUD announcements
+    // drain enemy-manager events into HUD announcements (+ timeline ticks)
     for (const ev of enemies.events) {
-      if (ev.type === 'wave') hud.announce(`WAVE ${ev.wave}`, `敌机接近 — ${ev.count} 机`, 3.0, 'wave');
-      else if (ev.type === 'waveClear') hud.announce('WAVE CLEAR', '敌机全灭 — 下一波接近中', 2.6, 'info');
-      else if (ev.type === 'ace') { hud.announce('⚠ 王牌机参战', 'ACE — 高机动 · 击坠双倍分', 3.2, 'wave'); G.aceCut = 1.6; }
+      if (ev.type === 'wave') { recorder.ev('wave', { n: ev.wave }); hud.announce(`WAVE ${ev.wave}`, `敌机接近 — ${ev.count} 机`, 3.0, 'wave'); }
+      else if (ev.type === 'waveClear') { recorder.ev('waveClear', { n: ev.wave }); hud.announce('WAVE CLEAR', '敌机全灭 — 下一波接近中', 2.6, 'info'); }
+      else if (ev.type === 'ace') { recorder.ev('ace'); hud.announce('⚠ 王牌机参战', 'ACE — 高机动 · 击坠双倍分', 3.2, 'wave'); G.aceCut = 1.6; }
     }
     enemies.events.length = 0;
 
@@ -630,10 +684,12 @@ function freezeFrame() {
   goEl.classList.add('hidden');
   G.state = 'playing';
   resetAll();
+  const replayShot = q.has('replay');   // ?t=N&replay — freeze INTO the debrief page
   const dt = 1 / 60;
   const steps = Math.max(90, Math.round(FREEZE_T / dt));   // >=1.5 s so the camera settles
   let missileShots = 0;
   const shotTimes = [4.2, 9.0, 13.5];
+  if (replayShot) recorder.start();
   for (let i = 0; i < steps; i++) {
     update(dt);
     // scripted shots so stills can catch trails/impacts (freeze mode only) —
@@ -645,6 +701,16 @@ function freezeFrame() {
   }
   renderer.render(scene, camera);
   renderHUD();
+  if (replayShot) {
+    recorder.stop();
+    recorder.setResult({
+      outcome: 'ended', kills: G.kills, score: G.score, wave: enemies.wave,
+      time: recorder.time, crashed: false, ...recorder.stats,
+    });
+    G.state = 'debrief';
+    debrief.show(recorder.toRecord(), { onRestart: startGame, onTitle: backToTitle });
+    debrief.frame(1 / 60, renderer);   // settle one frame so stills show the page
+  }
   window.__ready = true;
   window.__game = {
     time: G.time, state: G.state, kills: G.kills,
@@ -720,6 +786,11 @@ function frame() {
     postfx.setPipSource(null);
     postfx.composite(scene, camera);
     hud.draw(dt, { state: 'title' });
+  } else if (G.state === 'debrief') {
+    // replay page owns the frame: its own scene/camera render straight
+    // through the renderer; the HUD pass just clears the combat canvas
+    debrief.frame(dt, renderer);
+    hud.draw(dt, { state: 'debrief' });
   } else {
     if (G.state === 'gameover' && input.pressedRaw('Enter')) { startGame(); }
     else if (G.state === 'playing' && input.pressed('pause')) setPaused(!G.paused);
@@ -920,6 +991,8 @@ function openMenu() {
   G.menuOpen = true;
   input.cancelCapture();
   if (G.state === 'playing' && !G.paused) setPaused(true);
+  // manual mission end only makes sense mid-mission
+  document.getElementById('end-mission').style.display = G.state === 'playing' ? 'block' : 'none';
   bindEl.classList.remove('hidden');
   renderBindings();
   renderOptions();
@@ -938,6 +1011,33 @@ document.getElementById('bind-reset').addEventListener('click', () => {
   input.resetDefaults();
   renderBindings();
 });
+// manual mission end (settings panel): seal the tape and open the debrief
+document.getElementById('end-mission').addEventListener('click', () => {
+  if (G.state !== 'playing') return;
+  closeMenu();
+  setPaused(false);
+  enterDebrief('ended');
+});
+
+// title-page replay import: parse a downloaded record file into the debrief
+const replayFile = document.getElementById('replay-file');
+const replayEntry = document.getElementById('replay-entry');
+// the title screen starts a mission on ANY click (window-level mousedown),
+// so the button must swallow both phases before that listener sees them
+for (const type of ['mousedown', 'mouseup', 'click']) {
+  replayEntry.addEventListener(type, e => e.stopPropagation());
+}
+replayEntry.addEventListener('click', () => replayFile.click());
+replayFile.addEventListener('change', () => {
+  const f = replayFile.files && replayFile.files[0];
+  replayFile.value = '';
+  if (!f) return;
+  f.text().then(txt => {
+    const rec = parseRecord(txt);
+    if (!rec) { console.warn('invalid record file'); return; }
+    showImportedRecord(rec);
+  });
+});
 // ESC: closes the menu, otherwise toggles pause (when the pointer lock
 // consumes ESC, the pointerlockchange handler pauses instead)
 addEventListener('keydown', e => {
@@ -952,6 +1052,7 @@ addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   postfx.setSize(innerWidth, innerHeight);
+  debrief.resize(innerWidth, innerHeight);
 });
 
 if (FREEZE_T !== null) {

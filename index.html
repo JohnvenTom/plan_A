@@ -114,6 +114,146 @@
     #go-stats .row b { color: #ffc866; }
     @keyframes statRow { from { opacity: 0; transform: translateX(-24px); } to { opacity: 1; transform: none; } }
 
+    /* ---------- debrief: AC-style flight-record replay page ---------- */
+    #debrief {
+      position: fixed; inset: 0; z-index: 15; pointer-events: none;
+      font-family: "Segoe UI", "Microsoft YaHei", sans-serif; color: #e8f2ff;
+    }
+    #debrief.hidden { display: none; }
+    #debrief.panel-hidden #db-left, #debrief.panel-hidden #db-bottom { opacity: 0; visibility: hidden; }
+    #db-left {
+      position: absolute; left: 26px; top: 50%; transform: translateY(-50%);
+      width: 340px; max-height: 86vh; overflow-y: auto; pointer-events: auto;
+      background: linear-gradient(160deg, rgba(8, 18, 38, .82), rgba(4, 9, 20, .88));
+      border: 1px solid rgba(120, 180, 255, .28); border-radius: 8px;
+      padding: 26px 26px 18px; backdrop-filter: blur(6px);
+      transition: opacity .35s ease, visibility .35s;
+      text-shadow: 0 0 14px rgba(120, 200, 255, .4);
+    }
+    .db-title-en {
+      font-family: Georgia, "Times New Roman", serif; font-size: 30px;
+      letter-spacing: .22em; font-weight: 700; color: #ff9d7a;
+      text-shadow: 0 0 22px rgba(255, 90, 40, .5), 0 2px 0 #6e1e0c;
+    }
+    #db-left.done .db-title-en { color: #9fd0ff; text-shadow: 0 0 22px rgba(120, 200, 255, .5), 0 2px 0 #16324e; }
+    .db-sub { margin-top: 6px; font-size: 13px; letter-spacing: .3em; color: #9fd0ff; }
+    .db-score-wrap { margin-top: 18px; display: flex; align-items: baseline; gap: 14px; }
+    .db-score { font-family: Consolas, monospace; font-size: 44px; color: #ffe9c4; }
+    .db-score-cap { font-size: 11px; letter-spacing: .4em; color: #9fd0ff; }
+    .db-rank-row { margin-top: 10px; display: flex; align-items: center; gap: 14px; }
+    .db-rank {
+      font-family: Georgia, serif; font-size: 74px; font-weight: 700; line-height: 1;
+      color: #ffd24d; text-shadow: 0 0 26px rgba(255, 210, 77, .4);
+    }
+    .db-rank-cap { font-size: 11px; letter-spacing: .4em; color: #9fd0ff; }
+    #db-stats { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
+    #db-stats .row {
+      display: flex; justify-content: space-between; gap: 24px;
+      font: bold 13px Consolas, monospace; color: #8fe0ff;
+      border-bottom: 1px solid rgba(143, 224, 255, .22); padding: 3px 2px;
+      opacity: 0; animation: statRow .5s ease forwards;
+    }
+    #db-stats .row b { color: #ffc866; }
+    .db-cap { margin-top: 18px; font-size: 11px; letter-spacing: .35em; color: #ffd27a; }
+    #db-kills { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; max-height: 26vh; overflow-y: auto; }
+    .kill-row {
+      display: grid; grid-template-columns: 52px 12px 1fr 40px; gap: 8px; align-items: center;
+      font: 12px Consolas, monospace; color: #cfe3ff; padding: 4px 6px; border-radius: 4px;
+      cursor: pointer; opacity: 0; animation: statRow .45s ease forwards;
+    }
+    .kill-row:hover { background: rgba(120, 180, 255, .12); }
+    .kill-row .kt { color: #8fa5bd; }
+    .kill-row .chip { width: 9px; height: 9px; border-radius: 2px; box-shadow: 0 0 8px currentColor; }
+    .kill-row .kw { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .kill-row .km { color: #ffd27a; text-align: right; }
+    .kill-row .ace-tag {
+      font-style: normal; font-size: 10px; color: #0a0d14; background: #ffd24d;
+      border-radius: 3px; padding: 0 4px; margin-left: 5px; letter-spacing: .1em;
+    }
+    .kill-row.past .kw { color: #fff; }
+    .kill-row.cur { background: rgba(255, 210, 77, .14); outline: 1px solid rgba(255, 210, 77, .35); }
+    .kill-row.none { cursor: default; color: #8fa5bd; }
+    .db-actions { margin-top: 20px; display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; }
+    .db-actions span {
+      font-size: 12px; letter-spacing: .12em; color: #9fd0ff; cursor: pointer;
+      border: 1px solid rgba(143, 224, 255, .3); border-radius: 4px; padding: 6px 12px;
+    }
+    .db-actions span:hover { color: #fff; border-color: #ffe9c4; }
+    #db-bottom {
+      position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%);
+      width: min(860px, 92vw); pointer-events: auto;
+      transition: opacity .35s ease, visibility .35s;
+    }
+    .db-bar {
+      display: flex; align-items: center; gap: 14px;
+      background: rgba(6, 12, 26, .82); border: 1px solid rgba(120, 180, 255, .25);
+      border-radius: 8px; padding: 10px 16px; backdrop-filter: blur(6px);
+    }
+    #db-play, #db-speeds button {
+      font: 13px Consolas, monospace; color: #cfe3ff; cursor: pointer;
+      background: rgba(120, 180, 255, .08); border: 1px solid rgba(143, 224, 255, .3);
+      border-radius: 4px; padding: 4px 10px;
+    }
+    #db-play { width: 34px; }
+    #db-play:hover, #db-speeds button:hover { color: #fff; border-color: #ffe9c4; }
+    #db-speeds { display: flex; gap: 6px; }
+    #db-speeds button.on { color: #0a0d14; background: #8fe0ff; border-color: #8fe0ff; font-weight: 700; }
+    #db-time { font: 12px Consolas, monospace; color: #8fe0ff; white-space: nowrap; }
+    #db-track { position: relative; flex: 1; height: 26px; cursor: pointer; }
+    #db-track::before {
+      content: ""; position: absolute; left: 0; right: 0; top: 12px; height: 3px;
+      background: rgba(143, 224, 255, .22); border-radius: 2px;
+    }
+    #db-head {
+      position: absolute; top: 5px; width: 2px; height: 17px; margin-left: -1px;
+      background: #ffe9c4; box-shadow: 0 0 10px rgba(255, 233, 196, .8); pointer-events: none;
+    }
+    #db-ticks i, #db-dots i { position: absolute; pointer-events: none; }
+    #db-ticks .tk { top: 8px; width: 1px; height: 11px; background: #ffd27a; opacity: .8; }
+    #db-ticks .tk.clear { background: #8fa5bd; opacity: .4; }
+    #db-ticks .tk.ace { background: #ffd24d; height: 14px; top: 6px; box-shadow: 0 0 6px rgba(255,210,77,.8); }
+    #db-dots .dot {
+      top: 14px; width: 6px; height: 6px; margin-left: -3px; border-radius: 50%;
+      border: 1.5px solid #fff; background: rgba(5, 7, 15, .8); pointer-events: auto; cursor: pointer;
+    }
+    #db-dots .dot:hover { transform: scale(1.6); }
+    #db-dots .dot.big { top: 12px; width: 9px; height: 9px; margin-left: -4.5px; }
+    #db-hint {
+      margin-top: 8px; text-align: center; font: 11px Consolas, monospace;
+      letter-spacing: .12em; color: #6f87a8;
+    }
+    #db-tip {
+      position: fixed; display: none; z-index: 16; pointer-events: none;
+      font: 12px Consolas, monospace; color: #e8f2ff; white-space: nowrap;
+      background: rgba(8, 18, 38, .92); border: 1px solid rgba(143, 224, 255, .35);
+      border-radius: 4px; padding: 4px 10px;
+    }
+    .replay-entry {
+      margin-top: 18px; font-size: 13px; letter-spacing: .2em; color: #9fd0ff;
+      border: 1px solid rgba(143, 224, 255, .3); border-radius: 4px; padding: 7px 18px;
+      cursor: pointer; pointer-events: auto;
+    }
+    .replay-entry:hover { color: #fff; border-color: #ffe9c4; }
+    /* ---------- themed scrollbars: cyan-tech thin, auto-hide when idle.
+       Chromium: the thumb is transparent until its panel is hovered, then a
+       dim cyan sliver that lights up on direct hover; Firefox falls back to
+       a permanently-subtle thin bar via scrollbar-color. ---------- */
+    .ui-scroll { scrollbar-width: thin; scrollbar-color: rgba(103, 199, 235, .30) transparent; }
+    .ui-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+    .ui-scroll::-webkit-scrollbar-track { background: transparent; }
+    .ui-scroll::-webkit-scrollbar-thumb {
+      background: transparent; border-radius: 3px;
+      transition: background .3s ease;
+    }
+    .ui-scroll:hover::-webkit-scrollbar-thumb { background: rgba(103, 199, 235, .30); }
+    .ui-scroll::-webkit-scrollbar-thumb:hover { background: rgba(143, 224, 255, .80); }
+    #end-mission {
+      display: none; margin: 18px 0 4px; text-align: center; font-size: 14px; letter-spacing: .2em;
+      color: #ffb08a; border: 1px solid rgba(255, 122, 61, .45); border-radius: 6px;
+      padding: 10px 0; cursor: pointer;
+    }
+    #end-mission:hover { color: #fff; background: rgba(255, 90, 40, .15); border-color: #ff9d7a; }
+
 </style>
 <script type="importmap">
   { "imports": { "three": "./vendor/three.module.js" } }
@@ -125,13 +265,14 @@
   <div class="screen-flash" id="flash"></div>
   <div id="bind-entry">设 置</div>
 
-  <div class="overlay hidden" id="bindings">
+  <div class="overlay hidden ui-scroll" id="bindings">
     <div class="panel">
       <h2>CONTROLS</h2>
       <div class="hint">键位设置 — 点击按键框后按下新的键或鼠标键 · 鼠标移动/滚轮固定用于瞄准与油门</div>
       <div id="bind-rows"></div>
       <div class="opt-sep">OPTIONS — 游戏设置</div>
       <div id="opt-rows"></div>
+      <div id="end-mission">结束任务 · 查看战报</div>
       <div class="bind-actions">
         <span id="bind-reset">恢复默认</span>
         <span id="bind-close">关闭 (ESC)</span>
@@ -154,6 +295,8 @@
       <span><b>P / ESC</b> 暂停</span><span>左下角「设置」可自定义键位与游戏选项(近失弹甩镜等)</span>
     </div>
     <div class="start-hint">— 按 回车 或 点击 开始任务 —</div>
+    <div class="replay-entry" id="replay-entry">导入战报回看</div>
+    <input type="file" id="replay-file" accept=".json,application/json" hidden>
   </div>
 
   <div class="overlay hidden" id="gameover">
@@ -163,6 +306,36 @@
     <div class="sub-stat">击落数</div>
     <div id="go-stats"></div>
     <div class="start-hint">— 按 回车 重新出击 —</div>
+  </div>
+
+  <div id="debrief" class="hidden">
+    <div id="db-left" class="ui-scroll">
+      <div class="db-title-en" id="db-title">MISSION FAILED</div>
+      <div class="db-sub" id="db-sub">机体损毁</div>
+      <div class="db-score-wrap"><div class="db-score" id="db-score">0</div><div class="db-score-cap">SCORE</div></div>
+      <div class="db-rank-row"><div class="db-rank" id="db-rank">—</div><div class="db-rank-cap">EVALUATION</div></div>
+      <div id="db-stats"></div>
+      <div class="db-cap">击坠记录 KILL LOG</div>
+      <div id="db-kills" class="ui-scroll"></div>
+      <div class="db-actions">
+        <span id="db-restart">再次出击 (R)</span>
+        <span id="db-download">下载战报</span>
+        <span id="db-totitle">返回标题 (ESC)</span>
+      </div>
+    </div>
+    <div id="db-bottom">
+      <div class="db-bar">
+        <button id="db-play">▶</button>
+        <div id="db-speeds">
+          <button data-v="0.5">0.5x</button><button data-v="1">1x</button>
+          <button data-v="2">2x</button><button data-v="4">4x</button>
+        </div>
+        <div id="db-time"><span id="db-cur">00:00</span> / <span id="db-total">00:00</span></div>
+        <div id="db-track"><div id="db-ticks"></div><div id="db-dots"></div><div id="db-head"></div></div>
+      </div>
+      <div id="db-hint">拖动旋转 · 滚轮缩放 · 点击锥体跟随 / 事件标记跳转 · 空格 播放 · F 跟随 · ←→ ±5s · Tab 收起面板</div>
+    </div>
+    <div id="db-tip"></div>
   </div>
 
 <script type="module" src="./src/main.js"></script>

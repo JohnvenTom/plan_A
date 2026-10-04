@@ -622,11 +622,12 @@ export class Weapons {
           if (r.fromPlayer) {
             const killed = t.applyDamage(r.dmg);
             t.flashT = 0.12;
-            this.events.push({ type: 'hitTing' });
+            this.events.push({ type: 'hitTing', pos: t.position, w: 'gun', tg: t });
             effects.hitSpark(r.pos);
             if (killed) { effects.explosion(t.position, 1.0); effects.wreckBurst?.(t.position, t.body.vel, 1.0); }   // every kill detonates
           } else {
             player.applyDamage(r.dmg);
+            this.events.push({ type: 'playerHit', pos: r.pos.clone(), w: 'gun', dmg: r.dmg });
             effects.hitSpark(r.pos);
             this._logHit(player, r.pos, 'gun');
           }
@@ -703,7 +704,7 @@ export class Weapons {
         else if (!ms._whipped && ms._minD < 70 && d2 > ms._minD + 6) {
           ms._whipped = true;
           this._logHit(player, ms.pos, 'near');
-          this.events.push({ type: 'nearMiss', dir: _v3.copy(ms.pos).sub(player.position).normalize().clone() });
+          this.events.push({ type: 'nearMiss', dir: _v3.copy(ms.pos).sub(player.position).normalize().clone(), pos: ms.pos.clone() });
         }
       }
       // a missile biting a flare chases it until the flare burns out, then
@@ -797,15 +798,16 @@ export class Weapons {
             // outer loop indices stay sane
             t._dead = true;
             effects.explosion?.(tp, 0.8);
-            this.events.push({ type: 'intercept' });
+            this.events.push({ type: 'intercept', pos: tp.clone() });
             return;
           }
           if (t === player) {
             player.applyDamage(ms.dmg);
+            this.events.push({ type: 'playerHit', pos: ms.pos.clone(), w: 'msl', dmg: ms.dmg });
             this._logHit(player, ms.pos, 'msl');
           } else if (ms.fromPlayer) {
             t.flashT = 0.12;
-            this.events.push({ type: 'hitTing' });
+            this.events.push({ type: 'hitTing', pos: t.position, w: 'msl', tg: t });
             const killed = t.applyDamage(ms.dmg);
             if (killed) {
               // EVERY kill detonates — the spiral-fall wrecks (30%) now drop

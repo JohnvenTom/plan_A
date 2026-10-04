@@ -116,6 +116,10 @@ export class Input {
       if (!this.pointerLocked) { this._lastX = null; this._lastY = null; }
     });
     addEventListener('wheel', e => {
+      // UI panels marked .ui-scroll keep native wheel scrolling; the wheel
+      // belongs to the throttle everywhere else (window-level preventDefault
+      // here is what used to make every scrollable panel dead to the wheel)
+      if (e.target && e.target.closest && e.target.closest('.ui-scroll')) return;
       this.wheelDelta -= Math.sign(e.deltaY);   // scroll up = throttle up
       e.preventDefault();
     }, { passive: false });
