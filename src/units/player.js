@@ -95,12 +95,12 @@ export class Player {
   get ctl() { return this.body.ctl; }
   get throttle() { return this.body.throttle; }
 
-  // stall / departure warning state: limiter-fighting AOA (past the FBW soft
-  // cap, into the hard-cap zone), actual post-stall departure, or the
-  // low-speed pusher regime — any of these flashes the HUD warning
+  // stall / departure warning state: AoA-based (the honest gauge — a real
+  // stall warning trusts the angle, not the airspeed). Tiers: past the FBW
+  // soft cap into stall territory, actual post-stall departure, or a spin
   get stalling() {
     const b = this.body;
-    return this.alive && (b.stall > 0.05 || b.alpha > 0.22 || b.airspeed < 155);
+    return this.alive && (b.stall > 0.05 || Math.abs(b.alpha) > 0.22 || b.spin > 0);
   }
 
   forward(out) { return this.body.forward(out); }
@@ -173,6 +173,10 @@ export class Player {
     b.burner = burnerFrac;
     this.boosting = burnerFrac > 0.1;
     if (input.pressed('camera')) this.viewMode = (this.viewMode + 1) % 3;
+    // FBW AoA-limiter toggle (F): off frees the instructor AND the airframe
+    // filter to pull into a real departure; main.js turns this flag into a
+    // HUD announce
+    if (input.pressed('limiter')) { b.fbwOn = !b.fbwOn; this._fbwToggled = true; }
 
     // ---- mouse: free look (C held) orbits the camera, and the world-
     //      anchored aim is PINNED to the free view's screen center (set in
@@ -255,6 +259,10 @@ export class Player {
     if (Math.abs(this.speed * 3.6 - cornerSpeedKMH(b.pos.y)) < 40) {
       this.camShake = Math.max(this.camShake, 0.055);
     }
+    // stall buffet: airframe shudder scaling with buffet depth — onset
+    // (pre-stall warning) is subtle, full stall shakes hard; the spin keeps
+    // the camera disoriented on its own
+    if (b.buffet > 0.05) this.camShake = Math.max(this.camShake, b.buffet * 0.5);
     // afterburner light-up: one-shot FOV punch that decays
     if (this.boosting && !this._wasBoost) this._abKick = 1;
     this._wasBoost = this.boosting;

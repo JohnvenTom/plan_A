@@ -40,7 +40,8 @@ export class HUD {
     this._mslSlide = 0;
     this._rainSeeds = Array.from({ length: 90 }, () => [Math.random(), Math.random(), Math.random()]);
     // preload the knockout bar font so the first message doesn't fall back
-    if (document.fonts?.load) document.fonts.load('800 26px "Saira ExtraCondensed"');
+    // (headless test env has no document — the guard keeps it importable)
+    if (typeof document !== 'undefined' && document.fonts?.load) document.fonts.load('800 26px "Saira ExtraCondensed"');
   }
 
   resize() {
@@ -402,8 +403,14 @@ export class HUD {
     // G + AOA readouts below the tape
     this.text(`G ${p.gLoad.toFixed(1)}`, xL - 34, cy + H / 2 + 52, 13,
       p.gLoad > 12 ? RED : p.gLoad > 7 ? AMBER : CYAN_DIM);
+    const b = p.body;
     this.text(`α ${(p.alpha * 57.3).toFixed(1)}°`, xL - 34, cy + H / 2 + 72, 12,
-      Math.abs(p.alpha) > 0.24 ? AMBER : CYAN_DIM);
+      b.buffet > 0.5 ? RED : b.buffet > 0.1 || Math.abs(p.alpha) > 0.24 ? AMBER : CYAN_DIM);
+    // FBW AoA-limiter status: amber (and blinking in the stall) when OFF —
+    // departure physics are live, F restores it
+    const fbwOff = !b.fbwOn && (b.buffet < 0.3 || Math.floor(S.time * 4) % 2 === 0);
+    this.text(fbwOff ? 'FBW OFF · F' : 'FBW ON', xL - 34, cy + H / 2 + 92, 11,
+      b.fbwOn ? CYAN_DIM : AMBER);
     // altitude (right)
     this._tape(xR, cy, H, p.position.y, 20, 100, -1);
     this._drumBox('alt', xR, cy, String(Math.round(p.position.y)), 'm', dt);
@@ -932,6 +939,15 @@ export class HUD {
     if (S.clock) this.text(`${S.clock} · ${S.weatherName || ''}`, this.w - 46, 112, 13, CYAN_DIM, 'right');
   }
 
+  // spin-recovery progress bar: fills as anti-rudder + unloaded stick arrest
+  // the rotation; the tick marks the point where the spin breaks
+  _spinBar(cx, y, rec) {
+    const w = 150;
+    this.line(cx - w / 2, y, cx + w / 2, y, 'rgba(159,232,255,0.35)', 3);
+    this.line(cx - w / 2, y, cx - w / 2 + w * clamp(rec, 0, 1), y, AMBER, 3);
+    this.text('RECOVERY', cx + w / 2 + 10, y, 10, AMBER, 'left', 4);
+  }
+
   drawAlerts(dt, S) {
     const cx = this.w / 2;
     const blink = Math.floor(S.time * 4) % 2 === 0;
@@ -952,10 +968,26 @@ export class HUD {
         this.text('⚠ 敌方锁定中 ⚠', cx, this.h / 2 - 150, 20, AMBER, 'center', 10);
       }
     }
-    // stall / departure: flashing red + recovery hint (push to unload)
-    if (S.player.stalling && blink) {
+    // stall / departure ladder, worst first:
+    //   flat spin (near-unrecoverable easter egg) -> steep spin (anti-rudder
+    //   directive + recovery progress bar) -> stall (push hint) -> AOA
+    //   advisory (buffet onset before the horn)
+    const b = S.player.body;
+    if (b.spin === 2) {
+      this.text('⚠ 平尾旋 FLAT SPIN ⚠', cx, this.h / 2 - 118, 24, RED, 'center', 14);
+      if (blink) this.text('蹬满反舵 + 顶杆 — 改出希望渺茫', cx, this.h / 2 - 96, 14, AMBER, 'center', 8);
+      this._spinBar(cx, this.h / 2 - 78, b.spinRec);
+    } else if (b.spin === 1) {
+      this.text('⚠ 尾旋 SPIN ⚠', cx, this.h / 2 - 118, 24, RED, 'center', 14);
+      if (blink) this.text(b.spinDir > 0 ? '按 E 右舵改出 + 顶杆' : '按 Q 左舵改出 + 顶杆',
+        cx, this.h / 2 - 96, 14, AMBER, 'center', 8);
+      this._spinBar(cx, this.h / 2 - 78, b.spinRec);
+    } else if (S.player.stalling && blink) {
       this.text('⚠ 失速 STALL ⚠', cx, this.h / 2 - 118, 24, RED, 'center', 14);
-      this.text('推杆俯冲加速改出', cx, this.h / 2 - 96, 14, AMBER, 'center', 8);
+      this.text(b.fbwOn ? '推杆俯冲加速改出' : '推杆俯冲加速改出 · F 恢复限器',
+        cx, this.h / 2 - 96, 14, AMBER, 'center', 8);
+    } else if (b.buffet > 0.15 && Math.abs(b.alpha) > 0.19) {
+      this.text(`AOA ${(b.alpha * 57.3).toFixed(0)}°`, cx, this.h / 2 - 118, 15, AMBER, 'center', 6);
     }
     // low hp
     if (S.player.hp <= 30 && blink) {

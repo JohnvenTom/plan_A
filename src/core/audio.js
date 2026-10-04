@@ -5,6 +5,7 @@ export class GameAudio {
     this.enabled = true;
     this._lockBeepT = 0;
     this._alertT = 0;
+    this._stallT = 0;
     // volume factors from the settings panel (0..1); applied at every node
     // that can carry sound so master/sfx/engine scale independently
     this.volMaster = 1;
@@ -62,6 +63,16 @@ export class GameAudio {
     this.windGain = ctx.createGain(); this.windGain.gain.value = 0;
     this.windSrc.connect(this.windFilter).connect(this.windGain).connect(this.master);
     this.windSrc.start();
+
+    // stall buffet rumble: same noise through a deep lowpass — the
+    // airframe shudder you feel in the seat before the horn goes off
+    this.bufSrc = ctx.createBufferSource();
+    this.bufSrc.buffer = buf; this.bufSrc.loop = true;
+    this.bufFilter = ctx.createBiquadFilter();
+    this.bufFilter.type = 'lowpass'; this.bufFilter.frequency.value = 130; this.bufFilter.Q.value = 0.8;
+    this.bufGain = ctx.createGain(); this.bufGain.gain.value = 0;
+    this.bufSrc.connect(this.bufFilter).connect(this.bufGain).connect(this.master);
+    this.bufSrc.start();
   }
 
   resume() { if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume(); }
@@ -176,6 +187,26 @@ export class GameAudio {
     this.engGain.gain.value = (0.05 + player.throttle * 0.075 + (boosting ? 0.05 : 0)) * this.volEngine;
     this.windFilter.frequency.value = 500 + s * 1400;
     this.windGain.gain.value = (0.02 + s * s * 0.14 + cloud * cloud * 0.5) * this.volEngine;   // cloud-pass roar
+    // stall buffet rumble: depth-scaled seat shudder, brighter as it deepens
+    const bdy = player.body;
+    if (bdy && this.bufGain) {
+      this.bufGain.gain.value = bdy.buffet * 0.38 * this.volEngine;
+      this.bufFilter.frequency.value = 90 + bdy.buffet * 120;
+    }
+    // stall horn / spin wail: plain stall gets the repeating horn; a spin
+    // gets an urgent two-tone; the flat spin a long descending wail
+    if (player.stalling && bdy) {
+      this._stallT -= dt;
+      if (this._stallT <= 0) {
+        if (bdy.spin === 2) this._tone('sawtooth', 880, 220, 0.5, 0.11);
+        else if (bdy.spin === 1) {
+          this._tone('square', 620, 620, 0.09, 0.10);
+          setTimeout(() => this._tone('square', 470, 470, 0.09, 0.10), 115);
+        }
+        else this._tone('square', 760, 700, 0.12, 0.07);
+        this._stallT = bdy.spin ? 0.55 : 0.45;
+      }
+    } else this._stallT = 0;
     // world muffled while inside a deck
     const mufT = cloud > 0.05 ? 20000 - Math.pow(cloud, 1.2) * 15000 : 20000;
     this.muffle.frequency.value += (mufT - this.muffle.frequency.value) * Math.min(1, dt * 5);

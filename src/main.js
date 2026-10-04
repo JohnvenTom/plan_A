@@ -203,6 +203,12 @@ const TRAINING_MODES = {
     hot: 'TWO SPARRING PARTNERS — THEY BITE BACK',
     fighters: [{ range: 7000 }, { range: 7600 }],
   },
+  stall: {
+    title: 'STALL COURSE', sub: 'STALL & SPIN RECOVERY — LIMITER OFF · DEPART · RECOVER',
+    hot: 'F 关限器 — 拉过失速 · W推杆 · Q/E反舵改出',
+    // high and slow: room to depart, spin and still pull out alive
+    spawn: { alt: 4000, speed: 200 },
+  },
   freeflight: {
     title: 'FREE FLIGHT', sub: 'OPEN RANGE — NO TARGETS',
     hot: 'OPEN WATER — FLY',
@@ -245,10 +251,12 @@ function startTraining(mode = 'multipath') {
   enemies.training = true;
   trainMenu.classList.add('hidden');
   const range = findSeaRange(cfg);
-  // spawn SW of the ring at a safe height, nose pointed at its center
+  // spawn SW of the ring at a safe height, nose pointed at its center;
+  // courses can override the state (the stall course starts high and slow)
+  const sp = cfg.spawn || {};
   const px = range.x - 4200, pz = range.z + 2600;
   const h = Math.atan2(-(range.x - px), -(range.z - pz));
-  player.body.setState(new THREE.Vector3(px, 750, pz), h, 280);
+  player.body.setState(new THREE.Vector3(px, sp.alt ?? 750, pz), h, sp.speed ?? 280);
   (cfg.drones || []).forEach((d, i) => enemies.spawnTrainingDrone({ ...d, center: range, phase: i * 2.1 }));
   if (cfg.fighters) for (const f of cfg.fighters) enemies.spawnTrainingFighter(player, f);
   hud.msgQueue.length = 0;
@@ -383,6 +391,20 @@ function update(dt) {
     // out-of-area enforcement (the training range is free flight)
     if (!G.training && player.outOfAreaTime > 15) player.applyDamage(999);
 
+    // FBW limiter toggle feedback (F) + spin entry on the flight record
+    if (player._fbwToggled) {
+      player._fbwToggled = false;
+      const on = player.body.fbwOn;
+      hud.announce(on ? 'FBW LIMITER ON' : 'FBW LIMITER OFF',
+        on ? '迎角限制恢复 — 失速保护生效' : '迎角限制解除 — 可拉入真失速/尾旋', 1.6, 'info');
+      recorder.ev('limiter', { on }, player.position);
+    }
+    if (player.body.spin && !G._spinPrev) {
+      recorder.ev('spin', { flat: player.body.spin === 2 }, player.position);
+      if (player.body.spin === 2) hud.announce('FLAT SPIN', '蹬满反舵+顶杆 — 高度将损失殆尽', 3, 'info');
+    }
+    G._spinPrev = player.body.spin;
+
     // player weapons
     const firing = input.down('fireGun');
     weapons.playerGun(player, dt, firing && player.alive, enemies.enemies);
@@ -516,7 +538,7 @@ function update(dt) {
     }
     for (const e of enemies.enemies) {
       if (!e.dying) {
-        const st = e.body.stall > 0.05 || e.body.alpha > 0.22 || e.body.airspeed < 155;
+        const st = e.body.stall > 0.05 || Math.abs(e.body.alpha) > 0.22;
         e.model.anchors.wingL.getWorldPosition(_v);
         e.model.anchors.wingR.getWorldPosition(_v2);
         effects.vortexFeed(e, _v, _v2, vortexOf(e.body, st), st);
