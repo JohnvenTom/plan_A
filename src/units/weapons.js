@@ -90,8 +90,8 @@ export class Weapons {
     this.warm = { state: 'cold', t: 0 };
     this.irSeek = null;        // IR seeker bite: nearest heat source in basket
     this.lockConeDot = null;   // lock target's nose-cone dot (HUD edge warning)
-    this.lastHit = null;       // {dir, age} — where the latest hit on the player came from
-    this.now = 0;              // presentation clock for hit-direction fading
+    this.hitLog = [];         // damage-direction log for the HUD threat flashes:
+                              // {dir (world, from player), kind: gun|msl|near, t}
     this.seekConeDot = null;   // IR bite's nose-cone dot
     this.guideConeDot = null;  // current guidance-relevant cone dot (HUD)
     this.hud = null;           // wired by main (transient hint line)
@@ -422,6 +422,14 @@ export class Weapons {
 
   _hint(text) { if (this.hud) this.hud.hint(text); }
 
+  // damage-direction log entry for the HUD threat flashes: world direction
+  // from the player to the source, tagged by kind ('gun' | 'msl' | 'near');
+  // capped so sustained gunfire can't grow it without bound
+  _logHit(player, pos, kind) {
+    this.hitLog.push({ dir: _v3.copy(pos).sub(player.position).normalize().clone(), kind, t: 0 });
+    if (this.hitLog.length > 12) this.hitLog.shift();
+  }
+
   // ---------- IR seeker scan (runs while IR is warming or hot) ----------
   // Bites the NEAREST heat source inside the ±8° sight basket AND the 80°
   // nose envelope — burning flares count exactly like aircraft (fully
@@ -620,7 +628,7 @@ export class Weapons {
           } else {
             player.applyDamage(r.dmg);
             effects.hitSpark(r.pos);
-            this.lastHit = { dir: _v3.copy(r.pos).sub(player.position).normalize().clone(), age: 0 };
+            this._logHit(player, r.pos, 'gun');
           }
           break;
         }
@@ -679,10 +687,9 @@ export class Weapons {
     // --- missiles ---
     this.inboundWarning = false;
     this.radarInbound = false;
-    this.now += dt;
-    if (this.lastHit) {
-      this.lastHit.age += dt;
-      if (this.lastHit.age > 2) this.lastHit = null;
+    for (let i = this.hitLog.length - 1; i >= 0; i--) {
+      this.hitLog[i].t += dt;
+      if (this.hitLog[i].t > 1.5) this.hitLog.splice(i, 1);   // longest flash fade is 1.4 s
     }
     for (let i = this.missiles.length - 1; i >= 0; i--) {
       const ms = this.missiles[i];
@@ -695,6 +702,7 @@ export class Weapons {
         if (d2 < (ms._minD ?? 1e9)) ms._minD = d2;
         else if (!ms._whipped && ms._minD < 70 && d2 > ms._minD + 6) {
           ms._whipped = true;
+          this._logHit(player, ms.pos, 'near');
           this.events.push({ type: 'nearMiss', dir: _v3.copy(ms.pos).sub(player.position).normalize().clone() });
         }
       }
@@ -794,7 +802,7 @@ export class Weapons {
           }
           if (t === player) {
             player.applyDamage(ms.dmg);
-            this.lastHit = { dir: _v3.copy(ms.pos).sub(player.position).normalize().clone(), age: 0 };
+            this._logHit(player, ms.pos, 'msl');
           } else if (ms.fromPlayer) {
             t.flashT = 0.12;
             this.events.push({ type: 'hitTing' });

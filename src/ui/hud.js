@@ -15,6 +15,7 @@ const COMBAT_RADIUS_M = 14000;    // keep in sync with player.js
 const AMBER = '#ffc866';
 const _hv = new THREE.Vector3();
 const _hv2 = new THREE.Vector3();
+const _hv3 = new THREE.Vector3();
 // 120° front cone edge warning: amber past 50° off the nose, flashing
 // red past 56° (lock breaks / launch gate closes at 60°)
 const CONE_WARN = Math.cos(50 * Math.PI / 180);
@@ -197,33 +198,83 @@ export class HUD {
     this.line(x - h, y + h, x - h, y + h - k, col, lw);
   }
 
-  // ---- RWR: radar threat bearing ring, bottom-center ----
-  drawRWR(S) {
-    const threats = S.radarThreats || [];
-    if (!threats.length) return;
-    const cx = this.w / 2, cy = this.h - 96, R = 64;
-    const c = this.ctx;
-    const hot = S.weapons.inboundWarning || S.weapons.radarInbound;
-    const rPulse = hot ? R + Math.sin(S.time * 9) * 5 : R;
-    this.circle(cx, cy, rPulse, hot ? RED : 'rgba(255,90,74,0.55)', hot ? 2.5 : 1.5);
-    this.circle(cx, cy, R * 0.5, 'rgba(255,90,74,0.2)', 1);
-    // own marker
-    c.fillStyle = CYAN; c.shadowColor = CYAN; c.shadowBlur = 6;
-    c.beginPath(); c.moveTo(cx, cy - 6); c.lineTo(cx - 4, cy + 4); c.lineTo(cx + 4, cy + 4); c.closePath(); c.fill();
-    c.shadowBlur = 0;
-    // threats plotted by bearing-from-heading, radius by distance (12 km = edge)
-    const hdg = S.player.headingDeg * Math.PI / 180;
-    for (const t of threats) {
-      let rel = (t.brg - hdg) % (Math.PI * 2);
-      const rr = R * clamp(t.dist / 12000, 0.2, 1);
-      const px = cx + Math.sin(rel) * rr;   // bearing right of nose plots RIGHT
-      const py = cy - Math.cos(rel) * rr * 0.9;
-      c.fillStyle = RED; c.shadowColor = RED; c.shadowBlur = 8;
-      c.beginPath(); c.arc(px, py, 4, 0, Math.PI * 2); c.fill();
-      c.shadowBlur = 0;
-      this.line(px, py, px + Math.sin(rel) * 8, py - Math.cos(rel) * 0 + Math.cos(rel) * 8, RED, 1);
+  // ---- AC-style threat flashes around the VIEW AXIS ----
+  // Centered on the camera axis (screen center — where the view points),
+  // NOT on the aim director circle: the circle floats as the camera chases
+  // it, the disc must not. The ring reads as a plan COMPASS around the view
+  // direction: top = dead ahead, bottom = directly behind, sides = abeam —
+  // elevation is ignored on purpose. Ace Combat language: nothing
+  // persistent — a hit detonates a thick red ARC SEGMENT on the bearing it
+  // came from (two hard blinks, fast fade), and every hostile missile
+  // riding the player gets a big double chevron pointing straight at it,
+  // tracking its bearing until it dies or drops. The bottom-right radar
+  // paints the same missiles as red blinking dots (range + heading
+  // picture); this ring is the instant, peripheral half of the pair.
+  drawHitDisc(dt, S) {
+    const w = S.weapons;
+    const hits = w.hitLog || [];
+    let live = 0;
+    for (const ms of w.missiles) {
+      if (!ms.fromPlayer && !ms._dead && ms.target === S.player) live++;
     }
-    this.text('RWR', cx, cy + R + 14, 11, RED, 'center', 4);
+    if (!hits.length && !live) return;
+    const cx = this.w / 2, cy = this.h / 2, R = 150;
+    const c = this.ctx;
+    // camera basis; bearing is AZIMUTH ONLY around the view axis: 0 = dead
+    // ahead of the view direction, +/-PI = directly behind, elevation is
+    // deliberately ignored — a high stern attack must read BEHIND (bottom),
+    // not "above" (top)
+    _hv.setFromMatrixColumn(S.camera.matrixWorld, 0);            // right
+    _hv2.setFromMatrixColumn(S.camera.matrixWorld, 2).negate();  // forward
+    const bearing = dir => Math.atan2(dir.dot(_hv), dir.dot(_hv2));
+    // hit arcs — one heavy flash per impact, not an instrument readout
+    for (const h of hits) {
+      h.t += dt;
+      const fade = h.kind === 'msl' ? 1.4 : h.kind === 'near' ? 0.9 : 1.1;
+      const k = 1 - h.t / fade;
+      if (k <= 0) continue;
+      const a = bearing(h.dir);
+      const span = h.kind === 'msl' ? 1.5 : h.kind === 'near' ? 0.7 : 0.95;
+      const col = h.kind === 'near' ? AMBER : RED;
+      // impact flash: two hard blinks in the first 0.3 s, then steady decay
+      const flash = h.t < 0.3 ? (Math.floor(h.t / 0.1) % 2 === 0 ? 1 : 0.25) : 1;
+      c.globalAlpha = k * flash;
+      c.strokeStyle = col;
+      c.lineWidth = h.kind === 'msl' ? 8 : 5;
+      c.shadowColor = col; c.shadowBlur = h.kind === 'msl' ? 16 : 10;
+      c.beginPath();
+      c.arc(cx, cy, R, a - Math.PI / 2 - span / 2, a - Math.PI / 2 + span / 2);
+      c.stroke();
+      c.shadowBlur = 0;
+    }
+    c.globalAlpha = 1;
+    // inbound missiles: double chevron pointing AT the missile, riding its
+    // bearing — the AC "it's over there" cue
+    const blink = 0.65 + 0.35 * Math.sin(S.time * 10);
+    for (const ms of w.missiles) {
+      if (ms.fromPlayer || ms._dead || ms.target !== S.player) continue;
+      _hv3.copy(ms.pos).sub(S.player.position).normalize();
+      const a = bearing(_hv3);
+      c.save();
+      c.translate(cx + Math.sin(a) * R, cy - Math.cos(a) * R);
+      c.rotate(a);
+      // local -Y = outward, toward the missile
+      c.globalAlpha = blink;
+      c.strokeStyle = RED; c.shadowColor = RED; c.shadowBlur = 12;
+      c.lineJoin = 'miter';
+      for (let i = 0; i < 2; i++) {
+        const o = i * 14;   // second chevron one step further inward
+        c.lineWidth = 5 - i;
+        c.beginPath();
+        c.moveTo(-14, o + 4);
+        c.lineTo(0, o - 10);
+        c.lineTo(14, o + 4);
+        c.stroke();
+      }
+      c.shadowBlur = 0;
+      c.restore();
+    }
+    c.globalAlpha = 1;
   }
 
   draw(dt, S) {
@@ -259,11 +310,10 @@ export class HUD {
     this.drawHeading(S);
     this.drawEnvelope(S);
     this.drawReticle(S);
+    this.drawHitDisc(dt, S);
     this.drawTargets(dt, S);
-    this.drawHitDir(S);
     this.drawMissileMarkers(S);
     this.drawRadar(S);
-    this.drawRWR(S);
     this.drawStatus(S);
     this.drawAlerts(dt, S);
     this.drawHint(dt);
@@ -677,34 +727,7 @@ export class HUD {
     }
   }
 
-  // ---- hit direction: a red arc on the screen rim pointing at the shooter ----
-  drawHitDir(S) {
-    const hit = S.weapons.lastHit;
-    if (!hit) return;
-    const k = 1 - hit.age / 2;
-    const fp = this.proj(_hv.copy(S.player.position).addScaledVector(hit.dir, 800), S.camera);
-    if (fp.behind) return;
-    const ang = Math.atan2(fp.y - this.h / 2, fp.x - this.w / 2);
-    const rx = this.w / 2 - 90, ry = this.h / 2 - 90;
-    const t = 1 / Math.max(Math.abs(Math.cos(ang)) / rx, Math.abs(Math.sin(ang)) / ry);
-    const cx = this.w / 2 + Math.cos(ang) * t, cy = this.h / 2 + Math.sin(ang) * t;
-    const c = this.ctx;
-    c.globalAlpha = Math.min(1, k);
-    c.strokeStyle = RED; c.lineWidth = 5;
-    c.shadowColor = RED; c.shadowBlur = 12;
-    c.beginPath();
-    c.arc(cx, cy, 34, ang - Math.PI / 2 - 0.7, ang - Math.PI / 2 + 0.7);
-    c.stroke();
-    c.shadowBlur = 0;
-    // inward arrowhead
-    c.save();
-    c.translate(cx - Math.cos(ang) * 42, cy - Math.sin(ang) * 42);
-    c.rotate(ang);
-    c.fillStyle = RED;
-    c.beginPath(); c.moveTo(10, 0); c.lineTo(-5, -6); c.lineTo(-5, 6); c.closePath(); c.fill();
-    c.restore();
-    c.globalAlpha = 1;
-  }
+  // ---- hit direction: superseded by drawHitDisc + radar red dots ----
 
   // ---- DESTROYED sweep: a red bar with white letters slides across the kill ----
   drawBanner(dt) {
@@ -757,7 +780,10 @@ export class HUD {
   }
 
   drawRadar(S) {
-    const cx = this.w - 130, cy = this.h - 130, R = 88, range = 5200;
+    // range is switchable 5/10/20 km (M cycles, default 10) — everything
+    // below scales with it, and riding-you missiles pin to the rim beyond it
+    const range = S.radarRange || 10000;
+    const cx = this.w - 130, cy = this.h - 130, R = 88;
     const c = this.ctx;
     c.save();
     // dial
@@ -773,24 +799,45 @@ export class HUD {
     // player heading-up rotation
     const hdg = S.player.headingDeg * Math.PI / 180;
     const cosH = Math.cos(-hdg), sinH = Math.sin(-hdg);
-    const blip = (wx, wz, color, r) => {
+    const blip = (wx, wz, color, r, clampRim = false) => {
       let dx = wx - S.player.position.x, dz = wz - S.player.position.z;
       const rx = dx * cosH - dz * sinH, rz = dx * sinH + dz * cosH;
-      const px = cx + (rx / range) * R, py = cy + (rz / range) * R;
-      if (Math.hypot(px - cx, py - cy) > R - 4) return;
+      let px = cx + (rx / range) * R, py = cy + (rz / range) * R;
+      const d = Math.hypot(px - cx, py - cy);
+      if (d > R - 4) {
+        if (!clampRim) return null;
+        const k = (R - 4) / d;   // beyond range: pin to the rim, keep the bearing
+        px = cx + (px - cx) * k; py = cy + (py - cy) * k;
+      }
       c.fillStyle = color; c.shadowColor = color; c.shadowBlur = 6;
       c.beginPath(); c.arc(px, py, r, 0, Math.PI * 2); c.fill();
       c.shadowBlur = 0;
+      return [px, py];
     };
     for (const e of S.enemies) if (!e.dying) blip(e.position.x, e.position.z, RED, 3.2);
+    const blinkOn = Math.floor(S.time * 5) % 2 === 0;
     for (const ms of S.weapons.missiles) {
-      if (!ms.fromPlayer) blip(ms.pos.x, ms.pos.z, AMBER, 2);
+      if (ms.fromPlayer) continue;
+      // riding the player: bigger RED blinking dot, pinned to the rim when
+      // beyond range — the amber dots are someone else's problem
+      const riding = !ms._dead && ms.target === S.player;
+      // a radar shot still HARD ON US (seeker track intact — not notched,
+      // chaffed or terrain-masked) draws a flashing thin yellow spoke to
+      // the center, in sync with the dot's blink
+      const locked = riding && ms.kind === 'radar' && !(ms.blind > 0);
+      let pos = null;
+      if (riding) {
+        if (blinkOn) pos = blip(ms.pos.x, ms.pos.z, RED, 2.8, true);
+      } else {
+        pos = blip(ms.pos.x, ms.pos.z, AMBER, 2);
+      }
+      if (locked && blinkOn && pos) this.line(cx, cy, pos[0], pos[1], AMBER, 1);
     }
     // own marker (points up)
     c.fillStyle = CYAN; c.shadowColor = CYAN; c.shadowBlur = 8;
     c.beginPath(); c.moveTo(cx, cy - 7); c.lineTo(cx - 5, cy + 5); c.lineTo(cx + 5, cy + 5); c.closePath(); c.fill();
     c.shadowBlur = 0;
-    this.text('RNG 5km', cx, cy + R + 16, 11, CYAN_DIM, 'center', 4);
+    this.text(`RNG ${range / 1000}km`, cx, cy + R + 16, 11, CYAN_DIM, 'center', 4);
     c.restore();
   }
 

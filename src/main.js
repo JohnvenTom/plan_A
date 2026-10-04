@@ -87,6 +87,7 @@ const G = {
   pipGlitch: 0,             // missile-cam signal-fault burst
   pipZoom: 1,               // missile-cam impact zoom
   pipMsl: null,             // missile the PIP rides
+  radarRange: 10000,        // bottom-right radar range: 5/10/20 km (M cycles)
   exposure: 1,              // smoothed auto-exposure
   introT: 0, introFrom: null,
   _mach: false,
@@ -241,12 +242,18 @@ function update(dt) {
     if (input.pressed('flares')) weapons.deployFlares(player, 3);
     if (input.pressed('cycleMissile')) {
       weapons.mslKind = weapons.mslKind === 'ir' ? 'radar' : 'ir';
-      weapons.manualTarget = null;
-      weapons.cancelWarm();   // warm state belongs to the selected kind
+      // the LOCK survives the kind switch — only the warm state is per-kind;
+      // an IR shot may ride the same radar designation (and re-warm applies)
+      weapons.cancelWarm();
       hud.announce(weapons.mslKind === 'radar' ? '雷达弹' : '红外弹',
         weapons.mslKind === 'radar' ? 'RADAR — 20km 即时锁定 · 预热后发射 · 39/箔条可避' : 'IR — 热源导引 · 预热后发射 · 热诱弹可避', 1.2, 'info');
     }
     if (input.pressed('cycleTarget')) weapons.headLockAttempt(player, enemies.enemies);
+    if (input.pressed('radarRange')) {
+      const steps = [5000, 10000, 20000];
+      G.radarRange = steps[(steps.indexOf(G.radarRange ?? 10000) + 1) % steps.length];
+      hud.announce('雷达量程', `RNG ${G.radarRange / 1000} km`, 1.2, 'info');
+    }
     if (input.pressed('debugWeather')) {
       G._wxIdx = ((G._wxIdx ?? -1) + 1) % ['晴', '多云', '阴', '毛毛雨', '雨', '雷暴', '浓雾', '狂风'].length;
       const names = ['晴', '多云', '阴', '毛毛雨', '雨', '雷暴', '浓雾', '狂风'];
@@ -597,6 +604,7 @@ function renderHUD(pipRect) {
     kills: G.kills, score: G.score, wave: enemies.wave,
     time: G.time,
     clock, weatherName: weather.name,
+    radarRange: G.radarRange,
     rain: weather.cur.rain,
     inCloud: weather.cur.gray > 0.28 && Math.abs(player.position.y - 2750) < 380,
     pipRect, pipOn: !!pipRect,
@@ -613,12 +621,6 @@ function renderHUD(pipRect) {
     cineBars: G.cineBars ?? 0,
     enemyLock: enemies.enemies.reduce((m, e) => Math.max(m, e.lockT || 0), 0),
     enemyWarm: enemies.enemies.reduce((m, e) => Math.max(m, e.warmT || 0), 0),
-    radarThreats: weapons.missiles
-      .filter(m => !m.fromPlayer && m.kind === 'radar' && m.blind < 5)
-      .map(m => {
-        const dx = m.pos.x - player.position.x, dz = m.pos.z - player.position.z;
-        return { brg: Math.atan2(dx, -dz), dist: Math.hypot(dx, dz) };
-      }),
   });
 }
 
