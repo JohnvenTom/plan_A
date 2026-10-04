@@ -33,6 +33,11 @@ const EV_COLOR = {
 };
 const RANK_COLOR = { S: '#ffd24d', A: '#53e3ff', B: '#8dffb0', C: '#c9d6e8', D: '#8fa5bd' };
 
+// playback speed tape: 0.5x detents across 0.5–16x; labeled ticks sit on the
+// powers of two so the readout carries the exact half-step value
+const SPD_MIN = 0.5, SPD_MAX = 16, SPD_STEP = 0.5;
+const spdSnap = v => Math.round(Math.max(SPD_MIN, Math.min(SPD_MAX, v)) / SPD_STEP) * SPD_STEP;
+
 // ---------- tiny canvas glyphs (cached per type) ----------
 const _texCache = new Map();
 function glyphTexture(type) {
@@ -523,13 +528,54 @@ export class Debrief {
     this._syncPlayBtn();
   }
   setSpeed(v) {
-    this.play.speed = v;
+    this.play.speed = spdSnap(v);
     this._cancelIntro();
-    if (this._dom) {
-      for (const b of this._dom.speeds.querySelectorAll('button')) {
-        b.classList.toggle('on', parseFloat(b.dataset.v) === v);
-      }
+    if (this._dom) this._syncSpeedTape();
+  }
+
+  _syncSpeedTape() {
+    const d = this._dom;
+    const f = (this.play.speed - SPD_MIN) / (SPD_MAX - SPD_MIN);
+    d.spNeedle.style.left = (f * 100) + '%';
+    d.spFill.style.width = (f * 100) + '%';
+    d.spVal.textContent = this.play.speed.toFixed(1) + '×';
+  }
+
+  _buildSpeedTape() {
+    const d = this._dom;
+    // one tick per integer multiplier, tall + labeled on powers of two
+    let html = '';
+    for (let s = 1; s <= SPD_MAX; s++) {
+      const maj = (s & (s - 1)) === 0;   // 1,2,4,8,16
+      const label = maj ? `<span>${s}</span>` : '';
+      html += `<i class="${maj ? 'maj' : ''}" style="left:${(s - SPD_MIN) / (SPD_MAX - SPD_MIN) * 100}%">${label}</i>`;
     }
+    // the 0.5x floor gets its own labeled tick
+    html += `<i class="maj" style="left:0%"><span>½</span></i>`;
+    d.spTicks.innerHTML = html;
+
+    const pick = ev => {
+      const r = d.spTape.getBoundingClientRect();
+      const f = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width));
+      this.setSpeed(SPD_MIN + f * (SPD_MAX - SPD_MIN));
+    };
+    d.spTape.addEventListener('pointerdown', ev => {
+      pick(ev);   // pick first: setPointerCapture can throw on synthetic events
+      try { d.spTape.setPointerCapture(ev.pointerId); } catch (_) { /* synthetic probe */ }
+      const mv = e => pick(e);
+      const up = () => {
+        d.spTape.removeEventListener('pointermove', mv);
+        d.spTape.removeEventListener('pointerup', up);
+      };
+      d.spTape.addEventListener('pointermove', mv);
+      d.spTape.addEventListener('pointerup', up);
+    });
+    d.spTape.addEventListener('wheel', ev => {
+      ev.preventDefault();
+      ev.stopPropagation();   // keep the game's global wheel (throttle) out of it
+      this.setSpeed(this.play.speed - Math.sign(ev.deltaY) * SPD_STEP);
+    }, { passive: false });
+    d.spBox.addEventListener('dblclick', () => this.setSpeed(1));
   }
   toggleFollow() {
     this.cam.mode = this.cam.mode === 'follow' ? 'orbit' : 'follow';
@@ -548,7 +594,10 @@ export class Debrief {
       title: $('db-title'), sub: $('db-sub'),
       rank: $('db-rank'), bigScore: $('db-score'),
       stats: $('db-stats'), kills: $('db-kills'),
-      play: $('db-play'), speeds: $('db-speeds'),
+      play: $('db-play'),
+      spBox: $('db-speed'),
+      spTape: $('db-speed-tape'), spTicks: $('db-speed-ticks'),
+      spFill: $('db-speed-fill'), spNeedle: $('db-speed-needle'), spVal: $('db-speed-val'),
       cur: $('db-cur'), total: $('db-total'),
       track: $('db-track'), ticks: $('db-ticks'), dots: $('db-dots'), head: $('db-head'),
       tip: $('db-tip'), panel: $('db-left'), bottom: $('db-bottom'),
@@ -556,9 +605,7 @@ export class Debrief {
     if (!d.root) throw new Error('debrief DOM missing (index.html)');
     this._dom = d;
     d.play.addEventListener('click', () => { this._cancelIntro(); this.setPlaying(!this.play.playing); });
-    for (const b of d.speeds.querySelectorAll('button')) {
-      b.addEventListener('click', () => { this.setSpeed(parseFloat(b.dataset.v)); });
-    }
+    this._buildSpeedTape();
     // timeline scrub: press anywhere on the bar, drag through the mission
     const scrubFrom = ev => {
       const r = d.track.getBoundingClientRect();

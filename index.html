@@ -192,15 +192,49 @@
       background: rgba(6, 12, 26, .82); border: 1px solid rgba(120, 180, 255, .25);
       border-radius: 8px; padding: 10px 16px; backdrop-filter: blur(6px);
     }
-    #db-play, #db-speeds button {
+    #db-play {
       font: 13px Consolas, monospace; color: #cfe3ff; cursor: pointer;
       background: rgba(120, 180, 255, .08); border: 1px solid rgba(143, 224, 255, .3);
-      border-radius: 4px; padding: 4px 10px;
+      border-radius: 4px; padding: 4px 10px; width: 34px;
     }
-    #db-play { width: 34px; }
-    #db-play:hover, #db-speeds button:hover { color: #fff; border-color: #ffe9c4; }
-    #db-speeds { display: flex; gap: 6px; }
-    #db-speeds button.on { color: #0a0d14; background: #8fe0ff; border-color: #8fe0ff; font-weight: 700; }
+    #db-play:hover { color: #fff; border-color: #ffe9c4; }
+    /* speed tape: HUD-tape-style multiplier selector, 0.5x detents over 0.5-16x */
+    #db-speed { display: flex; align-items: center; gap: 8px; cursor: ew-resize; user-select: none; }
+    #db-speed-tape {
+      position: relative; width: 168px; height: 20px;
+      background: rgba(8, 16, 34, .6); border: 1px solid rgba(120, 180, 255, .22);
+      border-radius: 4px; overflow: hidden;
+    }
+    #db-speed-fill {
+      position: absolute; left: 0; top: 0; bottom: 0; width: 0;
+      background: linear-gradient(90deg, rgba(83, 227, 255, .04), rgba(83, 227, 255, .22));
+      box-shadow: 0 0 10px rgba(83, 227, 255, .25) inset;
+      pointer-events: none;
+    }
+    #db-speed-ticks { position: absolute; inset: 0; pointer-events: none; }
+    #db-speed-ticks i {
+      position: absolute; bottom: 0; width: 1px; height: 5px;
+      background: rgba(143, 224, 255, .35); transform: translateX(-.5px);
+    }
+    #db-speed-ticks i.maj { height: 9px; background: rgba(143, 224, 255, .7); }
+    #db-speed-ticks i span {
+      position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+      font: 9px Consolas, monospace; color: #8fa5bd;
+    }
+    #db-speed-ticks i.maj span { color: #9fd0ff; }
+    #db-speed:hover #db-speed-ticks i { background: rgba(143, 224, 255, .55); }
+    #db-speed:hover #db-speed-ticks i.maj { background: rgba(143, 224, 255, .95); }
+    #db-speed-needle {
+      position: absolute; top: 1px; bottom: 1px; width: 2px; margin-left: -1px;
+      background: #ffe9c4; box-shadow: 0 0 8px rgba(255, 233, 196, .85); pointer-events: none;
+      transition: left .12s ease;
+    }
+    #db-speed-val {
+      font: bold 13px Consolas, monospace; color: #ffe9c4; min-width: 46px;
+      text-align: center; border: 1px solid rgba(255, 200, 102, .35); border-radius: 4px;
+      padding: 3px 4px; background: rgba(255, 200, 102, .06);
+      text-shadow: 0 0 10px rgba(255, 210, 77, .4);
+    }
     #db-time { font: 12px Consolas, monospace; color: #8fe0ff; white-space: nowrap; }
     #db-track { position: relative; flex: 1; height: 26px; cursor: pointer; }
     #db-track::before {
@@ -329,9 +363,13 @@
     <div id="db-bottom">
       <div class="db-bar">
         <button id="db-play">▶</button>
-        <div id="db-speeds">
-          <button data-v="0.5">0.5x</button><button data-v="1">1x</button>
-          <button data-v="2">2x</button><button data-v="4">4x</button>
+        <div id="db-speed" title="拖动/点击/滚轮调节倍速 · 双击回到 1×">
+          <div id="db-speed-tape">
+            <div id="db-speed-ticks"></div>
+            <div id="db-speed-fill"></div>
+            <div id="db-speed-needle"></div>
+          </div>
+          <div id="db-speed-val">1.0×</div>
         </div>
         <div id="db-time"><span id="db-cur">00:00</span> / <span id="db-total">00:00</span></div>
         <div id="db-track"><div id="db-ticks"></div><div id="db-dots"></div><div id="db-head"></div></div>
