@@ -72,6 +72,19 @@ export class Player {
     this._camDirInit = false;
   }
 
+  // spawn with a custom pose: re-syncs the world-anchored aim (and the
+  // camera-chase seed) to the NEW heading. Calling body.setState directly
+  // leaves aimDir pointing wherever reset() parked it — the camera then
+  // anchors off-heading and the instructor starts banking toward the stale
+  // aim on frame one (the training-range spawn-direction bug).
+  spawnAt(pos, heading, speed) {
+    this.body.setState(pos, heading, speed);
+    this.forward(this.aimDir);
+    this._camDirInit = false;   // camDir re-seeds from the fresh aim
+    this.lookYaw = 0;
+    this.lookPitch = 0;
+  }
+
   // hot-swap the visual (procedural jet → F-14 GLB once it finishes loading);
   // keeps the current transform and visibility so it is safe mid-flight
   swapModel(m) {

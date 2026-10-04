@@ -256,7 +256,7 @@ function startTraining(mode = 'multipath') {
   const sp = cfg.spawn || {};
   const px = range.x - 4200, pz = range.z + 2600;
   const h = Math.atan2(-(range.x - px), -(range.z - pz));
-  player.body.setState(new THREE.Vector3(px, sp.alt ?? 750, pz), h, sp.speed ?? 280);
+  player.spawnAt(new THREE.Vector3(px, sp.alt ?? 750, pz), h, sp.speed ?? 280);
   (cfg.drones || []).forEach((d, i) => enemies.spawnTrainingDrone({ ...d, center: range, phase: i * 2.1 }));
   if (cfg.fighters) for (const f of cfg.fighters) enemies.spawnTrainingFighter(player, f);
   hud.msgQueue.length = 0;
