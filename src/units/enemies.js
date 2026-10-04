@@ -243,6 +243,17 @@ class Enemy {
     b.burner = 0;
     b.update(dt);
 
+    // live plane flew into the dirt (avoidance can't always save it): ride the
+    // existing wreck flow for the fall + impact fx, but no kill credit — the
+    // ground shot it down, not the player
+    const groundHit = Math.max(terrainHeightAt(b.pos.x, b.pos.z), SEA_LEVEL);
+    if (b.pos.y < groundHit + GROUND_CLEAR_AGL) {
+      this.killCredited = true;
+      this.dying = true;
+      this.deadTime = 0;
+      return this.syncModel(dt);
+    }
+
     // --- weapons ---
     this.fireCooldown -= dt;
     this.missileCooldown -= dt;
