@@ -693,11 +693,12 @@ function renderFrame(dt) {
       if (_pv2.distanceToSquared(mslCam.position) < 1) _pv2.copy(mslCam.position).addScaledVector(_pv, 100);
       // seeker-cam target framing: hold the target at a constant angular
       // share of the frame (~1/8 of vertical, ref 160 m) by narrowing the
-      // FOV with range — clamped 3°..58° and smoothed so the zoom reads as
-      // a servo, not a jitter. Beyond ~6 km it pins at 3°, where a fighter
-      // is still ~10 px tall in the 480×270 picture
+      // FOV with range—clamped 0.8°..58° and smoothed so the zoom reads as
+      // a servo, not a jitter. The floor only bites at ~23 km — past the
+      // 20 km lock envelope — so a locked fighter stays ~1/8 frame tall
+      // (≈34 px in the 480×270 picture) at ANY lockable range
       const tDist = _pv2.distanceTo(mslCam.position);
-      const fovT = clamp(2 * Math.atan(160 / Math.max(tDist, 30)) * 180 / Math.PI, 3, 58);
+      const fovT = clamp(2 * Math.atan(160 / Math.max(tDist, 30)) * 180 / Math.PI, 0.8, 58);
       G.pipFov += (fovT - G.pipFov) * Math.min(1, dt * 3);
       mslCam.fov = G.pipFov;
       mslCam.updateProjectionMatrix();
@@ -830,7 +831,7 @@ function renderFrame(dt) {
   postfx.beginScene();
   renderer.render(scene, camera);
   postfx.setPipSource(pipSrc);
-  // PIP box: 24% of screen width, TRUE 16:9 by pixels (not screen
+  // PIP box: 18% of screen width, TRUE 16:9 by pixels (not screen
   // fractions) so the seeker image is never stretched; ultra-thin frame +
   // hard viewport-safety: the box ALWAYS lands fully inside the browser
   // window at any aspect ratio.
@@ -839,7 +840,7 @@ function renderFrame(dt) {
   // to sit right at 0.30h and covered the altitude tape's upper third;
   // the second clamp keeps the box's bottom edge above the tape on short
   // windows, the floor keeps it on-screen at all
-  const PIP_W = Math.min(0.155, (innerWidth - 40) / innerWidth);
+  const PIP_W = Math.min(0.18, (innerWidth - 40) / innerWidth);
   const PIP_H = Math.min((PIP_W * innerWidth * 9 / 16) / innerHeight, 0.2);
   const PIP_CX = PIP_W / 2 + 0.025;
   const PIP_CY = Math.max(PIP_H / 2 + 0.02,
