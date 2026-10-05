@@ -212,7 +212,13 @@ export class Weapons {
   setMode(m) { this.mode = m === 'real' ? 'real' : 'arcade'; }
 
   // ---------- guns ----------
-  fireGun(origin, dir, speed, fromPlayer, dmg, spread) {
+  // Rounds inherit the FULL carrier velocity VECTOR plus muzzle speed along
+  // the launch axis — the honest gun-camera model. Firing at nonzero AOA or
+  // sideslip (or mid-rudder lineup) throws rounds off the boresight by the
+  // true relative-wind geometry: at 15° AOA the un-inherited lateral ~60 m/s
+  // bends the burst ~2.7° off the nose line. Aligned flight is unchanged
+  // (|vel + muzzle| = V + muzzle, the old scalar sum).
+  fireGun(origin, dir, speed, fromPlayer, dmg, spread, inherit) {
     const mesh = this.tracerPool.find(m => !m.visible);
     if (!mesh) return;
     mesh.material = fromPlayer ? this.tracerMatP : this.tracerMatE;
@@ -224,10 +230,12 @@ export class Weapons {
       d.z += (Math.random() - 0.5) * spread;
       d.normalize();
     }
+    const v = d.multiplyScalar(speed);
+    if (inherit) v.add(inherit);
     this.rounds.push({
       pos: origin.clone(),
       prev: origin.clone(),
-      vel: d.multiplyScalar(speed),
+      vel: v,
       life: 1.4,
       fromPlayer, dmg,
       mesh,
@@ -248,7 +256,7 @@ export class Weapons {
     this.gunHeat = Math.min(1, this.gunHeat + 0.028);
     const fwd = player.forward(new THREE.Vector3());
     const origin = player.position.clone().addScaledVector(fwd, 11).add(new THREE.Vector3(0, -0.4, 0));
-    this.fireGun(origin, fwd, 1080 + player.speed, true, 5, 0.006);
+    this.fireGun(origin, fwd, 1080, true, 5, 0.006, player.vel);
     player.camShake = Math.min(player.camShake + 0.06, 0.35);
   }
 
@@ -259,7 +267,7 @@ export class Weapons {
     const aim = player.position.clone()
       .addScaledVector(player.vel, player.speed > 0 ? 0.4 : 0)
       .sub(origin).normalize();
-    this.fireGun(origin, aim, 950 + enemy.speed, false, 3, 0.016);
+    this.fireGun(origin, aim, 950, false, 3, 0.016, enemy.vel);
   }
 
   // ---- countermeasures: drop n flares from owner, roll decoy per flare ----

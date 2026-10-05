@@ -135,29 +135,30 @@ export class FlightBody {
     // degree of pointing into a multi-second glide.
     const levelGate = clamp(1 - Math.abs(offH) / 0.02, 0, 1);
 
+    // rudder-first fine band: a fraction of a degree of lineup is a RUDDER
+    // job — a boot-full pinches the nose across with the wings stayed level,
+    // exactly like a real pilot's lineup correction. Bank-and-pull only
+    // earns its efficiency past ~1.4° of offset. rW is the bank law's share:
+    // 0 in the rudder band, 1 beyond, smooth in between.
+    const rW = smoothstep(0.006, 0.024, Math.abs(offH));
+
     let pitch, roll, yaw = 0;
     if (_aim.z > 0.25 && mag < 0.35) {
       // aim nearly behind the tail: roll hard and pull through the vertical
       roll = 1; pitch = 0.55;
     } else if (mag < 0.2 && offV < -0.02) {
       // aim just below the nose: pushing beats a 180 deg roll. Lateral
-      // authority matches the main law's near-center gains (the old *1.2
+      // lineup shares the rudder-first band with the main law (the old *1.2
       // with zero rudder left this branch a lateral dead zone) — the aim
       // DOES park below the nose whenever the player dips the sight.
-      roll = clamp(-offH * 5 - bankErr * 1.5 * levelGate, -0.7, 0.7);
+      roll = clamp(-offH * 5 * rW - bankErr * 1.5 * levelGate, -0.7, 0.7);
       pitch = clamp(offV * 1.8, -0.5, 0);
-      yaw = clamp(-offH * 2.0 - this.beta * 2.0, -0.3, 0.3);
+      yaw = clamp(-offH * (2.0 + 16.0 * (1 - rW)) - this.beta * (2.0 - 1.5 * (1 - rW)), -0.3, 0.3);
     } else {
-      // unified continuous law: near center the commanded bank is PROPORTIONAL
-      // to the offset (gentle bank + rudder cleanup, wings-level damping),
-      // blending smoothly into the full bank-first pull-through geometry by
-      // ~22° off. One formula — no dead zone, no snap at the old 3.4° gate.
-      // Fine-aim contract: a visible nudge must buy a REAL bank — the pure
-      // proportional term alone settles at a bank only ~3x the error, a
-      // fraction of a degree for mouse-scale offsets, which made the last
-      // degree of pointing crawl at ~0.03°/s. The floor guarantees every
-      // nudge past ~0.06° commands at least ~9° of bank (a ~0.35°/s closure
-      // at 240 m/s) while tapering to zero under pixel jitter.
+      // unified continuous law: near center the rudder points the nose
+      // (wings held level), blending into the proportional-bank law by
+      // ~1.4° off, then smoothly into the full bank-first pull-through
+      // geometry by ~22° off. One formula — no dead zone, no snap.
       let phi;
       if (offV < 0 && Math.abs(offH) < 0.04) {
         phi = this._phiSign * Math.PI;
@@ -172,20 +173,24 @@ export class FlightBody {
                                                   // early enough to bleed turn
                                                   // rate before arrival (no
                                                   // overshoot-bounce)
-      let phiNear = clamp(offH * 14, -1.2, 1.2);
-      const floor = 0.16 * smoothstep(0.0009, 0.0045, Math.abs(offH));
-      if (floor > Math.abs(phiNear)) phiNear = Math.sign(offH) * floor;
+      let phiNear = clamp(offH * 14, -1.2, 1.2) * rW;
       phi = phiNear * (1 - t) + phi * t;
       // near center the roll axis TRACKS the commanded bank (damps bank error
       // toward sin(phiNear), not toward zero): leveling toward wings-flat here
-      // fought every fine-aim correction along the way, collapsing the
-      // commanded bank to a fraction of a degree. As the error closes, phiNear
-      // itself goes to zero — wing leveling happens for free, without ever
-      // opposing the turn
+      // fought every fine-aim correction along the way. In the rudder band
+      // phiNear IS zero, so this is the wings-leveler that keeps the fine
+      // pointing a pure yaw affair; as the error closes, phiNear goes to zero
+      // and wing leveling happens for free, never opposing the turn.
       roll = clamp(-phi * 1.4 - (bankErr + Math.sin(phiNear)) * 2.5 * (1 - t) * levelGate, -1, 1);
       pitch = clamp(offV * 2.5, -0.3, 0.3) * (1 - t)
             + clamp(Math.max(0, offV) * 1.7, 0.08, 1) * t;
-      yaw = clamp((-offH * 2.6 - this.beta * 2.0) * (1 - 0.75 * t), -0.3, 0.3);
+      // fine-band rudder: pointing gain 18 (a 0.5° step closes in ~0.3 s at
+      // ~0.6° peak sideslip). The β term is DAMPING here, not coordination —
+      // at the bank law's 2.0 it over-damped and backed the rudder off,
+      // parking the nose short of the aim (β/9 out) to wait for the path;
+      // in the fine band holding a little β while the side force walks the
+      // path over is exactly the point
+      yaw = clamp((-offH * (2.6 + 15.4 * (1 - rW)) - this.beta * (2.0 - 1.5 * (1 - rW))) * (1 - 0.75 * t), -0.3, 0.3);
     }
 
     // Pointing contract: the NOSE (= gun line) rides ON the aim; the flight
