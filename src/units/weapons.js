@@ -10,6 +10,10 @@
 //    IR seekers add the blind-state machine: decoyed/cone-broken shots coast on
 //    an extrapolated ghost of the target, then re-open on pure heat sources
 //    (aircraft AND burning flares) every 0.5 s until they bite or die.
+//    Radar rounds broken by a pure beam/mask (no chaff) go ACTIVE: a short
+//    blind, then the same 0.5 s re-scan loop on a wider/longer cone — only
+//    a chaff-sealed break is permanent (the IR/RADAR counterplay differs:
+//    hold the beam or escape the cone vs. make the break stick).
 import * as THREE from 'three';
 import { clamp } from '../core/utils.js';
 import { AIRCRAFT_HIT_R, MISSILE_FUSE_R } from '../core/utils.js';
@@ -380,17 +384,20 @@ export class Weapons {
     return _v.divideScalar(d).dot(player.forward(_v2)) > ENV_DOT;
   }
 
-  // after a decoy blind period, the missile may re-acquire ANY aircraft
+  // after a decoy blind period, the missile may re-acquire ANY aircraft.
+  // IR re-opens narrow and near; a radar round gone ACTIVE re-scans a
+  // wider, longer cone — but never re-picks its launcher or the shooter
   reacquire(ms, player, enemies) {
     _v.set(0, 0, -1).applyQuaternion(ms.quat);
-    let best = null, bestDot = 0.87;   // ~29 deg seeker cone
+    const radar = ms.kind === 'radar';
+    let best = null, bestDot = radar ? Math.SQRT1_2 : 0.87;   // ±45° / ±29° cone
     const consider = (t) => {
       if (!liveTarget(t)) return;
       if (t === ms.owner) return;                 // seeker ignores the launcher
       if (ms.fromPlayer && t === player) return;   // no self-hits
       _v2.copy(t.position).sub(ms.pos);
       const d = _v2.length();
-      if (d > 2600 || d < 60) return;
+      if (d > (radar ? 9000 : 2600) || d < 60) return;
       const dot = _v2.divideScalar(d).dot(_v);
       if (dot > bestDot) { bestDot = dot; best = t; }
     };
@@ -898,11 +905,25 @@ export class Weapons {
       }
       if (ms.blind > 0) {
         ms.blind -= dt;
-        // IR seekers re-acquire after the blind period; a radar missile that
-        // got notched or terrain-masked stays dumb permanently (blind = 1e9)
+        // IR re-acquires after its blind; a radar round broken by pure
+        // beam/mask (no chaff) re-opens after a SHORT blind and goes ACTIVE
+        // — chaff-broken rounds never reach the radar branch (blind = 1e9
+        // counts down forever)
         if (ms.blind <= 0 && ms.kind === 'ir') {
           if (ms.real) { ms.target = this.scanHeat(ms, player, enemies); ms.rescanT = RESCAN_T; }
           else this.reacquire(ms, player, enemies);
+        } else if (ms.blind <= 0 && ms.kind === 'radar') {
+          ms.rescanR = true; ms.rescanT = 0;   // go ACTIVE: first scan next tick
+        }
+      } else if (ms.rescanR && ms.kind === 'radar') {
+        // ACTIVE re-scan: a notched-but-unchaffed radar round keeps hunting
+        // — every RESCAN_T it grabs the best aircraft in its wider, longer
+        // cone until a chaff-sealed break, the ttl or the ground ends it
+        ms.rescanT -= dt;
+        if (ms.rescanT <= 0) {
+          ms.rescanT = RESCAN_T;
+          this.reacquire(ms, player, enemies);
+          if (ms.target) ms.rescanR = false;
         }
       } else if (ms.real && ms.kind === 'ir' && !liveTarget(ms.target)) {
         // SEARCHING: ghost-coasting with the seeker re-opening on pure heat
@@ -967,7 +988,12 @@ export class Weapons {
           : Math.max(0, (ms.mpT || 0) - dt * 1.5);   // pop-up: seeker recovers
         if (ms.notchT > needTime || ms.mpT > 1.0) {
           ms.target = null;
-          ms.blind = 1e9;    // permanent lock loss
+          // chaff SEALS the break — the cloud keeps the seeker confused for
+          // good. A pure beam/mask/multipath break only blinds the active
+          // seeker briefly: it re-opens and keeps re-scanning, so the beam
+          // must be held or the geometry escaped (不一直三九就会被复锁)
+          ms.blind = chaffNear ? 1e9 : 2.5;
+          ms.notchT = 0; ms.mpT = 0;
         }
       }
       ms.prev.copy(ms.pos);
