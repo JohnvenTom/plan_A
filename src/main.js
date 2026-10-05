@@ -692,13 +692,14 @@ function renderFrame(dt) {
       _pv2.copy(pvT.position ?? pvT.pos);
       if (_pv2.distanceToSquared(mslCam.position) < 1) _pv2.copy(mslCam.position).addScaledVector(_pv, 100);
       // seeker-cam target framing: hold the target at a constant angular
-      // share of the frame (~1/8 of vertical, ref 160 m) by narrowing the
-      // FOV with range—clamped 0.8°..58° and smoothed so the zoom reads as
-      // a servo, not a jitter. The floor only bites at ~23 km — past the
-      // 20 km lock envelope — so a locked fighter stays ~1/8 frame tall
-      // (≈34 px in the 480×270 picture) at ANY lockable range
+      // share of the frame (1/2 of vertical, ref 20 m: the fraction is
+      // S/(2·ref), so a 20 m fighter fills half the height) by narrowing
+      // the FOV with range—clamped 0.11°..58° and smoothed so the zoom
+      // reads as a servo, not a jitter. The floor only bites at ~21 km —
+      // past the 20 km lock envelope — so a locked fighter stays half the
+      // frame tall at ANY lockable range
       const tDist = _pv2.distanceTo(mslCam.position);
-      const fovT = clamp(2 * Math.atan(160 / Math.max(tDist, 30)) * 180 / Math.PI, 0.8, 58);
+      const fovT = clamp(2 * Math.atan(20 / Math.max(tDist, 30)) * 180 / Math.PI, 0.11, 58);
       G.pipFov += (fovT - G.pipFov) * Math.min(1, dt * 3);
       mslCam.fov = G.pipFov;
       mslCam.updateProjectionMatrix();
