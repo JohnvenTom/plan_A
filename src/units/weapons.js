@@ -438,8 +438,9 @@ export class Weapons {
       this._lockOutT = 0;
       if (this.mslKind === 'radar') this.cancelWarm();
     } else {
-      // grace: REMAINING seconds outside the envelope (0 while inside)
-      this.lockState = { target: t, locked: true, grace: CONE_GRACE - this._lockOutT };
+      // grace: REMAINING seconds outside the envelope (0 while inside — the
+      // HUD countdown and the launch gate both read this)
+      this.lockState = { target: t, locked: true, grace: this._lockOutT > 0 ? CONE_GRACE - this._lockOutT : 0 };
     }
   }
 
@@ -491,12 +492,19 @@ export class Weapons {
   }
 
   // gate for a HOT seeker: radar needs the lock; IR needs the seeker bite OR
-  // the radar designation (radar-guided IR shot)
+  // the radar designation (radar-guided IR shot). The cone is the LAUNCH
+  // gate: a lock riding its grace window still steers the HUD, but the rail
+  // stays closed until the target is back inside the envelope
   _fireGate() {
     const k = this.mslKind;
     if (this.ammo[k] <= 0) { this._hint('导弹耗尽'); return false; }
-    if (k === 'radar' && !this.lockState.locked) { this._hint('未锁定'); return false; }
-    if (k === 'ir' && !this.irSeek && !this.lockState.locked) { this._hint('无热源 · 未锁定'); return false; }
+    const lockOK = this.lockState.locked && !(this.lockState.grace > 0);
+    if (k === 'radar' && !lockOK) {
+      this._hint(this.lockState.locked ? '目标出锥 · 禁射' : '未锁定'); return false;
+    }
+    if (k === 'ir' && !this.irSeek && !lockOK) {
+      this._hint(this.lockState.locked ? '目标出锥 · 禁射' : '无热源 · 未锁定'); return false;
+    }
     return true;
   }
 
