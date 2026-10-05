@@ -769,14 +769,15 @@ function renderFrame(dt) {
     Math.max(-1, Math.min(1, -player.body.omega.x * 0.6)),
   ];
 
-  // --- sun screen position + visibility (god rays + HUD flare share it) ---
+  // --- sun screen position + visibility (god rays + lens flare share it);
+  // every gate is a smooth ramp so shafts/ghosts never pop on crossing ---
   _pv.copy(camera.position).addScaledVector(sky.sunDir, 30000);
   _pv.project(camera);
   const sunUV = [(_pv.x * 0.5 + 0.5), (-_pv.y * 0.5 + 0.5)];
   camera.getWorldDirection(_pv2);
-  const sunVis = _pv2.dot(sky.sunDir) > 0.25 && sky.sunDir.y > -0.05 && weather.cur.gray < 0.55
-    ? Math.min(1, (_pv2.dot(sky.sunDir) - 0.25) * 2.4) * (1 - weather.cur.gray)
-    : 0;
+  const sunVis = Math.min(1, Math.max(0, _pv2.dot(sky.sunDir) - 0.25) * 2.4)
+    * smoothstep(0.55, 0.40, weather.cur.gray)
+    * smoothstep(-0.05, 0.08, sky.sunDir.y);
 
   // --- heat shimmer: player afterburner + freshest own missile exhaust ---
   const heat = [];

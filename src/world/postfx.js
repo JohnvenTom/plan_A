@@ -84,6 +84,25 @@ float linDepth(vec2 uv) {
 float dhash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 vec2 dhash2(vec2 p){ return vec2(dhash(p), dhash(p + 31.7)); }
 
+// one sun lens ghost: a soft disc or a thin ring, with a PER-CHANNEL radius
+// split — that offset is the dispersion (warm rim outside, cool inside when
+// flip>0, reversed when flip<0, so the chain doesn't read as one repeated stamp)
+vec3 lensGhost(vec2 uv, vec2 pos, float radius, float ring, float flip) {
+  vec2 d = (uv - pos) * vec2(uRes.x / uRes.y, 1.0);   // aspect-corrected
+  float r = length(d) / radius;
+  float ch = 0.10 * flip;
+  if (ring > 0.5) {
+    return vec3(
+      smoothstep(0.14, 0.0, abs(r - (1.0 - ch))),
+      smoothstep(0.14, 0.0, abs(r - 1.0)),
+      smoothstep(0.14, 0.0, abs(r - (1.0 + ch))));
+  }
+  return vec3(
+    smoothstep(1.0 + ch, 0.35, r),
+    smoothstep(1.0, 0.35, r),
+    smoothstep(1.0 - ch, 0.35, r));
+}
+
 // ---- REFRACTING lens droplets: each bead is a tiny ball lens that pulls
 // its pixels from further out (minified, flipped feel) + a soft specular
 // dot. Jittered 3x3 grid, per-cell life cycle so beads form and dry.
@@ -213,6 +232,52 @@ void main() {
 
   // --- bloom add ---
   col += texture2D(tBloom, uv).rgb * uBloom;
+
+  // --- sun lens flare (analytic, same pass): a SPECTRAL HALO ring around
+  // the disc + a chain of internal-reflection GHOSTS sliding along the
+  // sun↔center axis as the camera turns — every circle's per-channel radius
+  // split produces the chromatic fringe. Keyed off uSunVis, so it rides the
+  // same visibility factor as the god rays ---
+  if (uSunVis > 0.003) {
+    vec2 axv = vec2(uRes.x / uRes.y, 1.0);
+    float vis = uSunVis * uSunVis;
+    // spectral halo: one wide rainbow-edged ring centered on the sun
+    {
+      float r = length((uv - uSunUV) * axv);
+      float chroma = 0.012;
+      vec3 band = vec3(
+        smoothstep(0.030, 0.0, abs(r - 0.300 + chroma)),
+        smoothstep(0.030, 0.0, abs(r - 0.300)),
+        smoothstep(0.030, 0.0, abs(r - 0.300 - chroma)));
+      col += band * vis * 0.050 * vec3(0.95, 0.95, 1.0);
+    }
+    // ghost chain: mirrored discs & rings at fixed fractions of the axis —
+    // one on the anti-sun side, three between center and sun, one beyond.
+    // Real internal reflections sit ON the axis, but each circle also gets
+    // a slow PERPENDICULAR drift (aspect-true, phase-offset per ghost) so
+    // the chain ripples instead of riding a rail — the wobble stays an
+    // order of magnitude under the ghost spacing to keep the colinear read
+    vec2 axis = uSunUV - vec2(0.5, 0.5);
+    vec2 axisA = axis * axv;
+    vec2 perp = normalize(vec2(-axisA.y, axisA.x)) / axv;
+    float shimmer = 0.82 + 0.18 * sin(uTime * 1.6);
+    vec3 g;
+    vec2 drift = perp * 0.012 * sin(uTime * 0.21);
+    g = lensGhost(uv, vec2(0.5) - axis * 0.35 + drift, 0.105, 0.0,  1.0);
+    col += g * vis * 0.030 * shimmer * vec3(1.05, 0.95, 0.85);
+    drift = perp * 0.007 * sin(uTime * 0.34 + 1.3);
+    g = lensGhost(uv, vec2(0.5) + axis * 0.18 + drift, 0.052, 1.0, -1.0);
+    col += g * vis * 0.040 * shimmer * vec3(0.95, 1.00, 1.10);
+    drift = perp * 0.016 * sin(uTime * 0.17 + 2.6);
+    g = lensGhost(uv, vec2(0.5) + axis * 0.46 + drift, 0.148, 0.0, -1.0);
+    col += g * vis * 0.020 * shimmer * vec3(1.05, 1.00, 0.90);
+    drift = perp * 0.008 * sin(uTime * 0.41 + 3.9);
+    g = lensGhost(uv, vec2(0.5) + axis * 0.78 + drift, 0.062, 1.0,  1.0);
+    col += g * vis * 0.050 * shimmer * vec3(1.00, 0.95, 1.05);
+    drift = perp * 0.014 * sin(uTime * 0.13 + 5.2);
+    g = lensGhost(uv, vec2(0.5) + axis * 1.30 + drift, 0.210, 0.0,  1.0);
+    col += g * vis * 0.014 * shimmer * vec3(1.10, 1.00, 0.85);
+  }
 
   // --- grading: exposure, warm/cool tint, saturation, flash ---
   col *= uExposure;
