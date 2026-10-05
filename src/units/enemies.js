@@ -81,7 +81,11 @@ class Enemy {
   updateDamageState() {
     const r = clamp(this.hp / this.hpMax, 0, 1);
     this.hpR = r;
-    this.body.power = this.basePower * (0.55 + 0.45 * r);
+    // power band eased down one notch (was 0.55+0.45r): the aimAt fine-aim
+    // retune made the shared instructor's small-error tracking snappier for
+    // everyone, so enemy tracking tightens a touch in slow-fight pursuit;
+    // this keeps their effective difficulty where it was
+    this.body.power = this.basePower * (0.5 + 0.4 * r);
     this.body.thrustMax = this.baseThrust * (0.75 + 0.25 * r);
   }
 

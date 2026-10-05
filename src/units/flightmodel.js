@@ -13,7 +13,7 @@
 // omega is the body-frame angular rate: {x: pitch (+nose up), y: yaw (+nose
 // left), z: roll (+roll left)}.
 import * as THREE from 'three';
-import { clamp } from '../core/utils.js';
+import { clamp, smoothstep } from '../core/utils.js';
 
 // --- atmosphere & aero coefficients (accelerations fold area/mass into KA) ---
 const G0 = 9.81;
@@ -95,7 +95,6 @@ export class FlightBody {
 
     // instructor hysteresis through the atan2 singularity
     this._phiSign = 1;
-    this._eUpF = 0;      // slow path-trim filter state (aim-vs-path vertical)
   }
 
   forward(out) { return out.set(0, 0, -1).applyQuaternion(this.quat); }
@@ -130,21 +129,35 @@ export class FlightBody {
     // Without it the leveler fires on total-magnitude alone and chops the
     // turn a few degrees short — wings level, pause, then small corrections
     // re-bank to close the rest (the classic arrive-in-stages feel).
-    const levelGate = clamp(1 - Math.abs(offH) / 0.05, 0, 1);
+    // Range kept TIGHT (±0.02 rad ≈ 1.1°): any wider and the leveler spends
+    // its gain fighting the fine-aim bank commands — the old 0.05 range sat
+    // permanently on top of every small correction and stretched the last
+    // degree of pointing into a multi-second glide.
+    const levelGate = clamp(1 - Math.abs(offH) / 0.02, 0, 1);
 
     let pitch, roll, yaw = 0;
     if (_aim.z > 0.25 && mag < 0.35) {
       // aim nearly behind the tail: roll hard and pull through the vertical
       roll = 1; pitch = 0.55;
     } else if (mag < 0.2 && offV < -0.02) {
-      // aim just below the nose: pushing beats a 180 deg roll
-      roll = clamp(-offH * 1.2 - bankErr * 1.5 * levelGate, -0.4, 0.4);
+      // aim just below the nose: pushing beats a 180 deg roll. Lateral
+      // authority matches the main law's near-center gains (the old *1.2
+      // with zero rudder left this branch a lateral dead zone) — the aim
+      // DOES park below the nose whenever the player dips the sight.
+      roll = clamp(-offH * 5 - bankErr * 1.5 * levelGate, -0.7, 0.7);
       pitch = clamp(offV * 1.8, -0.5, 0);
+      yaw = clamp(-offH * 2.0 - this.beta * 2.0, -0.3, 0.3);
     } else {
       // unified continuous law: near center the commanded bank is PROPORTIONAL
       // to the offset (gentle bank + rudder cleanup, wings-level damping),
       // blending smoothly into the full bank-first pull-through geometry by
       // ~22° off. One formula — no dead zone, no snap at the old 3.4° gate.
+      // Fine-aim contract: a visible nudge must buy a REAL bank — the pure
+      // proportional term alone settles at a bank only ~3x the error, a
+      // fraction of a degree for mouse-scale offsets, which made the last
+      // degree of pointing crawl at ~0.03°/s. The floor guarantees every
+      // nudge past ~0.06° commands at least ~9° of bank (a ~0.35°/s closure
+      // at 240 m/s) while tapering to zero under pixel jitter.
       let phi;
       if (offV < 0 && Math.abs(offH) < 0.04) {
         phi = this._phiSign * Math.PI;
@@ -159,22 +172,28 @@ export class FlightBody {
                                                   // early enough to bleed turn
                                                   // rate before arrival (no
                                                   // overshoot-bounce)
-      phi = clamp(offH * 5, -1.2, 1.2) * (1 - t) + phi * t;
-      roll = clamp(-phi * 1.4 - bankErr * 2.5 * (1 - t) * levelGate, -1, 1);
+      let phiNear = clamp(offH * 14, -1.2, 1.2);
+      const floor = 0.16 * smoothstep(0.0009, 0.0045, Math.abs(offH));
+      if (floor > Math.abs(phiNear)) phiNear = Math.sign(offH) * floor;
+      phi = phiNear * (1 - t) + phi * t;
+      // near center the roll axis TRACKS the commanded bank (damps bank error
+      // toward sin(phiNear), not toward zero): leveling toward wings-flat here
+      // fought every fine-aim correction along the way, collapsing the
+      // commanded bank to a fraction of a degree. As the error closes, phiNear
+      // itself goes to zero — wing leveling happens for free, without ever
+      // opposing the turn
+      roll = clamp(-phi * 1.4 - (bankErr + Math.sin(phiNear)) * 2.5 * (1 - t) * levelGate, -1, 1);
       pitch = clamp(offV * 2.5, -0.3, 0.3) * (1 - t)
             + clamp(Math.max(0, offV) * 1.7, 0.08, 1) * t;
-      yaw = clamp((-offH * 1.2 - this.beta * 2.0) * (1 - 0.75 * t), -0.3, 0.3);
+      yaw = clamp((-offH * 2.6 - this.beta * 2.0) * (1 - 0.75 * t), -0.3, 0.3);
     }
 
-    // slow path trim: a nose-referenced law settles into a permanent glide
-    // (nose on the aim, path sagging a couple of degrees below it). This
-    // low-passed aim-vs-PATH term trims that DC bias out; the clamp keeps it
-    // to trim scale so it can never fight a real maneuver.
-    if (this.vel.lengthSq() > 1600) _velDir.copy(this.vel).normalize();
-    else this.forward(_velDir);
-    const eUp = aimDir.y - _velDir.y * aimDir.dot(_velDir);
-    this._eUpF = clamp(this._eUpF + (eUp - this._eUpF) * Math.min(1, dt / 1.2), -0.01, 0.01);
-    pitch = clamp(pitch + 4.0 * this._eUpF, -1, 1);
+    // Pointing contract: the NOSE (= gun line) rides ON the aim; the flight
+    // path settles α below it and the HUD flight-path marker shows that
+    // honestly. (The old aim-vs-PATH slow trim tried to lift the path onto
+    // the aim instead, but its ±0.01 rad clamp sat below the α-trim it was
+    // fighting, so it railed permanently — parking the nose ~0.9° above the
+    // aim AND routing cruise through the weak below-nose branch.)
 
     // G / AOA protection — the INSTRUCTOR's own envelope sense, one layer
     // above the airframe FBW. Enemies keep fbwOn permanently so the AI is
