@@ -297,6 +297,7 @@ export class Debrief {
       if (ev.type === 'kill' && trackById.has(ev.victim)) color = trackById.get(ev.victim).color;
       else if (ev.type === 'crash') color = PLAYER_COLOR;
       else if (ev.type === 'launch' || ev.type === 'gunFire') color = ev.side === 'p' ? MSL_COLOR_P : MSL_COLOR_E;
+      else if (ev.type === 'flare' && ev.side === 'e' && trackById.has(ev.m)) color = trackById.get(ev.m).color;
       const mat = new THREE.SpriteMaterial({
         map: glyphTexture(ev.type), color, transparent: true,
         depthTest: false, depthWrite: false,
@@ -307,8 +308,11 @@ export class Debrief {
       sp.visible = false;
       sp.userData.ev = ev;
       g.add(sp);
-      const label = def.label + (ev.type === 'kill' && ev.w ? ` · ${ev.w === 'gun' ? '机炮' : '导弹'}` : '');
-      this.markers.push({ ev, sprite: sp, color, label, size: def.size });
+      let label = def.label + (ev.type === 'kill' && ev.w ? ` · ${ev.w === 'gun' ? '机炮' : '导弹'}` : '');
+      // enemy flare bursts are throttled aggregates: smaller glyph + owner tag
+      const eFlare = ev.type === 'flare' && ev.side === 'e';
+      if (eFlare) label += '（敌）';
+      this.markers.push({ ev, sprite: sp, color, label, size: def.size * (eFlare ? 0.7 : 1) });
     }
   }
 
@@ -900,6 +904,7 @@ function markerHex(tracks, ev) {
   if (ev.type === 'kill') c = trackByIdColor(tracks, ev.victim);
   else if (ev.type === 'crash') c = PLAYER_COLOR;
   else if (ev.type === 'launch' || ev.type === 'gunFire') c = ev.side === 'p' ? MSL_COLOR_P : MSL_COLOR_E;
+  else if (ev.type === 'flare' && ev.side === 'e') c = trackByIdColor(tracks, ev.m);
   return c.toString(16).padStart(6, '0');
 }
 // imported files may lack a result block — derive the basics from the events

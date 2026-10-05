@@ -112,7 +112,14 @@ const killCtx = {
   effects,
   get enemies() { return enemies.enemies; },
   weapons,
-  deployFlares: (owner, n) => weapons.deployFlares(owner, n),
+  // enemy countermeasures flow through here (the player's own flare press
+  // lives in the input block): one throttled event per defensive burst
+  deployFlares: (owner, n) => {
+    weapons.deployFlares(owner, n);
+    if (owner !== player) {
+      recorder.ev('flare', { side: 'e', src: owner, m: recorder.trackIdOf(owner) }, owner.position);
+    }
+  },
   onKill(enemy, crashed) {
     G.kills++; G.score += (250 + enemies.wave * 25) * (enemy.ace ? 2 : 1);
     recorder.ev('kill', { victim: recorder.trackIdOf(enemy), ace: enemy.ace }, enemy.position);
@@ -441,7 +448,7 @@ function update(dt) {
     if (input.pressed('mslWarmup')) weapons.mslWarmPress();
     if (input.pressed('flares')) {
       weapons.deployFlares(player, 3);
-      recorder.ev('flare', {}, player.position);
+      recorder.ev('flare', { side: 'p' }, player.position);
     }
     if (input.pressed('cycleMissile')) {
       weapons.mslKind = weapons.mslKind === 'ir' ? 'radar' : 'ir';

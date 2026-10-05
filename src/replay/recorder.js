@@ -45,6 +45,7 @@ export class Recorder {
     this._tick = 0;
     this._entityMap = new Map(); // sim object -> track (identity keyed)
     this._roundSeen = new Set(); // player tracer objects seen last tick
+    this._flareT = new Map();    // enemy object -> t of its last RECORDED flare burst
     this._enemyCi = 0;
     this._mslCi = 0;
     this.tracks = [];
@@ -168,6 +169,16 @@ export class Recorder {
   // ---- event log; pos optional (some events are timeline-only ticks) ----
   ev(type, f = {}, pos = null) {
     if (!this.active) return;
+    // enemy flare bursts pop every 0.45 s while dodging — collapse a burst
+    // into ONE event per ~1.5 s so the map isn't snowed under (player flares
+    // are discrete key presses and record as-is). src keys the throttle but
+    // never enters the record: a live sim object would bloat/loop the export.
+    if (type === 'flare' && f.side === 'e') {
+      const last = this._flareT.get(f.src) ?? -Infinity;
+      if (this.time - last < 1.5) return null;
+      this._flareT.set(f.src, this.time);
+      delete f.src;
+    }
     const e = { t: Math.round(this.time * 100) / 100, type, ...f };
     if (pos) { e.x = pos.x; e.y = pos.y; e.z = pos.z; }
     if (type === 'kill' && !e.w) {
