@@ -42,6 +42,7 @@ const MSL_HOT_WINDOW = 8.0;
 // hold only inside it, IR shots may only leave the rail inside it.
 // Lock/bite ACQUISITION still requires the ±8° head-sight basket.
 const ENV_DOT = Math.cos(60 * Math.PI / 180);
+const CONE_GRACE = 2;                               // s outside the envelope before the lock drops
 const BASKET_DOT = Math.cos(8 * Math.PI / 180);   // head-sight basket ±8°
 // the head-sight lock is a RADAR lock for BOTH kinds — 20 km acquire/hold;
 // for IR missiles the radar lock is nothing but a guidance source (the
@@ -342,6 +343,7 @@ export class Weapons {
     if (this.manualTarget) {
       this.manualTarget = null;
       this.lockState = { target: null, locked: false };
+      this._lockOutT = 0;
       if (this.mslKind === 'radar') this.cancelWarm();
       return;
     }
@@ -370,6 +372,7 @@ export class Weapons {
     }
     if (best) {
       this.manualTarget = best;
+      this._lockOutT = 0;
       this.lockState = { target: best, locked: true };
       if (this.audio) this.audio.lock();
     }
@@ -407,9 +410,12 @@ export class Weapons {
   }
 
   // ---------- lock maintenance (locks are INSTANT, acquired by X) ----------
-  // A lock holds while the target stays alive, in range, and inside the 80°
-  // nose envelope. Breaking it drops the lock — and a radar seeker that is
-  // warming or hot dies with it (断锁即熄火, re-lock means re-warm).
+  // A lock holds while the target stays alive, in range, and inside the nose
+  // envelope — with cone GRACE: leaving the envelope no longer dumps the lock
+  // on the spot; the HUD frame blinks with a countdown for CONE_GRACE s and
+  // re-entry resets the clock (death / over-range still cut instantly).
+  // Dropping the lock kills a radar seeker that is warming or hot
+  // (断锁即熄火, re-lock means re-warm); the grace window still fires.
   updateLock(dt, player, enemies) {
     const t = this.manualTarget;
     if (!t) {
@@ -421,15 +427,19 @@ export class Weapons {
     _v.copy(t.position ?? t.pos).sub(player.position);
     const d = _v.length() || 1;
     this.lockConeDot = _v.divideScalar(d).dot(player.forward(_v2));
-    const valid = liveTarget(t) &&
+    const hardOK = liveTarget(t) &&
       !(t.kind && !this.missiles.includes(t)) &&   // intercept target died elsewhere
-      (t.position ?? t.pos).distanceTo(player.position) < range &&
-      this.lockConeDot > ENV_DOT;
-    if (!valid) {
+      (t.position ?? t.pos).distanceTo(player.position) < range;
+    this._lockOutT = this.lockConeDot > ENV_DOT ? 0 : (this._lockOutT ?? 0) + dt;
+    if (!hardOK || this._lockOutT >= CONE_GRACE) {
       this.manualTarget = null;
       this.lockState = { target: null, locked: false };
       this.lockConeDot = null;
+      this._lockOutT = 0;
       if (this.mslKind === 'radar') this.cancelWarm();
+    } else {
+      // grace: REMAINING seconds outside the envelope (0 while inside)
+      this.lockState = { target: t, locked: true, grace: CONE_GRACE - this._lockOutT };
     }
   }
 

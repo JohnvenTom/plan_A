@@ -707,7 +707,10 @@ export class HUD {
           if (isLock) {
             this._diamond(px, py, 5, col, true);
             this.text('LOCK', px + size / 2 + 8, py - size / 2 - 9, 12, col, 'left', 4);
-            if (isGuide) this.text(atEdge ? 'CONE — 即将断锁' : 'CONE', px + size / 2 + 8, py - size / 2 + 22, 11, edgeCol, 'left', 4);
+            // cone tag: countdown while the lock rides out its grace window
+            const coneTxt = ls.grace > 0 ? `CONE — 脱锁 ${ls.grace.toFixed(1)}s`
+              : atEdge ? 'CONE — 即将断锁' : 'CONE';
+            if (isGuide) this.text(coneTxt, px + size / 2 + 8, py - size / 2 + 22, 11, edgeCol, 'left', 4);
             // distance readout rolls drum-style like the cockpit gauges
             this.drawDrum('lockRng', (dist / 1000).toFixed(1), px + size / 2 + 12, py - size / 2 + 7, 11, col, dt);
             // closure + nose-relative heading tag on the LEFT of the frame
@@ -734,7 +737,7 @@ export class HUD {
         c.beginPath(); c.moveTo(12, 0); c.lineTo(-6, -7); c.lineTo(-6, 7); c.closePath(); c.fill();
         c.restore();
         c.shadowBlur = 0;
-        if (isGuide) this.text('CONE', ax - Math.cos(ang) * 26, ay - Math.sin(ang) * 26, 11, edgeCol, 'center', 4);
+        if (isGuide) this.text(ls.grace > 0 ? `CONE ${ls.grace.toFixed(1)}s` : 'CONE', ax - Math.cos(ang) * 26, ay - Math.sin(ang) * 26, 11, edgeCol, 'center', 4);
       }
     }
     if (this._collapse.size > 12) {
