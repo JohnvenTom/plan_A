@@ -95,6 +95,12 @@ export class FlightBody {
 
     // instructor hysteresis through the atan2 singularity
     this._phiSign = 1;
+    // lead-compensation state: previous body-frame aim errors and their
+    // low-passed rates (aimAt)
+    this._offHPrev = null;
+    this._hDotF = 0;
+    this._offVPrev = null;
+    this._vDotF = 0;
   }
 
   forward(out) { return out.set(0, 0, -1).applyQuaternion(this.quat); }
@@ -110,6 +116,8 @@ export class FlightBody {
     this.vel.copy(_fwd).multiplyScalar(speed);
     this.omega.set(0, 0, 0);
     this.ctl = { pitch: 0, roll: 0, yaw: 0 };
+    this._offHPrev = null; this._hDotF = 0;
+    this._offVPrev = null; this._vDotF = 0;
     // fresh airframe: limiter back on, no departure state carried over
     this.fbwOn = true;
     this.spin = 0; this.spinT = 0; this.spinRec = 0; this._dep = 0;
@@ -125,6 +133,42 @@ export class FlightBody {
     const mag = Math.hypot(offH, offV);
     const bankErr = this.rightVec(_right).y;   // + = banked left
 
+    // lead compensation: steer on the PREDICTED lateral error. The commanded
+    // bank is proportional to the error, but the actual bank lags the command
+    // by roll inertia — closing fast at 4-5°/s the nose sails PAST the aim,
+    // every term flips sign, and the plane levels out and re-banks the other
+    // way to come back (the classic arrive-in-stages). Feeding the near laws
+    // H + Ḣ·τ_a collapses the bank command BEFORE the crossing, so wings
+    // level exactly as the nose arrives — one motion. τ_a ramps with the
+    // error scale: ZERO in the rudder/blend bands (their closures are short
+    // and β-damped; even 0.12 s of lead pre-subtracts most of a fine-band
+    // correction and leaves a crawl), full 0.45 s — the bank arrest time —
+    // from ~6° out, where residual bank first carries enough rate to cross.
+    // Raw Ḣ low-passed: buffet and single-frame mouse flicks must not spike
+    // it. The far-field geometry (t-blend, atan2) keeps the raw error.
+    let hDot = 0;
+    if (this._offHPrev !== null && dt > 0) hDot = (offH - this._offHPrev) / dt;
+    this._offHPrev = offH;
+    this._hDotF += (hDot - this._hDotF) * Math.min(1, dt / 0.12);
+    let offHL = offH + this._hDotF * 0.45 * smoothstep(0.03, 0.08, Math.abs(offH));
+    // one-sided clamp: the lead may only CANCEL the command as the nose is
+    // about to cross — never reverse it. A reversed predicted error commands
+    // opposite bank mid-arrival and the plane wobbles wing-to-wing
+    if (offH * offHL < 0) offHL = 0;
+    // vertical-channel lead: at high bank the body-frame V is largely the
+    // LATERAL slice seen through the rotating frame — the pitch law chasing
+    // that contaminated signal couples into H and rings the arrival
+    // (±3° V wobble re-opens H and re-banks the plane). Predicting V adds
+    // damping to the handoff as the bank unwinds through 45°.
+    let vDot = 0;
+    if (this._offVPrev !== null && dt > 0) vDot = (offV - this._offVPrev) / dt;
+    this._offVPrev = offV;
+    this._vDotF += (vDot - this._vDotF) * Math.min(1, dt / 0.12);
+    // gated like the lateral lead: only big V excursions (the big-maneuver
+    // projection geometry) need the damping — a small step's V (~1°) left
+    // un-led keeps mid-size arrivals quick
+    const offVL = offV + this._vDotF * 0.3 * smoothstep(0.04, 0.10, Math.abs(offV));
+
     // wings-level gate: leveling must wait until the LATERAL error is gone.
     // Without it the leveler fires on total-magnitude alone and chops the
     // turn a few degrees short — wings level, pause, then small corrections
@@ -133,27 +177,32 @@ export class FlightBody {
     // its gain fighting the fine-aim bank commands — the old 0.05 range sat
     // permanently on top of every small correction and stretched the last
     // degree of pointing into a multi-second glide.
-    const levelGate = clamp(1 - Math.abs(offH) / 0.02, 0, 1);
+    const levelGate = clamp(1 - Math.abs(offHL) / 0.02, 0, 1);
 
     // rudder-first fine band: a fraction of a degree of lineup is a RUDDER
     // job — a boot-full pinches the nose across with the wings stayed level,
     // exactly like a real pilot's lineup correction. Bank-and-pull only
     // earns its efficiency past ~1.4° of offset. rW is the bank law's share:
-    // 0 in the rudder band, 1 beyond, smooth in between.
+    // 0 in the rudder band, 1 beyond, smooth in between. Judged on the RAW
+    // error (band membership is where you ARE; the lead predicts where
+    // you're GOING — mixing them lets a fast slice talk the bank law awake).
     const rW = smoothstep(0.006, 0.024, Math.abs(offH));
 
     let pitch, roll, yaw = 0;
     if (_aim.z > 0.25 && mag < 0.35) {
       // aim nearly behind the tail: roll hard and pull through the vertical
       roll = 1; pitch = 0.55;
-    } else if (mag < 0.2 && offV < -0.02) {
-      // aim just below the nose: pushing beats a 180 deg roll. Lateral
-      // lineup shares the rudder-first band with the main law (the old *1.2
-      // with zero rudder left this branch a lateral dead zone) — the aim
-      // DOES park below the nose whenever the player dips the sight.
-      roll = clamp(-offH * 5 * rW - bankErr * 1.5 * levelGate, -0.7, 0.7);
-      pitch = clamp(offV * 1.8, -0.5, 0);
-      yaw = clamp(-offH * (2.0 + 16.0 * (1 - rW)) - this.beta * (2.0 - 1.5 * (1 - rW)), -0.3, 0.3);
+    } else if (mag < 0.2 && offV < -0.04) {
+      // aim just below the nose: pushing beats a 180 deg roll. Entry sits at
+      // -2.3° on purpose: transient body-frame V dips that big happen while
+      // a big lateral arrival unwinds (bank-projection geometry) and must
+      // not hitch the law across branches mid-arrival. Lateral lineup
+      // shares the rudder-first band with the main law (the old *1.2 with
+      // zero rudder left this branch a lateral dead zone) — the aim DOES
+      // park below the nose whenever the player dips the sight.
+      roll = clamp(-offHL * 5 * rW - bankErr * 1.5 * levelGate, -0.7, 0.7);
+      pitch = clamp(offVL * 1.8, -0.5, 0);
+      yaw = clamp(-offHL * (2.0 + 16.0 * (1 - rW)) - this.beta * (2.0 - 1.5 * (1 - rW)), -0.3, 0.3);
     } else {
       // unified continuous law: near center the rudder points the nose
       // (wings held level), blending into the proportional-bank law by
@@ -173,7 +222,7 @@ export class FlightBody {
                                                   // early enough to bleed turn
                                                   // rate before arrival (no
                                                   // overshoot-bounce)
-      let phiNear = clamp(offH * 14, -1.2, 1.2) * rW;
+      let phiNear = clamp(offHL * 14, -1.2, 1.2) * rW;
       phi = phiNear * (1 - t) + phi * t;
       // near center the roll axis TRACKS the commanded bank (damps bank error
       // toward sin(phiNear), not toward zero): leveling toward wings-flat here
@@ -182,15 +231,15 @@ export class FlightBody {
       // pointing a pure yaw affair; as the error closes, phiNear goes to zero
       // and wing leveling happens for free, never opposing the turn.
       roll = clamp(-phi * 1.4 - (bankErr + Math.sin(phiNear)) * 2.5 * (1 - t) * levelGate, -1, 1);
-      pitch = clamp(offV * 2.5, -0.3, 0.3) * (1 - t)
-            + clamp(Math.max(0, offV) * 1.7, 0.08, 1) * t;
+      pitch = clamp(offVL * 2.5, -0.3, 0.3) * (1 - t)
+            + clamp(Math.max(0, offVL) * 1.7, 0.08, 1) * t;
       // fine-band rudder: pointing gain 18 (a 0.5° step closes in ~0.3 s at
       // ~0.6° peak sideslip). The β term is DAMPING here, not coordination —
       // at the bank law's 2.0 it over-damped and backed the rudder off,
       // parking the nose short of the aim (β/9 out) to wait for the path;
       // in the fine band holding a little β while the side force walks the
       // path over is exactly the point
-      yaw = clamp((-offH * (2.6 + 15.4 * (1 - rW)) - this.beta * (2.0 - 1.5 * (1 - rW))) * (1 - 0.75 * t), -0.3, 0.3);
+      yaw = clamp((-offHL * (2.6 + 15.4 * (1 - rW)) - this.beta * (2.0 - 1.5 * (1 - rW))) * (1 - 0.75 * t), -0.3, 0.3);
     }
 
     // Pointing contract: the NOSE (= gun line) rides ON the aim; the flight
