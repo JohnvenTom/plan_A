@@ -54,6 +54,10 @@ const _acc = new THREE.Vector3();
 const _dq = new THREE.Quaternion();
 const _axis = new THREE.Vector3();
 const _aim = new THREE.Vector3();
+const _dErr = new THREE.Vector3();   // aimAt: aim error ⊥ nose (world)
+const _wRight = new THREE.Vector3(); // aimAt: world-horizontal right of nose
+const _wUpD = new THREE.Vector3();   // aimAt: world-up projected ⊥ nose
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
 
 export class FlightBody {
   constructor(opts = {}) {
@@ -126,12 +130,45 @@ export class FlightBody {
 
   // ---- instructor: turn the nose toward a world aim direction with
   // bank-first-then-pull geometry, G- and AOA-limited. Writes ctl. ----
+  // Channel frames are deliberately MIXED. The lateral channel is BODY-frame
+  // (self-limiting geometry: as the plane banks into a lateral aim the error
+  // projects into V, tapering the demand — a position feedback with no lag,
+  // which is why this law is stable). The PITCH channel steers on the
+  // WORLD-frame vertical error instead: at high bank the body-frame V is
+  // largely the lateral slice seen through the rotating frame, and chasing
+  // that contamination balloons the pitch channel, the unwind overshoots
+  // through zero at the bank handoff, leaks into the lateral channel,
+  // re-opens the error and re-banks the plane — arrive-in-stages, twice.
+  // World-V kills the balloon at the source; a small position-driven slice
+  // assist restores the pull's turn motor without any rate loop.
   aimAt(aimDir, dt = 1 / 60) {
+    this.forward(_fwd);
     _qInv.copy(this.quat).invert();
     _aim.copy(aimDir).applyQuaternion(_qInv).normalize();
     const offH = _aim.x, offV = _aim.y;
     const mag = Math.hypot(offH, offV);
     const bankErr = this.rightVec(_right).y;   // + = banked left
+
+    // world-frame aim error: the aim's offset along world-horizontal-right
+    // and world-up, both projected perpendicular to the nose (pole fallback:
+    // body axes for that frame). The VERTICAL one feeds the pitch channel —
+    // at high bank the body-frame V is largely the lateral slice seen
+    // through the rotating frame. The HORIZONTAL one feeds the slice assist
+    // below — the body-frame H collapses into V at deep bank (the law's
+    // built-in self-limiting), which would starve the assist exactly when
+    // the turn needs its motor.
+    _wRight.crossVectors(_fwd, WORLD_UP);
+    let vErrW, hErrW;
+    if (_wRight.lengthSq() > 1e-6) {
+      _wRight.normalize();
+      _wUpD.copy(WORLD_UP).addScaledVector(_fwd, -WORLD_UP.dot(_fwd)).normalize();
+      _dErr.copy(aimDir).addScaledVector(_fwd, -aimDir.dot(_fwd));
+      vErrW = _dErr.dot(_wUpD);
+      hErrW = _dErr.dot(_wRight);
+    } else {
+      vErrW = offV;
+      hErrW = offH;
+    }
 
     // lead compensation: steer on the PREDICTED lateral error. The commanded
     // bank is proportional to the error, but the actual bank lags the command
@@ -161,13 +198,12 @@ export class FlightBody {
     // (±3° V wobble re-opens H and re-banks the plane). Predicting V adds
     // damping to the handoff as the bank unwinds through 45°.
     let vDot = 0;
-    if (this._offVPrev !== null && dt > 0) vDot = (offV - this._offVPrev) / dt;
-    this._offVPrev = offV;
+    if (this._offVPrev !== null && dt > 0) vDot = (vErrW - this._offVPrev) / dt;
+    this._offVPrev = vErrW;
     this._vDotF += (vDot - this._vDotF) * Math.min(1, dt / 0.12);
-    // gated like the lateral lead: only big V excursions (the big-maneuver
-    // projection geometry) need the damping — a small step's V (~1°) left
-    // un-led keeps mid-size arrivals quick
-    const offVL = offV + this._vDotF * 0.3 * smoothstep(0.04, 0.10, Math.abs(offV));
+    // gated like the lateral lead: only sizable V errors want the extra
+    // damping — a small step's V left un-led keeps mid-size arrivals quick
+    const offVL = vErrW + this._vDotF * 0.3 * smoothstep(0.04, 0.10, Math.abs(vErrW));
 
     // wings-level gate: leveling must wait until the LATERAL error is gone.
     // Without it the leveler fires on total-magnitude alone and chops the
@@ -222,7 +258,13 @@ export class FlightBody {
                                                   // early enough to bleed turn
                                                   // rate before arrival (no
                                                   // overshoot-bounce)
-      let phiNear = clamp(offHL * 14, -1.2, 1.2) * rW;
+      let phiNear = clamp(offHL * 14, -1.2, 1.2) * rW
+        // slip-coordination mini-bank: a hard slice leaves the nose LEADING
+        // the path (several ° of β) and the fine band then parks waiting for
+        // the side force to walk the path over. Bank a couple of degrees
+        // INTO the slip — the tilted lift turns the path 2-3× faster, like
+        // a pilot centering the ball — fading out as β nulls.
+        + clamp(-this.beta * 0.5, -0.06, 0.06) * (1 - rW);
       phi = phiNear * (1 - t) + phi * t;
       // near center the roll axis TRACKS the commanded bank (damps bank error
       // toward sin(phiNear), not toward zero): leveling toward wings-flat here
@@ -231,8 +273,21 @@ export class FlightBody {
       // pointing a pure yaw affair; as the error closes, phiNear goes to zero
       // and wing leveling happens for free, never opposing the turn.
       roll = clamp(-phi * 1.4 - (bankErr + Math.sin(phiNear)) * 2.5 * (1 - t) * levelGate, -1, 1);
+      // slice assist: at depth of bank a pull IS a lateral slice toward the
+      // aim — the world-frame V channel no longer motors it, so restore the
+      // pull's share from the WORLD azimuth error (stays full-size at deep
+      // bank, unlike the body-frame H) times bank depth, only when the bank
+      // is turned the way the error points. Position-driven and clamped:
+      // it bleeds off with the error and runs no rate loop. The taper fades
+      // it out through the last ~5°: pacing the ending to the coordinated
+      // turn means the PATH arrives aligned with the nose — no β debt to
+      // walk off after arrival (the old fast-slice arrival parked 0.3° out
+      // for ten seconds waiting for the path).
+      const slice = (hErrW * bankErr < 0)
+        ? clamp(Math.abs(hErrW) * 1.2, 0, 0.35) * smoothstep(0.008, 0.09, Math.abs(hErrW))
+          * Math.abs(bankErr) * t : 0;
       pitch = clamp(offVL * 2.5, -0.3, 0.3) * (1 - t)
-            + clamp(Math.max(0, offVL) * 1.7, 0.08, 1) * t;
+            + clamp(Math.max(0, offVL) * 1.7, 0.08, 1) * t + slice;
       // fine-band rudder: pointing gain 18 (a 0.5° step closes in ~0.3 s at
       // ~0.6° peak sideslip). The β term is DAMPING here, not coordination —
       // at the bank law's 2.0 it over-damped and backed the rudder off,
