@@ -14,6 +14,7 @@ import { terrainSurfaceAt, SEA_LEVEL } from '../world/terrain.js';
 const COMBAT_RADIUS = 14000;          // keep in sync with player.js
 const FIRE_MARGIN = 800;              // leniency: batteries hold fire until
                                       // the intruder is THIS deep past the rim
+const RWR_SITE_R = 6000;              // RWR new-contact ring around a battery
 const SALVO = 5;                      // missiles per group
 const SALVO_GAP = 1.0;                // one launch per second inside a group
 const RELOAD = 4.0;                   // pause between groups
@@ -248,6 +249,7 @@ export class AASites {
     for (const s of this.sites) {
       s.salvoLeft = SALVO; s.shotT = 0; s.reloadT = 0; s.launchT = 0; s.hatch = 0;
       s.parts.round.visible = false;
+      s._rwrNear = false;   // re-arm the RWR new-contact ring for the next sortie
     }
   }
 
@@ -265,6 +267,12 @@ export class AASites {
     }
     for (const s of this.sites) {
       const P = s.parts;
+      // RWR new contact: skimming a battery's 6 km ring — sites sit on the
+      // 14 km boundary circle, so only edge-hugging flight rings this; one
+      // chirp per site, re-armed when you pull away
+      const nearRing = player.alive && s.pos.distanceToSquared(player.position) < RWR_SITE_R * RWR_SITE_R;
+      if (nearRing && !s._rwrNear) weapons.audio?.rwrNewContact?.();
+      s._rwrNear = nearRing;
       // idle animation: radar sweeps, crane/lamp rotation, beacon blink
       for (const sp of P.spinners) sp.obj.rotation.y += dt * sp.speed;
       const blink = Math.sin(this.t * 3 + s.phase) > 0;
@@ -317,6 +325,9 @@ export class AASites {
       s.salvoLeft--;
       if (s.salvoLeft <= 0) s.reloadT = RELOAD;
       s.launchT = PRELAUNCH;
+      // RWR special contact: the first round of a salvo is the moment the
+      // battery commits — a missile site's hatch rising is its signature
+      if (s.salvoLeft === SALVO - 1) weapons.audio?.rwrSpecial?.();
     }
   }
 }

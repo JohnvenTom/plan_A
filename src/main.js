@@ -112,6 +112,10 @@ const killCtx = {
   effects,
   get enemies() { return enemies.enemies; },
   weapons,
+  // RWR voice: the 15 km picket chirp is the only edge event left — sweep,
+  // lock and launch are persistent states the audio loop rings from
+  // enemies.rwrSwept/rwrLocked + the inbound flags each frame
+  rwrNewContact: () => audio.rwrNewContact(),
   // enemy countermeasures flow through here (the player's own flare press
   // lives in the input block): one throttled event per defensive burst
   deployFlares: (owner, n) => {
@@ -605,7 +609,7 @@ function update(dt) {
     if ((G.cloud ?? 0) > 0.25 && player.alive) {
       player.camShake = Math.max(player.camShake, (G.cloud - 0.25) * 0.12);
     }
-    audio.update(dt, player, weapons, G.cloud ?? 0);
+    audio.update(dt, player, weapons, G.cloud ?? 0, enemies);
   }
 
   effects.update(dt, camera);

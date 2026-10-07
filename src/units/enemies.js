@@ -12,6 +12,11 @@ const _aim = new THREE.Vector3();
 const _tmp = new THREE.Vector3();
 const _fwd = new THREE.Vector3();
 
+// RWR new-contact picket: fixed range where the receiver first hears an
+// airframe's emissions (waves spawn just beyond it, so contacts ring as
+// they cross in — one chirp per aircraft, re-armed if it leaves and returns)
+const RWR_PICKET = 15000;
+
 class Enemy {
   constructor(scene, spawnPos, heading, wave, ace = false) {
     this.scene = scene;
@@ -110,8 +115,19 @@ class Enemy {
     // how well our nose points at the player (used by jink gating and weapons)
     const aimDot = b.forward(_fwd).dot(_tmp.copy(player.position).sub(b.pos).normalize());
 
+    // RWR new-contact: a fixed 15 km picket — every airframe rings once as
+    // it crosses in, and again if it leaves and comes back. Deliberately
+    // decoupled from the HUD scope range (M cycles that): the receiver
+    // hears the paint, not what the display happens to be showing
+    if (!this.dying && player.alive) {
+      const inPicket = dist < RWR_PICKET;
+      if (inPicket && !this._rwrIn && ctx && ctx.rwrNewContact) ctx.rwrNewContact();
+      this._rwrIn = inPicket;
+    }
+
     if (this.dying) {
       this.deadTime += dt;
+      this._rt = this._locked = false;   // a falling wreck radiates nothing
       // the kill is credited the moment the fatal hit lands: a plane falling
       // in flames has lost the fight — no waiting for the ground impact
       if (!this.killCredited && ctx && ctx.onKill) {
@@ -353,7 +369,10 @@ class Enemy {
     // --- weapons ---
     this.fireCooldown -= dt;
     this.missileCooldown -= dt;
-    if (!player.alive) return this.syncModel(dt);
+    if (!player.alive) {
+      this._rt = this._locked = false;   // nobody left to paint
+      return this.syncModel(dt);
+    }
     if (this.state === 'pursue' && dist < 1100 && aimDot > 0.988 && this.fireCooldown <= 0) {
       this.gunBurst = 0.5;
       this.fireCooldown = 1.6 + Math.random() * 2.2;
@@ -370,6 +389,13 @@ class Enemy {
     if (!this.noMissile) {
       const lockRange = this.mslKind === 'radar' ? 10000 : 2600;
       const canTrack = (this.state !== 'patrol' || this.mslKind === 'radar') && dist < lockRange && aimDot > 0.90;
+      // RWR ladder state: the radar's first sweep across us and the hard
+      // lock that follows are PERSISTENT conditions — the manager aggregates
+      // them per frame (rwrSwept/rwrLocked) and the audio loop keeps the
+      // matching warning ringing until the threat drops. IR shooters carry
+      // no radar to sweep with — they stay silent until the launch warning
+      const rt = canTrack && this.mslKind === 'radar';
+      this._rt = rt;
       if (canTrack) {
         this.lockT += dt;
         if (this.lockT >= 1.15) this.warmT += dt;
@@ -377,12 +403,15 @@ class Enemy {
         this.lockT = 0;
         this.warmT = 0;
       }
+      this._locked = rt && this.lockT >= 1.15;
       if (this.missileCooldown <= 0 && this.warmT >= 1.0) {
         this.missileCooldown = 7 + Math.random() * 7;
         this.lockT = 0;
         this.warmT = 0;
         if (ctx && ctx.enemyMissile) ctx.enemyMissile(this, player);
       }
+    } else {
+      this._rt = this._locked = false;   // guns-only partners carry no radar
     }
     this.syncModel(dt);
   }
@@ -416,6 +445,11 @@ export class EnemyManager {
     this.events = [];
     this.training = false;      // range mode: no waves, drones + respawns
     this.respawnQueue = [];     // [{at, spec}] pending drone respawns
+    // per-frame RWR threat aggregate: is any radar shooter sweeping / hard
+    // locking us right now — the audio loop reads these to keep the
+    // warning ringing for as long as the threat persists
+    this.rwrSwept = false;
+    this.rwrLocked = false;
   }
 
   reset() {
@@ -498,9 +532,13 @@ export class EnemyManager {
   }
 
   update(dt, player, ctx) {
+    this.rwrSwept = false;
+    this.rwrLocked = false;
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       const e = this.enemies[i];
       e.update(dt, player, ctx);
+      if (e._rt) this.rwrSwept = true;
+      if (e._locked) this.rwrLocked = true;
       if (e.dead) {
         if (!e.dying && ctx && ctx.onKill) ctx.onKill(e, false);
         e.dispose();

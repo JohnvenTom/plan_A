@@ -4,8 +4,12 @@ export class GameAudio {
     this.ctx = null;
     this.enabled = true;
     this._lockBeepT = 0;
-    this._alertT = 0;
     this._stallT = 0;
+    this.samples = null;      // decoded RWR one-shots (assets/sfx/rwr/*)
+    this._sfxT = {};          // per-voice cooldown clock (audio time)
+    this._rwrVoice = null;    // RWR loop: voice currently ruling the receiver
+    this._rwrLoopT = 0;       // RWR loop: re-arm countdown for that voice
+    this._rwrSrc = null;      // RWR loop: sounding clip, cut on voice switch
     // volume factors from the settings panel (0..1); applied at every node
     // that can carry sound so master/sfx/engine scale independently
     this.volMaster = 1;
@@ -73,6 +77,103 @@ export class GameAudio {
     this.bufGain = ctx.createGain(); this.bufGain.gain.value = 0;
     this.bufSrc.connect(this.bufFilter).connect(this.bufGain).connect(this.master);
     this.bufSrc.start();
+
+    this.loadSamples();
+  }
+
+  // ---- RWR voice: sampled cockpit warnings (assets/sfx/rwr/*) ----
+  // fetched + decoded once after init; a missing or undecodable file is not
+  // an error — the procedural fallbacks in the rwr* methods keep every
+  // warning audible, so the samples are an upgrade, never a dependency
+  loadSamples() {
+    const files = {
+      newContact: 'assets/sfx/rwr/new_contact.aac',
+      radarLock: 'assets/sfx/rwr/radar_lock.aac',
+      mslLaunch: 'assets/sfx/rwr/missile_launch.aac',
+      special: 'assets/sfx/rwr/special_contact.aac',
+    };
+    for (const [key, url] of Object.entries(files)) {
+      fetch(url)
+        .then(r => { if (!r.ok) throw new Error(url); return r.arrayBuffer(); })
+        .then(b => this.ctx.decodeAudioData(b))
+        .then(buf => { (this.samples ?? (this.samples = {}))[key] = buf; })
+        .catch(() => { });   // stay silent here; fallback tones cover it
+    }
+  }
+
+  // raw one-shot playback of a decoded sample; returns the source so the
+  // caller may cut it later (the RWR loop does, on voice switches)
+  _playBuf(key, gain = 0.9) {
+    const buf = this.samples && this.samples[key];
+    if (!buf || !this.ctx || !this.enabled) return null;
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    const g = this.ctx.createGain();
+    g.gain.value = gain * this.volSfx;
+    src.connect(g).connect(this.master);
+    src.start();
+    return src;
+  }
+
+  // one-shot sample with per-voice debounce. Returns false only when the
+  // sample is missing and the caller should use its procedural fallback;
+  // cooldown hits and a disabled ctx count as handled (stay silent)
+  _sample(key, gain = 0.9, cool = 0.5) {
+    if (!this.ctx || !this.enabled) return true;
+    const t = this.ctx.currentTime;
+    if (t - (this._sfxT[key] ?? -1e9) < cool) return true;
+    this._sfxT[key] = t;
+    return !!this._playBuf(key, gain);
+  }
+
+  // RWR edge events: sampled aircraft voice when the aac decoded, else the
+  // procedural tone — never silent. New contact fires once per contact
+  // (picket crossing / battery ring); the SAM salvo commit is the one
+  // special-contact edge — sweep, lock and launch live in the loop below
+  rwrNewContact() {
+    if (!this._sample('newContact', 0.8, 0.6)) this._tone('square', 950, 950, 0.07, 0.08);
+  }
+  rwrSpecial() {
+    if (!this._sample('special', 0.9, 3.0)) this._tone('sine', 620, 620, 0.10, 0.09);
+  }
+
+  // --- RWR loop: while a threat PERSISTS, its voice keeps ringing. One
+  // voice at a time, highest severity wins (launch > hard lock > radar
+  // sweep) and a voice switch CUTS the sounding clip — a receiver changes
+  // its tune, it doesn't stack them. Samples re-arm as each clip ends plus
+  // a severity gap; without samples the procedural fallbacks take the same
+  // slot at beep cadence (this loop REPLACES the old standalone inbound
+  // beeper, so with samples loaded the beeps fall silent) ---
+  rwrUpdate(dt, weapons, enemies) {
+    const riding = weapons && (weapons.inboundWarning || weapons.radarInbound);
+    const locked = enemies && enemies.rwrLocked;
+    const swept = enemies && enemies.rwrSwept && !locked;
+    const voice = riding ? 'mslLaunch' : locked ? 'radarLock' : swept ? 'special' : null;
+    if (voice !== this._rwrVoice) {
+      if (this._rwrSrc) { try { this._rwrSrc.stop(); } catch (e) { /* already ended */ } this._rwrSrc = null; }
+      this._rwrVoice = voice;
+      this._rwrLoopT = 0;   // a new threat speaks immediately
+    }
+    if (!voice) return;
+    this._rwrLoopT -= dt;
+    if (this._rwrLoopT > 0) return;
+    const buf = this.samples && this.samples[voice];
+    if (buf) {
+      const gain = voice === 'mslLaunch' ? 1.0 : voice === 'radarLock' ? 0.9 : 0.8;
+      const gap = voice === 'mslLaunch' ? 0.12 : voice === 'radarLock' ? 0.3 : 0.55;
+      this._rwrSrc = this._playBuf(voice, gain);
+      this._rwrLoopT = buf.duration + gap;
+    } else if (voice === 'mslLaunch') {
+      // launch fallback keeps the classic distinct radar/IR inbound beeps
+      if (weapons.radarInbound && !weapons.inboundWarning) { this.radarAlert(); this._rwrLoopT = 0.5; }
+      else { this.missileAlert(); this._rwrLoopT = 0.42; }
+    } else if (voice === 'radarLock') {
+      this._tone('square', 1250, 980, 0.18, 0.10);
+      this._rwrLoopT = 0.55;
+    } else {
+      this._tone('sawtooth', 620, 480, 0.22, 0.09);
+      this._rwrLoopT = 0.7;
+    }
   }
 
   resume() { if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume(); }
@@ -175,8 +276,10 @@ export class GameAudio {
   }
   kill() { this._tone('triangle', 520, 780, 0.28, 0.2); }
 
-  update(dt, player, weapons, cloud = 0) {
+  update(dt, player, weapons, cloud = 0, enemies = null) {
     if (!this.ctx || !this.enabled) return;
+    // RWR loop first: the persistent-threat voices (launch > lock > sweep)
+    this.rwrUpdate(dt, weapons, enemies);
     // engine follows speed & throttle
     const s = Math.min(player.speed / 600, 1);
     const boosting = player.throttle > 0.82;
@@ -210,17 +313,5 @@ export class GameAudio {
     // world muffled while inside a deck
     const mufT = cloud > 0.05 ? 20000 - Math.pow(cloud, 1.2) * 15000 : 20000;
     this.muffle.frequency.value += (mufT - this.muffle.frequency.value) * Math.min(1, dt * 5);
-
-    // inbound alert tones (locks are instant now — no acquisition beeping)
-    if (weapons) {
-      if (weapons.inboundWarning || weapons.radarInbound) {
-        this._alertT -= dt;
-        if (this._alertT <= 0) {
-          if (weapons.radarInbound && !weapons.inboundWarning) this.radarAlert();
-          else this.missileAlert();
-          this._alertT = weapons.radarInbound && !weapons.inboundWarning ? 0.5 : 0.42;
-        }
-      }
-    }
   }
 }

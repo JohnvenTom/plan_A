@@ -634,7 +634,10 @@ export class Weapons {
       rescanT: 0,           // real IR searching re-open countdown
       inCone: false,        // real IR edge-triggered seeker-cone state
     });
-    // only the PLAYER'S own launches are audible in first person
+    // only the PLAYER'S own launches are audible in first person; an enemy
+    // round aimed at us needs no edge sound — the moment it exists it is
+    // riding us, and the RWR launch loop in audio.update picks that up the
+    // same frame
     if (this.audio && fromPlayer) {
       if (kind === 'radar') this.audio.radarLaunch(); else this.audio.missileLaunch();
     }
