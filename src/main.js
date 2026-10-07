@@ -1139,9 +1139,10 @@ const OPTIONS = [
   { key: 'blastGhosts', label: '爆炸鬼像链 — 大爆炸的镜头彩圈反射', on: '开启', off: '关闭' },
   { key: 'volMaster', label: '总音量', kind: 'slider', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
   { key: 'volSfx', label: '音效 — 武器/爆炸/警报', kind: 'slider', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
+  { key: 'volRwr', label: 'RWR 告警音量', kind: 'slider', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
   { key: 'volEngine', label: '引擎与风声', kind: 'slider', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
 ];
-const settings = { nearMissWhip: true, blastFlare: true, blastGhosts: true, volMaster: 1, volSfx: 1, volEngine: 1, mslRealistic: false };      // defaults
+const settings = { nearMissWhip: true, blastFlare: true, blastGhosts: true, volMaster: 1, volSfx: 1, volRwr: 0.7, volEngine: 1, mslRealistic: false };      // defaults
 try { Object.assign(settings, JSON.parse(localStorage.getItem('sb_opts') || '{}')); } catch { /* fresh start */ }
 const saveSettings = () => { try { localStorage.setItem('sb_opts', JSON.stringify(settings)); } catch { /* private mode */ } };
 window.__settings = settings;                 // debug hook
@@ -1152,7 +1153,7 @@ window.__pip = () => ({ fov: G.pipFov, open: G.pipOpen, live: !!G.pipMsl && weap
 // settings -> live systems (audio inits on first gesture; applyVolumes is
 // safe to call before and after)
 const applyAudioSettings = () => {
-  try { audio.applyVolumes({ master: settings.volMaster, sfx: settings.volSfx, engine: settings.volEngine }); }
+  try { audio.applyVolumes({ master: settings.volMaster, sfx: settings.volSfx, engine: settings.volEngine, rwr: settings.volRwr }); }
   catch { /* audio not ready yet */ }
 };
 const applyBlastSettings = () => {

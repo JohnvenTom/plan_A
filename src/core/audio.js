@@ -11,17 +11,20 @@ export class GameAudio {
     this._rwrLoopT = 0;       // RWR loop: re-arm countdown for that voice
     this._rwrSrc = null;      // RWR loop: sounding clip, cut on voice switch
     // volume factors from the settings panel (0..1); applied at every node
-    // that can carry sound so master/sfx/engine scale independently
+    // that can carry sound so master/sfx/engine scale independently. RWR is
+    // its own category (like engine): scaled by volRwr, NOT by volSfx
     this.volMaster = 1;
     this.volSfx = 1;
     this.volEngine = 1;
+    this.volRwr = 0.7;
   }
 
-  // settings panel hookup: { master?, sfx?, engine? } in 0..1
+  // settings panel hookup: { master?, sfx?, engine?, rwr? } in 0..1
   applyVolumes(o = {}) {
     if (o.master !== undefined) this.volMaster = Math.min(1, Math.max(0, o.master));
     if (o.sfx !== undefined) this.volSfx = Math.min(1, Math.max(0, o.sfx));
     if (o.engine !== undefined) this.volEngine = Math.min(1, Math.max(0, o.engine));
+    if (o.rwr !== undefined) this.volRwr = Math.min(1, Math.max(0, o.rwr));
     if (this.master) this.master.gain.value = 0.5 * this.volMaster;
   }
 
@@ -101,18 +104,58 @@ export class GameAudio {
     }
   }
 
-  // raw one-shot playback of a decoded sample; returns the source so the
-  // caller may cut it later (the RWR loop does, on voice switches)
+  // raw one-shot playback of a decoded RWR sample; returns {src, gain} so
+  // the loop can cut it with a matching fade on voice switches. The source
+  // clips end at FULL amplitude (hard-cut exports) — a 20 ms tail ramp
+  // before the buffer's own end kills the pop without eating the warning
   _playBuf(key, gain = 0.9) {
     const buf = this.samples && this.samples[key];
     if (!buf || !this.ctx || !this.enabled) return null;
     const src = this.ctx.createBufferSource();
     src.buffer = buf;
     const g = this.ctx.createGain();
-    g.gain.value = gain * this.volSfx;
+    const t0 = this.ctx.currentTime;
+    const v = gain * this.volRwr;
+    const fade = Math.min(0.02, buf.duration * 0.25);
+    g.gain.setValueAtTime(v, t0);
+    g.gain.setValueAtTime(v, t0 + Math.max(0, buf.duration - fade));
+    g.gain.linearRampToValueAtTime(0.0001, t0 + buf.duration);
     src.connect(g).connect(this.master);
     src.start();
-    return src;
+    return { src, gain: g };
+  }
+
+  // stop a sounding RWR clip the same way clips end on their own: a 20 ms
+  // gain ramp, then stop — a bare .stop() is an audible click
+  _cutRwr() {
+    const c = this._rwrSrc;
+    if (!c) return;
+    this._rwrSrc = null;
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    try {
+      c.gain.gain.cancelScheduledValues(t);
+      c.gain.gain.setValueAtTime(Math.max(c.gain.gain.value, 0.0001), t);
+      c.gain.gain.linearRampToValueAtTime(0.0001, t + 0.02);
+      c.src.stop(t + 0.03);
+    } catch (e) { /* already ended */ }
+  }
+
+  // RWR procedural fallback tone: scaled by the RWR fader only (master chain
+  // still applies) — deliberately NOT by volSfx, the RWR slider owns these
+  _rwrTone(type, f0, f1, dur, gain) {
+    const ctx = this.ctx;
+    if (!ctx || !this.enabled) return;
+    const o = ctx.createOscillator();
+    o.type = type;
+    o.frequency.setValueAtTime(f0, ctx.currentTime);
+    if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), ctx.currentTime + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(gain * this.volRwr, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0008, ctx.currentTime + dur);
+    o.connect(g).connect(this.master);
+    o.start();
+    o.stop(ctx.currentTime + dur + 0.05);
   }
 
   // one-shot sample with per-voice debounce. Returns false only when the
@@ -131,10 +174,10 @@ export class GameAudio {
   // (picket crossing / battery ring); the SAM salvo commit is the one
   // special-contact edge — sweep, lock and launch live in the loop below
   rwrNewContact() {
-    if (!this._sample('newContact', 0.8, 0.6)) this._tone('square', 950, 950, 0.07, 0.08);
+    if (!this._sample('newContact', 0.8, 0.6)) this._rwrTone('square', 950, 950, 0.07, 0.08);
   }
   rwrSpecial() {
-    if (!this._sample('special', 0.9, 3.0)) this._tone('sine', 620, 620, 0.10, 0.09);
+    if (!this._sample('special', 0.9, 3.0)) this._rwrTone('sine', 620, 620, 0.10, 0.09);
   }
 
   // --- RWR loop: while a threat PERSISTS, its voice keeps ringing. One
@@ -150,7 +193,7 @@ export class GameAudio {
     const swept = enemies && enemies.rwrSwept && !locked;
     const voice = riding ? 'mslLaunch' : locked ? 'radarLock' : swept ? 'special' : null;
     if (voice !== this._rwrVoice) {
-      if (this._rwrSrc) { try { this._rwrSrc.stop(); } catch (e) { /* already ended */ } this._rwrSrc = null; }
+      this._cutRwr();
       this._rwrVoice = voice;
       this._rwrLoopT = 0;   // a new threat speaks immediately
     }
@@ -165,13 +208,13 @@ export class GameAudio {
       this._rwrLoopT = buf.duration + gap;
     } else if (voice === 'mslLaunch') {
       // launch fallback keeps the classic distinct radar/IR inbound beeps
-      if (weapons.radarInbound && !weapons.inboundWarning) { this.radarAlert(); this._rwrLoopT = 0.5; }
-      else { this.missileAlert(); this._rwrLoopT = 0.42; }
+      if (weapons.radarInbound && !weapons.inboundWarning) { this._rwrTone('sawtooth', 620, 480, 0.22, 0.09); this._rwrLoopT = 0.5; }
+      else { this._rwrTone('square', 950, 690, 0.16, 0.10); this._rwrLoopT = 0.42; }
     } else if (voice === 'radarLock') {
-      this._tone('square', 1250, 980, 0.18, 0.10);
+      this._rwrTone('square', 1250, 980, 0.18, 0.10);
       this._rwrLoopT = 0.55;
     } else {
-      this._tone('sawtooth', 620, 480, 0.22, 0.09);
+      this._rwrTone('sawtooth', 620, 480, 0.22, 0.09);
       this._rwrLoopT = 0.7;
     }
   }
@@ -235,7 +278,6 @@ export class GameAudio {
     this._noise(1.3, 'lowpass', 2200, 180, 0.55);
     this._tone('square', 130, 45, 0.8, 0.07);
   }
-  radarAlert() { this._tone('sawtooth', 620, 480, 0.22, 0.09); }
   explosion(far = 1) {
     this._noise(1.4, 'lowpass', 900, 60, 0.65 * far, 0.8);
     this._tone('sine', 110, 28, 1.1, 0.5 * far);
@@ -254,7 +296,6 @@ export class GameAudio {
     this._tone('square', 1600, 1600, 0.05, 0.09);
     setTimeout(() => this._tone('square', 1600, 1600, 0.05, 0.09), 70);
   }
-  missileAlert() { this._tone('square', 950, 690, 0.16, 0.10); }
   crit() {
     this._tone('square', 1500, 1500, 0.07, 0.16);
     setTimeout(() => this._tone('square', 1150, 1150, 0.09, 0.14), 85);
