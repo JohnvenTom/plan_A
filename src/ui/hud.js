@@ -317,6 +317,7 @@ export class HUD {
     this.drawHitDisc(dt, S);
     this.drawTargets(dt, S);
     this.drawMissileMarkers(S);
+    this.drawSquareRadar(S);
     this.drawRadar(S);
     this.drawStatus(S);
     this.drawAlerts(dt, S);
@@ -889,12 +890,111 @@ export class HUD {
     }
   }
 
+  // ---- square B-scope (realistic only): OUR search radar, left of the RWR ----
+  // WT-style square radar. X = bearing on a FIXED ±60° scale (the narrow
+  // pattern sweeps the middle third — switching patterns never rescales the
+  // plot), Y = range to the M-cycled scope range. Paints ride at their
+  // last-paint spot and fade; the TWS track is live and boxed. Each blip
+  // carries an elevation bar beside it (WT style): bar above the blip = the
+  // bandit is high, below = low, length ∝ |elevation| clamped at ±45°.
+  drawSquareRadar(S) {
+    const rad = S.radar;
+    if (!S.mslReal || !rad) return;
+    const c = this.ctx;
+    const SIZE = 170, PAD = 10;
+    const x2 = (this.w - 130) - 88 - 16;                // right edge: clear of the RWR circle
+    const x1 = x2 - SIZE;
+    const y2 = (this.h - 130) + 88;                     // bottom aligned with the circle
+    const y1 = y2 - SIZE;
+    const W = SIZE - PAD * 2;
+    const BMAX = 60 * Math.PI / 180;
+    const bx = (b) => x1 + PAD + (b + BMAX) / (2 * BMAX) * W;
+    c.save();
+    // frame + fixed azimuth grid (±30°, 0) + range quarters
+    c.strokeStyle = CYAN_DIM; c.lineWidth = 1.5;
+    c.strokeRect(x1, y1, SIZE, SIZE);
+    for (const q of [-0.5, 0.5]) {
+      this.line(bx(q * BMAX), y1 + PAD, bx(q * BMAX), y2 - PAD, 'rgba(159,232,255,0.15)', 1);
+    }
+    this.line(bx(0), y1 + PAD, bx(0), y2 - PAD, 'rgba(159,232,255,0.18)', 1);
+    const range = S.radarRange || 10000;
+    const ry = (r) => y2 - PAD - Math.min(r / range, 1) * W;
+    for (let q = 1; q <= 3; q++) {
+      const yy = ry(range * q / 4);
+      this.line(x1 + PAD, yy, x2 - PAD, yy, 'rgba(159,232,255,0.14)', 1);
+      this.text(`${Math.round(range * q / 4 / 1000)}`, x1 + PAD - 3, yy + 3, 9, 'rgba(159,232,255,0.35)', 'right', 2);
+    }
+    // active-pattern sector ticks on the top edge (fixed scale: narrow = middle)
+    const h = rad.half;
+    for (const s of [-h, h]) this.line(bx(s), y1 + 2, bx(s), y1 + 9, CYAN_DIM, 1.5);
+    // sweep + afterglow: vertical line crossing at the antenna bearing
+    for (let i = 4; i >= 1; i--) {
+      const x = bx(rad.ant - rad.dir * i * 0.06);
+      c.strokeStyle = `rgba(159,232,255,${0.2 * (1 - i / 5)})`; c.lineWidth = 2;
+      c.beginPath(); c.moveTo(x, y1 + PAD); c.lineTo(x, y2 - PAD); c.stroke();
+    }
+    c.strokeStyle = 'rgba(159,232,255,0.6)'; c.lineWidth = 2;
+    c.beginPath(); c.moveTo(bx(rad.ant), y1 + PAD); c.lineTo(bx(rad.ant), y2 - PAD); c.stroke();
+    // paints: last-paint position in the CURRENT heading frame, fading
+    const pp = S.player.position;
+    const hdg = S.player.headingDeg * Math.PI / 180;
+    const cosH = Math.cos(-hdg), sinH = Math.sin(-hdg);
+    for (const [e, ct] of rad.contacts) {
+      if (e === rad.track) continue;                    // live track drawn below
+      const age = rad.t - ct.t;
+      if (age > RADAR_FADE) continue;
+      const dx = ct.x - pp.x, dz = ct.z - pp.z;
+      const rx = dx * cosH - dz * sinH, rz = dx * sinH + dz * cosH;
+      const b = Math.atan2(rx, -rz);
+      if (Math.abs(b) > BMAX) continue;                 // outside the fixed scale
+      const px = bx(b), py = ry(Math.hypot(dx, dz));
+      c.globalAlpha = 1 - age / RADAR_FADE;
+      c.fillStyle = RED; c.shadowColor = RED; c.shadowBlur = 6;
+      c.beginPath(); c.arc(px, py, 3.2, 0, Math.PI * 2); c.fill();
+      c.shadowBlur = 0;
+      // elevation bar beside the blip: above = high bandit, below = low
+      this.line(px + 5, py, px + 11, py, 'rgba(159,232,255,0.7)', 1);
+      const el = Math.max(-1, Math.min(1, (ct.el ?? 0) / (45 * Math.PI / 180)));
+      if (Math.abs(el) > 0.05) {
+        c.strokeStyle = CYAN; c.lineWidth = 1.5;
+        c.beginPath(); c.moveTo(px + 8, py); c.lineTo(px + 8, py - el * 14); c.stroke();
+      }
+      c.globalAlpha = 1;
+    }
+    // TWS priority track: live, boxed, brighter
+    if (rad.track && !rad.track.dying) {
+      const tp = rad.track.position;
+      const dx = tp.x - pp.x, dz = tp.z - pp.z;
+      const rx = dx * cosH - dz * sinH, rz = dx * sinH + dz * cosH;
+      const b = Math.atan2(rx, -rz);
+      if (Math.abs(b) <= BMAX) {
+        const px = bx(b), py = ry(Math.hypot(dx, dz));
+        c.fillStyle = RED; c.shadowColor = RED; c.shadowBlur = 8;
+        c.beginPath(); c.arc(px, py, 4, 0, Math.PI * 2); c.fill();
+        c.shadowBlur = 0;
+        c.strokeStyle = RED; c.lineWidth = 1.25;
+        c.strokeRect(px - 7, py - 7, 14, 14);
+      }
+    }
+    // own marker: small chevron at the bottom-center of the scope
+    c.fillStyle = CYAN; c.shadowColor = CYAN; c.shadowBlur = 6;
+    c.beginPath();
+    c.moveTo(bx(0), y2 - PAD - 7); c.lineTo(bx(0) - 5, y2 - PAD + 1); c.lineTo(bx(0) + 5, y2 - PAD + 1);
+    c.closePath(); c.fill();
+    c.shadowBlur = 0;
+    this.text(rad.pattern === 'wide' ? 'SCAN ±60°' : 'SCAN ±20°', (x1 + x2) / 2, y1 - 8, 10, CYAN_DIM, 'center', 3);
+    this.text(`RNG ${range / 1000}km` + (rad.track ? ' · TWS' : ''), (x1 + x2) / 2, y2 + 16, 10, rad.track ? RED : CYAN_DIM, 'center', 3);
+    c.restore();
+  }
+
   drawRadar(S) {
-    // range is switchable 5/10/20/40 km (M cycles, default 10) — everything
-    // below scales with it, and riding-you missiles pin to the rim beyond it.
-    // REALISTIC (S.radar): the scope mirrors the search radar — sector antenna,
-    // sweep-gated paints that ride at their LAST-PAINT position and fade, and
-    // a live STT spoke while single-target-tracking
+    // bottom-right circle. ARCADE: the classic combined scope (everything,
+    // sealed as-is). REALISTIC (S.radar): the circle is the RWR — a passive
+    // receiver that shows ONLY emitters painting us: enemy fire-control
+    // radars (thin amber rim arc = swept, bold red arc + inward chevron =
+    // hard lock) and ACTIVE seeker heads riding us (red missile symbol +
+    // spoke). Our own radar lives on the square B-scope; nothing silent
+    // ever appears here — no own paints, no IR missiles, no amber ghosts.
     const range = S.radarRange || 10000;
     const cx = this.w - 130, cy = this.h - 130, R = 88;
     const c = this.ctx;
@@ -905,99 +1005,105 @@ export class HUD {
     this.circle(cx, cy, R * 0.55, 'rgba(159,232,255,0.22)', 1);
     this.line(cx - R, cy, cx + R, cy, 'rgba(159,232,255,0.18)', 1);
     this.line(cx, cy - R, cx, cy + R, 'rgba(159,232,255,0.18)', 1);
+    // player heading-up rotation
+    const hdg = S.player.headingDeg * Math.PI / 180;
+    const cosH = Math.cos(-hdg), sinH = Math.sin(-hdg);
+    // threat bearing → canvas angle in the nose-up scope frame
+    const threatAngle = (t) => {
+      const dx = t.position.x - S.player.position.x, dz = t.position.z - S.player.position.z;
+      const rx = dx * cosH - dz * sinH, rz = dx * sinH + dz * cosH;
+      return Math.atan2(rx, -rz) - Math.PI / 2;
+    };
+    const blinkOn = Math.floor(S.time * 5) % 2 === 0;
     if (rad) {
-      // sector antenna: rim lines at ±half + the arc between them (nose-up)
-      const h = rad.half;
-      const a0 = -h - Math.PI / 2, a1 = h - Math.PI / 2;
-      this.line(cx, cy, cx + Math.cos(a0) * R, cy + Math.sin(a0) * R, 'rgba(159,232,255,0.4)', 1);
-      this.line(cx, cy, cx + Math.cos(a1) * R, cy + Math.sin(a1) * R, 'rgba(159,232,255,0.4)', 1);
-      c.strokeStyle = 'rgba(159,232,255,0.4)'; c.lineWidth = 1;
-      c.beginPath(); c.arc(cx, cy, R, a0, a1); c.stroke();
-      // sweep line + afterglow trailing the antenna's motion (TWS: the sweep
-      // NEVER stops — the locked track rides live on top of it)
-      const th = rad.ant - Math.PI / 2;
-      for (let i = 4; i >= 1; i--) {
-        const t2 = th - rad.dir * i * 0.1;
-        c.strokeStyle = `rgba(159,232,255,${0.32 * (1 - i / 5)})`; c.lineWidth = 2;
-        c.beginPath(); c.moveTo(cx, cy);
-        c.lineTo(cx + Math.cos(t2) * R, cy + Math.sin(t2) * R); c.stroke();
+      // ---- RWR: radiating threats only ----
+      for (const e of S.enemies) {
+        if (e.dying || e.dead || !e._rt) continue;      // not radiating at us
+        const th = threatAngle(e);
+        if (e._locked) {
+          c.strokeStyle = RED; c.lineWidth = 3; c.shadowColor = RED; c.shadowBlur = 6;
+          c.beginPath(); c.arc(cx, cy, R - 2, th - 0.16, th + 0.16); c.stroke();
+          c.shadowBlur = 0;
+          if (blinkOn) {
+            const px = cx + Math.cos(th) * (R - 12), py = cy + Math.sin(th) * (R - 12);
+            c.save();
+            c.translate(px, py);
+            c.rotate(th + Math.PI / 2);
+            c.strokeStyle = RED; c.shadowColor = RED; c.shadowBlur = 8; c.lineWidth = 2.5;
+            c.beginPath(); c.moveTo(-9, -7); c.lineTo(0, 4); c.lineTo(9, -7); c.stroke();
+            c.restore();
+            c.shadowBlur = 0;
+          }
+        } else {
+          // swept by a search radar: thin amber arc segment at the rim
+          c.strokeStyle = AMBER; c.lineWidth = 2.5;
+          c.beginPath(); c.arc(cx, cy, R - 2, th - 0.13, th + 0.13); c.stroke();
+        }
       }
-      c.strokeStyle = 'rgba(159,232,255,0.75)'; c.lineWidth = 2;
-      c.beginPath(); c.moveTo(cx, cy);
-      c.lineTo(cx + Math.cos(th) * R, cy + Math.sin(th) * R); c.stroke();
+      // ACTIVE seeker heads riding us (emitting: seeker lit, track intact)
+      for (const ms of S.weapons.missiles) {
+        if (ms.fromPlayer || ms._dead) continue;
+        if (ms.target !== S.player || ms.kind !== 'radar') continue;
+        if (ms.seekerOn === false || ms.blind > 0) continue;
+        const th = threatAngle(ms);
+        const px = cx + Math.cos(th) * R * 0.55, py = cy + Math.sin(th) * R * 0.55;
+        if (blinkOn) {
+          c.save();
+          c.translate(px, py);
+          c.rotate(th + Math.PI / 2);
+          c.fillStyle = RED; c.shadowColor = RED; c.shadowBlur = 8;
+          c.beginPath(); c.moveTo(0, -7); c.lineTo(6, 5); c.lineTo(-6, 5); c.closePath(); c.fill();
+          c.restore();
+          c.shadowBlur = 0;
+          this.line(cx, cy, px, py, 'rgba(255,90,74,0.75)', 1);
+        }
+      }
     } else {
+      // ---- ARCADE: the classic combined scope ----
       // sweep
       const sw = (S.time * 1.5) % (Math.PI * 2);
       c.strokeStyle = 'rgba(159,232,255,0.5)'; c.lineWidth = 2;
       c.beginPath(); c.moveTo(cx, cy);
       c.lineTo(cx + Math.cos(sw - Math.PI / 2) * R, cy + Math.sin(sw - Math.PI / 2) * R); c.stroke();
-    }
-    // player heading-up rotation
-    const hdg = S.player.headingDeg * Math.PI / 180;
-    const cosH = Math.cos(-hdg), sinH = Math.sin(-hdg);
-    const blip = (wx, wz, color, r, clampRim = false) => {
-      let dx = wx - S.player.position.x, dz = wz - S.player.position.z;
-      const rx = dx * cosH - dz * sinH, rz = dx * sinH + dz * cosH;
-      let px = cx + (rx / range) * R, py = cy + (rz / range) * R;
-      const d = Math.hypot(px - cx, py - cy);
-      if (d > R - 4) {
-        if (!clampRim) return null;
-        const k = (R - 4) / d;   // beyond range: pin to the rim, keep the bearing
-        px = cx + (px - cx) * k; py = cy + (py - cy) * k;
-      }
-      c.fillStyle = color; c.shadowColor = color; c.shadowBlur = 6;
-      c.beginPath(); c.arc(px, py, r, 0, Math.PI * 2); c.fill();
-      c.shadowBlur = 0;
-      return [px, py];
-    };
-    if (rad) {
-      // radar paints only: each blip sits at its LAST-PAINT position (a radar
-      // scope does not know where the contact went) and fades until the next
-      // sweep crosses it; rim-pinned so far contacts keep their bearing
-      for (const [e, ct] of rad.contacts) {
-        if (e === rad.track) continue;         // drawn live below
-        const age = rad.t - ct.t;
-        if (age > RADAR_FADE) continue;
-        c.globalAlpha = 1 - age / RADAR_FADE;
-        blip(ct.x, ct.z, RED, 3.2, true);
-        c.globalAlpha = 1;
-      }
-      // TWS priority track: the locked contact is live, brighter, and rides
-      // a spoke to center
-      if (rad.track && !rad.track.dying) {
-        const pos = blip(rad.track.position.x, rad.track.position.z, RED, 4, true);
-        if (pos) this.line(cx, cy, pos[0], pos[1], 'rgba(255,90,74,0.75)', 1.2);
-      }
-    } else {
+      const blip = (wx, wz, color, r, clampRim = false) => {
+        let dx = wx - S.player.position.x, dz = wz - S.player.position.z;
+        const rx = dx * cosH - dz * sinH, rz = dx * sinH + dz * cosH;
+        let px = cx + (rx / range) * R, py = cy + (rz / range) * R;
+        const d = Math.hypot(px - cx, py - cy);
+        if (d > R - 4) {
+          if (!clampRim) return null;
+          const k = (R - 4) / d;   // beyond range: pin to the rim, keep the bearing
+          px = cx + (px - cx) * k; py = cy + (py - cy) * k;
+        }
+        c.fillStyle = color; c.shadowColor = color; c.shadowBlur = 6;
+        c.beginPath(); c.arc(px, py, r, 0, Math.PI * 2); c.fill();
+        c.shadowBlur = 0;
+        return [px, py];
+      };
       for (const e of S.enemies) if (!e.dying) blip(e.position.x, e.position.z, RED, 3.2);
-    }
-    const blinkOn = Math.floor(S.time * 5) % 2 === 0;
-    for (const ms of S.weapons.missiles) {
-      if (ms.fromPlayer) continue;
-      // riding the player: bigger RED blinking dot, pinned to the rim when
-      // beyond range — the amber dots are someone else's problem
-      const riding = !ms._dead && ms.target === S.player;
-      // a radar shot still HARD ON US (seeker track intact — not notched,
-      // chaffed or terrain-masked) draws a flashing thin yellow spoke to
-      // the center, in sync with the dot's blink
-      const locked = riding && ms.kind === 'radar' && !(ms.blind > 0);
-      let pos = null;
-      if (riding) {
-        if (blinkOn) pos = blip(ms.pos.x, ms.pos.z, RED, 2.8, true);
-      } else {
-        pos = blip(ms.pos.x, ms.pos.z, AMBER, 2);
+      for (const ms of S.weapons.missiles) {
+        if (ms.fromPlayer) continue;
+        // riding the player: bigger RED blinking dot, pinned to the rim when
+        // beyond range — the amber dots are someone else's problem
+        const riding = !ms._dead && ms.target === S.player;
+        // a radar shot still HARD ON US (seeker track intact — not notched,
+        // chaffed or terrain-masked) draws a flashing thin yellow spoke to
+        // the center, in sync with the dot's blink
+        const locked = riding && ms.kind === 'radar' && !(ms.blind > 0);
+        let pos = null;
+        if (riding) {
+          if (blinkOn) pos = blip(ms.pos.x, ms.pos.z, RED, 2.8, true);
+        } else {
+          pos = blip(ms.pos.x, ms.pos.z, AMBER, 2);
+        }
+        if (locked && blinkOn && pos) this.line(cx, cy, pos[0], pos[1], AMBER, 1);
       }
-      if (locked && blinkOn && pos) this.line(cx, cy, pos[0], pos[1], AMBER, 1);
     }
     // own marker (points up)
     c.fillStyle = CYAN; c.shadowColor = CYAN; c.shadowBlur = 8;
     c.beginPath(); c.moveTo(cx, cy - 7); c.lineTo(cx - 5, cy + 5); c.lineTo(cx + 5, cy + 5); c.closePath(); c.fill();
     c.shadowBlur = 0;
-    this.text(`RNG ${range / 1000}km`, cx, cy + R + 16, 11, CYAN_DIM, 'center', 4);
-    if (rad) {
-      this.text((rad.pattern === 'wide' ? 'SCAN ±60°' : 'SCAN ±20°') + (rad.track ? ' · TWS' : ''),
-        cx, cy + R + 30, 11, rad.track ? RED : CYAN_DIM, 'center', 4);
-    }
+    this.text(rad ? 'RWR' : `RNG ${range / 1000}km`, cx, cy + R + 16, 11, CYAN_DIM, 'center', 4);
     c.restore();
   }
 

@@ -98,6 +98,14 @@ export class RadarSensor {
     // "in sector" by the slop gate yet never crossed by the clamped sweep
     const atHi = this.ant >= h - 1e-9, atLo = this.ant <= -h + 1e-9;
     const pp = player.position;
+    const paint = (e) => {
+      const dx = e.position.x - pp.x, dz = e.position.z - pp.z;
+      const hd = Math.hypot(dx, dz) || 1;
+      this.contacts.set(e, {
+        t: this.t, x: e.position.x, z: e.position.z,
+        el: Math.atan2(e.position.y - pp.y, hd),   // elevation at paint time (B-scope bar)
+      });
+    };
     for (const e of enemies) {
       if (!live(e)) continue;
       if (e.position.distanceTo(pp) > RADAR_SCAN_RANGE) continue;
@@ -106,15 +114,17 @@ export class RadarSensor {
       if ((b >= lo && b <= hi)
         || (atHi && b >= lo && b <= h + RIM_SLOP)
         || (atLo && b >= -h - RIM_SLOP && b <= hi)) {
-        this.contacts.set(e, { t: this.t, x: e.position.x, z: e.position.z });
+        paint(e);
       }
     }
     // priority track refreshes LIVE every frame — sweep position irrelevant
     if (track) {
       const p = track.position;
+      const dx = p.x - pp.x, dz = p.z - pp.z;
+      const hd = Math.hypot(dx, dz) || 1;
       const c = this.contacts.get(track);
-      if (c) { c.t = this.t; c.x = p.x; c.z = p.z; }
-      else this.contacts.set(track, { t: this.t, x: p.x, z: p.z });
+      if (c) { c.t = this.t; c.x = p.x; c.z = p.z; c.el = Math.atan2(p.y - pp.y, hd); }
+      else this.contacts.set(track, { t: this.t, x: p.x, z: p.z, el: Math.atan2(p.y - pp.y, hd) });
     }
     // prune: dead hosts and paints long gone stale
     for (const [e, c] of this.contacts) {

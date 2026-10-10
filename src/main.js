@@ -125,8 +125,10 @@ const killCtx = {
   weapons,
   // RWR voice: the 15 km picket chirp is the only edge event left — sweep,
   // lock and launch are persistent states the audio loop rings from
-  // enemies.rwrSwept/rwrLocked + the inbound flags each frame
-  rwrNewContact: () => audio.rwrNewContact(),
+  // enemies.rwrSwept/rwrLocked + the inbound flags each frame. REALISTIC mode
+  // silences the picket entirely: a real RWR is a passive receiver that only
+  // speaks when an emitter PAINTS you — no "an aircraft is nearby" chirps
+  rwrNewContact: () => { if (!G.mslRealistic) audio.rwrNewContact(); },
   // enemy countermeasures flow through here (the player's own flare press
   // lives in the input block): one throttled event per defensive burst
   deployFlares: (owner, n) => {
