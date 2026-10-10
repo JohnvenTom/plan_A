@@ -63,21 +63,25 @@ const LEVELS = 6;
 const GRID = 128;          // cells per side
 const VERTS = GRID + 1;    // 129
 const BASE_CELL = 25;      // metres at level 0
-// hole (covered by the finer level): cells 33..94 inclusive in both axes —
-// the finer level spans ±32 cells of half size from a centre that can be
-// half a cell offset, so its guaranteed coverage reaches 31.5 cells; the
-// coarse frame resumes exactly outside it
-const HOLE0 = 33, HOLE1 = 94;
-const HOLE_V0 = HOLE0, HOLE_V1 = HOLE1 + 1;   // hole boundary vertex lines 33..95
+// hole (covered by the finer level), LEVELS >= 1 only: cells 35..92 inclusive
+// in both axes. The finer level spans ±32 cells of half size from a centre
+// that can be half a cell offset, so its guaranteed coverage reaches 31.5
+// cells; the hole edge at 29 leaves a 2.5-cell overlap hidden UNDER the fine
+// mesh — enough to also swallow a frame or two of fine-level recenter lag.
+// Level 0 has no finer level: it renders as a FULL square (a hole there
+// would look straight through to the ocean plane right under the player).
+const HOLE0 = 35, HOLE1 = 92;
+const HOLE_V0 = HOLE0, HOLE_V1 = HOLE1 + 1;   // hole boundary vertex lines 35..93
 
 class ClipLevel {
   constructor(index, material, scene) {
     this.cell = BASE_CELL * (1 << index);
+    this.hasHole = index > 0;             // only coarser levels defer to a finer one
     this.gx = 0; this.gz = 0;             // origin cell: world x of vertex i = (gx+i)*cell
     this.pending = null;                  // { type:'shift', dgx, dgz } | { type:'refill', cursor }
     this.ready = false;                   // first full fill done (mesh hidden until then)
 
-    // ---- vertex layout: main grid, then 4 outer + 4 inner skirt strips ----
+    // ---- vertex layout: main grid, then 4 outer (+ 4 inner) skirt strips ----
     const nMain = VERTS * VERTS;
     const strips = [];
     const pushStrip = (fixed, isRow, from, to) => {
@@ -91,11 +95,14 @@ class ClipLevel {
     pushStrip(0, true, 0, GRID);           // north outer edge (j=0)
     pushStrip(GRID, true, 0, GRID);        // south outer edge
     const outerStrips = strips.splice(0, 4);
-    pushStrip(HOLE_V0, false, HOLE_V0, HOLE_V1);   // hole west line
-    pushStrip(HOLE_V1, false, HOLE_V0, HOLE_V1);
-    pushStrip(HOLE_V0, true, HOLE_V0, HOLE_V1);
-    pushStrip(HOLE_V1, true, HOLE_V0, HOLE_V1);
-    const innerStrips = strips.splice(0, 4);
+    let innerStrips = [];
+    if (this.hasHole) {
+      pushStrip(HOLE_V0, false, HOLE_V0, HOLE_V1);   // hole west line
+      pushStrip(HOLE_V1, false, HOLE_V0, HOLE_V1);
+      pushStrip(HOLE_V0, true, HOLE_V0, HOLE_V1);
+      pushStrip(HOLE_V1, true, HOLE_V0, HOLE_V1);
+      innerStrips = strips.splice(0, 4);
+    }
     // skirt vert -> { source main vert, drop }: laid out in strip order right
     // after the main grid so walls are consecutive pairs
     this.skirtMap = [];
@@ -133,14 +140,15 @@ class ClipLevel {
     scene.add(this.mesh);
   }
 
-  // frame indices (hole removed) + skirt walls. Frame winding faces +Y and
-  // splits cells along the same B–D diagonal as the collision interpolator;
-  // skirt quads are emitted with BOTH windings so a wall can never vanish.
+  // frame indices (hole removed on levels >= 1) + skirt walls. Frame winding
+  // faces +Y and splits cells along the same B–D diagonal as the collision
+  // interpolator; skirt quads are emitted with BOTH windings so a wall can
+  // never vanish.
   _buildIndex(nMain) {
     const idx = [];
     for (let j = 0; j < GRID; j++)
       for (let i = 0; i < GRID; i++) {
-        if (i >= HOLE0 && i <= HOLE1 && j >= HOLE0 && j <= HOLE1) continue;
+        if (this.hasHole && i >= HOLE0 && i <= HOLE1 && j >= HOLE0 && j <= HOLE1) continue;
         const A = j * VERTS + i, D = A + 1, B = A + VERTS, C = B + 1;
         idx.push(A, B, D, B, C, D);
       }
