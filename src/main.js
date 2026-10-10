@@ -545,7 +545,15 @@ function update(dt) {
 
     // drain enemy-manager events into HUD announcements (+ timeline ticks)
     for (const ev of enemies.events) {
-      if (ev.type === 'wave') { recorder.ev('wave', { n: ev.wave }); hud.announce(`WAVE ${ev.wave}`, `HOSTILES INBOUND — ${ev.count}`, 3.0, 'wave'); }
+      if (ev.type === 'wave') {
+        recorder.ev('wave', { n: ev.wave });
+        // border raids announce WHERE they crossed: bearing is a heading
+        // tape value, so "fly that heading" takes you straight to them
+        const sub = ev.bearing !== undefined
+          ? `入侵方位 ${String(Math.round(ev.bearing)).padStart(3, '0')}° · 距离 ${Math.round(ev.dist)}km — HOSTILES ×${ev.count}`
+          : `HOSTILES INBOUND — ${ev.count}`;
+        hud.announce(`WAVE ${ev.wave}`, sub, ev.bearing !== undefined ? 4.5 : 3.0, 'wave');
+      }
       else if (ev.type === 'waveClear') { recorder.ev('waveClear', { n: ev.wave }); hud.announce('WAVE CLEAR', 'ALL HOSTILES DOWN — NEXT WAVE INBOUND', 2.6, 'info'); }
       else if (ev.type === 'ace') { recorder.ev('ace'); hud.announce('ACE ENGAGED', 'HIGH AGILITY — DOUBLE REWARD', 3.2, 'wave'); G.aceCut = 1.6; }
     }

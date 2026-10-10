@@ -7,6 +7,7 @@ import { GROUND_CLEAR_AGL } from '../core/utils.js';
 import { buildJet } from './jet.js';
 import { FlightBody } from './flightmodel.js';
 import { terrainSurfaceAt, SEA_LEVEL } from '../world/terrain.js';
+import { activeMap } from '../world/maps.js';
 
 const _aim = new THREE.Vector3();
 const _tmp = new THREE.Vector3();
@@ -335,7 +336,9 @@ class Enemy {
         const w = Math.sin(this.stateTime * this.jinkFreq + this.jinkPhase);
         _aim.addScaledVector(_fwd, w * 0.28).addScaledVector(_tmp, Math.sin(this.stateTime * this.jinkFreq * 0.7) * 0.14).normalize();
       }
-      targetSpeed = dist < 700 ? 230 : dist < 1500 ? 290 : 380;   // close the gap hard, then settle
+      // border spawns are far out: sprint at full military power until the
+      // fight is near, then the normal close-in speed ladder applies
+      targetSpeed = dist > 15000 ? 420 : dist < 700 ? 230 : dist < 1500 ? 290 : 380;
     } else {
       if (b.pos.distanceTo(this.wp) < 700 || this.stateTime > 12) { this.pickWaypoint(player.position); this.stateTime = 0; }
       _aim.copy(this.wp).sub(b.pos).normalize();
@@ -352,7 +355,9 @@ class Enemy {
     // wounded airframe: the AI also SETTLES for a lower speed it can sustain
     const tgtSpd = targetSpeed * (0.75 + 0.25 * (this.hpR ?? 1));
     b.throttle = clamp(0.5 + (tgtSpd - b.airspeed) * 0.008, 0.15, 1);
-    b.burner = 0;
+    // border raids burn afterburner on the long inbound leg (military power
+    // alone tops out ~250 m/s level — the sprint needs the burner)
+    b.burner = (this.state === 'pursue' && dist > 15000) ? 1 : 0;
     b.update(dt);
 
     // live plane flew into the dirt (avoidance can't always save it): ride the
@@ -513,21 +518,58 @@ export class EnemyManager {
     this.wave++;
     const count = Math.min(this.wave, 7);   // wave 1: a lone contact, then +1 per wave
     const aceIdx = this.wave >= 3 && Math.random() < 0.4 ? Math.floor(Math.random() * count) : -1;
+
+    // edge maps (80 km): raids CROSS THE BORDER — a random point on the rim
+    // (rolled 1.5 km outside so contacts visually enter the map), re-rolled
+    // while it would pop up inside 8 km of the player. Circle maps (classic)
+    // keep the player-centered 10–13 km ring so old pacing is untouched.
+    let origin = null, bearing = 0, dist = 0;
+    if (activeMap.combat.type === 'edge') {
+      const rim = activeMap.combat.half + 1500;
+      for (let tries = 0; tries < 10 && origin === null; tries++) {
+        const side = Math.floor(Math.random() * 4);
+        const u = Math.random() * 2 - 1;
+        const p = side === 0 ? [ rim, u * rim]
+                : side === 1 ? [-rim, u * rim]
+                : side === 2 ? [u * rim,  rim]
+                :             [u * rim, -rim];
+        if (Math.hypot(p[0] - player.position.x, p[1] - player.position.z) >= 8000) origin = p;
+      }
+      if (origin === null) {   // rim-hugging player: send them from the far corner
+        origin = [-Math.sign(player.position.x || 1) * rim, -Math.sign(player.position.z || 1) * rim];
+      }
+      bearing = (Math.atan2(origin[0] - player.position.x, origin[1] - player.position.z) * 180 / Math.PI + 360) % 360;
+      dist = Math.hypot(origin[0] - player.position.x, origin[1] - player.position.z) / 1000;
+    }
+
     for (let i = 0; i < count; i++) {
-      const a = Math.random() * Math.PI * 2;
-      const r = 10000 + Math.random() * 3000;   // spawn beyond 10 km: contacts
-      const pos = new THREE.Vector3(             // appear on radar, not on top of you
-        player.position.x + Math.cos(a) * r,
-        clamp(player.position.y + (Math.random() - 0.5) * 1200, 1400, 5200),
-        player.position.z + Math.sin(a) * r
-      );
-      const e = new Enemy(this.scene, pos, Math.random() * Math.PI * 2, this.wave, i === aceIdx);
+      let pos, heading;
+      if (origin) {
+        pos = new THREE.Vector3(
+          origin[0] + (Math.random() - 0.5) * 1200,                  // spread along the border
+          clamp(player.position.y + (Math.random() - 0.5) * 1200, 1400, 5200),
+          origin[1] + (Math.random() - 0.5) * 1200
+        );
+        // nose inbound (this sim's heading convention is atan2(−dx, −dz):
+        // forward = −Z rotated about Y, same as startTraining's spawn math)
+        heading = Math.atan2(-(player.position.x - pos.x), -(player.position.z - pos.z));
+      } else {
+        const a = Math.random() * Math.PI * 2;
+        const r = 10000 + Math.random() * 3000;   // spawn beyond 10 km: contacts
+        pos = new THREE.Vector3(                  // appear on radar, not on top of you
+          player.position.x + Math.cos(a) * r,
+          clamp(player.position.y + (Math.random() - 0.5) * 1200, 1400, 5200),
+          player.position.z + Math.sin(a) * r
+        );
+        heading = Math.random() * Math.PI * 2;
+      }
+      const e = new Enemy(this.scene, pos, heading, this.wave, i === aceIdx);
       // echelon-right formation offsets behind the first-spawned leader
       e.formSlot = i === 0 ? null : new THREE.Vector3(i * 90, -i * 14, i * 110);
       this.enemies.push(e);
     }
     this.waveActive = true;
-    this.events.push({ type: 'wave', wave: this.wave, count });
+    this.events.push({ type: 'wave', wave: this.wave, count, bearing, dist });
     if (aceIdx >= 0) this.events.push({ type: 'ace' });
   }
 

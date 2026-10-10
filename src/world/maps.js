@@ -216,8 +216,10 @@ export const MAPS = {
     seaScan: { x: 20000, z: -17000, rMin: 4000, rMax: 9000 },
     editorHalf: 40000,
     // spawn high over the island arc, nose west toward the continent — kept
-    // >8 km from every rim fortress so sorties start quiet (test-enforced)
-    spawn: { x: 27000, y: 2600, z: -15500, heading: Math.atan2(-6500, -1000), speed: 240 },
+    // >8 km from every rim fortress so sorties start quiet (test-enforced).
+    // heading convention is atan2(−dx, −dz) (forward = −Z), so facing the
+    // arc means negating the (−6500, −1000) direction vector
+    spawn: { x: 27000, y: 2600, z: -15500, heading: Math.atan2(6500, 1000), speed: 240 },
   },
 };
 
