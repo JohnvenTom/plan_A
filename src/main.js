@@ -965,6 +965,7 @@ function renderHUD(pipRect) {
         _v2.z < 1, Math.round(f.t * 1000) / 1000, f.k];
     }),
     blastGhosts: settings.blastGhosts,
+    fpMark: settings.flightPathMark,
     blastFlare: settings.blastFlare,
     aceCut: G.aceCut > 0,
     cineBars: G.cineBars ?? 0,
@@ -1203,6 +1204,7 @@ const bindRows = document.getElementById('bind-rows');
 // ---------- gameplay options (settings section of the same panel) ----------
 // toggle: { key, label, on, off }  |  slider: { key, label, kind: 'slider', min, max, step, fmt }
 const OPTIONS = [
+  { key: 'flightPathMark', label: '航迹标记 — 运动方向指示线(速度矢量圈)', on: '开启', off: '关闭' },
   { key: 'nearMissWhip', label: '近失弹甩镜 — 导弹掠过时镜头甩动+黑边', on: '开启', off: '关闭' },
   { key: 'blastFlare', label: '变形光条 — 爆炸与己方导弹的横向光晕', on: '开启', off: '关闭' },
   { key: 'blastGhosts', label: '爆炸鬼像链 — 大爆炸的镜头彩圈反射', on: '开启', off: '关闭' },
@@ -1211,7 +1213,7 @@ const OPTIONS = [
   { key: 'volRwr', label: 'RWR 告警音量', kind: 'slider', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
   { key: 'volEngine', label: '引擎与风声', kind: 'slider', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
 ];
-const settings = { nearMissWhip: true, blastFlare: true, blastGhosts: true, volMaster: 1, volSfx: 1, volRwr: 0.7, volEngine: 1, mslRealistic: false };      // defaults
+const settings = { flightPathMark: false, nearMissWhip: true, blastFlare: true, blastGhosts: true, volMaster: 1, volSfx: 1, volRwr: 0.7, volEngine: 1, mslRealistic: false };      // defaults
 try { Object.assign(settings, JSON.parse(localStorage.getItem('sb_opts') || '{}')); } catch { /* fresh start */ }
 const saveSettings = () => { try { localStorage.setItem('sb_opts', JSON.stringify(settings)); } catch { /* private mode */ } };
 window.__settings = settings;                 // debug hook

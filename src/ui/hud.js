@@ -531,17 +531,20 @@ export class HUD {
   drawReticle(S) {
     const c = this.ctx;
     // flight path marker: the TRUE velocity vector — with real aerodynamics the
-    // nose and the flight path separate; this marker lags the boresight by AOA
-    const fp = S.player.position.clone()
-      .addScaledVector(_hv.copy(S.player.vel).normalize(), 2600);
-    const s = this.proj(fp, S.camera);
-    const fpOn = !s.behind && s.x > 20 && s.x < this.w - 20 && s.y > 20 && s.y < this.h - 20;
-    if (fpOn) {
-      this.circle(s.x, s.y, 9, CYAN, 2);
-      this.line(s.x - 17, s.y, s.x - 9, s.y, CYAN, 2);
-      this.line(s.x + 9, s.y, s.x + 17, s.y, CYAN, 2);
-      this.line(s.x, s.y - 17, s.x, s.y - 9, CYAN, 2);
-      this.line(s.x, s.y + 9, s.x, s.y + 17, CYAN, 2);
+    // nose and the flight path separate; this marker lags the boresight by AOA.
+    // OPTIONAL (settings toggle, default OFF): pure situational aid
+    if (S.fpMark) {
+      const fp = S.player.position.clone()
+        .addScaledVector(_hv.copy(S.player.vel).normalize(), 2600);
+      const s = this.proj(fp, S.camera);
+      const fpOn = !s.behind && s.x > 20 && s.x < this.w - 20 && s.y > 20 && s.y < this.h - 20;
+      if (fpOn) {
+        this.circle(s.x, s.y, 9, CYAN, 2);
+        this.line(s.x - 17, s.y, s.x - 9, s.y, CYAN, 2);
+        this.line(s.x + 9, s.y, s.x + 17, s.y, CYAN, 2);
+        this.line(s.x, s.y - 17, s.x, s.y - 9, CYAN, 2);
+        this.line(s.x, s.y + 9, s.x, s.y + 17, CYAN, 2);
+      }
     }
 
     // nose boresight cross: where the fuselage actually points — it chases
