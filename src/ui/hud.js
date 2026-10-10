@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import { clamp, pad, machOf } from '../core/utils.js';
 import { cornerSpeedKMH } from '../units/flightmodel.js';
-import { MSL_WARM_TIME, SEEKER_ACT_R } from '../units/weapons.js';
+import { MSL_WARM_TIME, SEEKER_ACT_R, AMMO_REGEN } from '../units/weapons.js';
 import { RADAR_FADE } from '../units/radar.js';
 import { activeMap } from '../world/maps.js';
 
@@ -1023,19 +1023,40 @@ export class HUD {
     this.text('MSL', x, y + 42, 12, CYAN_DIM);
     const rows = [['ir', 'IR', AMBER], ['radar', 'RDR', RED]];
     let yy = y + 66;
+    const nowS = performance.now() / 1000;   // drawStatus carries no dt
     for (const [k, label, col] of rows) {
       const active = w.mslKind === k;
       if (active) this.strokeRect(x - 5, yy - 13, 240, 25, CYAN, 1);
       this.text(label, x, yy, 12, active ? col : CYAN_DIM);
+      // completion glow: a freshly regenerated missile flares for 0.4 s
+      this._mslPrev ?? (this._mslPrev = {});
+      this._mslGlow ?? (this._mslGlow = {});
+      if (this._mslPrev[k] !== undefined && w.ammo[k] > this._mslPrev[k]) this._mslGlow[k] = nowS;
+      this._mslPrev[k] = w.ammo[k];
+      const glow = Math.max(0, Math.min(1, 0.4 - (nowS - (this._mslGlow[k] ?? -9))));
       for (let i = 0; i < w.ammoMax[k]; i++) {
         const mx = x + 40 + i * 15;
         if (i < w.ammo[k]) {
-          c.fillStyle = col; c.shadowColor = col; c.shadowBlur = active ? 6 : 2;
+          const fresh = i === w.ammo[k] - 1 ? glow : 0;
+          c.fillStyle = col; c.shadowColor = col; c.shadowBlur = (active ? 6 : 2) + fresh * 14;
           c.beginPath(); c.moveTo(mx, yy + 7); c.lineTo(mx + 4.5, yy - 6); c.lineTo(mx + 9, yy + 7); c.closePath(); c.fill();
           c.shadowBlur = 0;
         } else {
           c.strokeStyle = 'rgba(255,200,102,0.22)'; c.lineWidth = 1;
           c.strokeRect(mx, yy - 6, 9, 13);
+          // reload charge: the NEXT slot fills bottom-up with the pool color,
+          // its height the exact fraction of the regen cycle
+          if (i === w.ammo[k] && w.ammo[k] < w.ammoMax[k] && w.ammoRegen) {
+            const frac = Math.min(1, Math.max(0, w.ammoRegen[k] / AMMO_REGEN[k]));
+            if (frac > 0.01) {
+              c.save();
+              c.globalAlpha = 0.25 + 0.3 * frac;
+              c.fillStyle = col;
+              const hgt = 13 * frac;
+              c.fillRect(mx, yy + 7 - hgt, 9, hgt);
+              c.restore();
+            }
+          }
         }
       }
       this.text(`${w.ammo[k]}`, x + 40 + w.ammoMax[k] * 15 + 10, yy, 12, active ? col : CYAN_DIM);

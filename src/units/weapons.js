@@ -34,9 +34,9 @@ const _q = new THREE.Quaternion();
 const _m = new THREE.Matrix4();
 const UP = new THREE.Vector3(0, 1, 0);
 
-// seeker warmup machine (both kinds): cold --(SPACE/ALT)--> warming (0.7 s)
+// seeker warmup machine (both kinds): cold --(SPACE/ALT)--> warming (0.4 s)
 // --(auto)--> hot (8 s hold window) --> cold. ALT is the ONLY cancel.
-const MSL_WARM_TIME = 0.7;
+const MSL_WARM_TIME = 0.4;
 export { MSL_WARM_TIME };
 const MSL_HOT_WINDOW = 8.0;
 // 120° front cone (±60° off the FUSELAGE axis, not the sight): radar locks
@@ -55,7 +55,7 @@ const LOCK_RANGE = 20000;
 const SEEKER_ACT_R = 20000;                        // real AR round: own antenna goes ACTIVE at 20 km
 export { SEEKER_ACT_R };
 const SEEKER_RANGE = 5200;                        // IR seeker heat detection
-const AMMO_REGEN = { ir: 5.5, radar: 8 };         // s per missile, per pool
+export const AMMO_REGEN = { ir: 5.5, radar: 8 }; // s per missile, per pool
 
 // ---------- realistic-mode bodies (B calibration) ----------
 // boost/sustain thrust (m/s^2) and durations, drag factor k (a_drag = k*rho*v^2
@@ -143,7 +143,7 @@ export class Weapons {
     this.lockState = { target: null, locked: false };
     this.mslKind = 'ir';       // selected missile type: 'ir' | 'radar' (R key)
     this.manualTarget = null;  // X-key head-sight lock target (instant)
-    // seeker warmup: 'cold' | 'warming' (t counts up to 1 s) | 'hot' (t = window left)
+    // seeker warmup: 'cold' | 'warming' (t counts up to MSL_WARM_TIME) | 'hot' (t = window left)
     this.warm = { state: 'cold', t: 0 };
     this.irSeek = null;        // IR seeker bite: nearest heat source in basket
     this.lockConeDot = null;   // lock target's nose-cone dot (HUD edge warning)
