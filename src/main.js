@@ -136,9 +136,10 @@ const killCtx = {
     }
   },
   onKill(enemy, crashed) {
-    G.kills++; G.score += (250 + enemies.wave * 25) * (enemy.ace ? 2 : 1);
+    const killMult = waveMult(enemies.wave) * (enemy.ace ? 2 : 1);
+  G.kills++; G.score += Math.round((250 + enemies.wave * 25) * killMult);
     recorder.ev('kill', { victim: recorder.trackIdOf(enemy), ace: enemy.ace }, enemy.position);
-    hud.announce('TARGET DESTROYED', '', 2.2, 'kill', false, { mult: enemy.ace ? 2 : 1, score: 250 + enemies.wave * 25 });
+    hud.announce('TARGET DESTROYED', '', 2.2, 'kill', false, { mult: Math.round(killMult * 10) / 10, score: 250 + enemies.wave * 25 });
     audio.kill();
     effects.ring?.(enemy.position, 1.3);
     if (G.training && enemy.respSpec) enemies.queueRespawn(enemy.respSpec);
@@ -156,6 +157,10 @@ function flashKill() {
     flashEl.style.opacity = '0';
   });
 }
+
+// wave multiplier: +15% per wave past the first, capped at x3 (wave 15+);
+// multiplies EVERY combat award on top of the ace x2
+const waveMult = (w) => Math.min(3, 1 + 0.15 * Math.max(0, (w || 1) - 1));
 
 function resetAll() {
   G.kills = 0; G.score = 0; G.time = 0; G.deathTimer = 0; G.paused = false; G.training = false;
@@ -565,8 +570,9 @@ function update(dt) {
         recorder.ev('damage', { w: ev.w, dmg: ev.dmg }, ev.pos);
       } else if (ev.type === 'intercept') {
         recorder.ev('intercept', {}, ev.pos);
-        G.score += 100;
-        hud.announce('MISSILE INTERCEPTED', '', 2.0, 'kill', false, { mult: 1, score: 100 });
+        const intMult = waveMult(enemies.wave);
+        G.score += Math.round(100 * intMult);
+        hud.announce('MISSILE INTERCEPTED', '', 2.0, 'kill', false, { mult: Math.round(intMult * 10) / 10, score: 100 });
         audio.kill();
       } else if (ev.type === 'seekerAct') {
         // our AR round's own antenna lit up: the shot is truly leave-alone now
@@ -944,7 +950,7 @@ function renderHUD(pipRect) {
     enemies: enemies.enemies,
     weapons,
     radar: G.mslRealistic ? radar : null,
-    kills: G.kills, score: G.score, wave: enemies.wave,
+    kills: G.kills, score: G.score, wave: enemies.wave, waveMult: waveMult(enemies.wave),
     time: G.time,
     clock, weatherName: weather.name,
     radarRange: G.radarRange,

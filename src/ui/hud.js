@@ -1068,6 +1068,21 @@ export class HUD {
     this.text(`KILLS ${S.kills}`, this.w - 46, 40, 16, CYAN, 'right');
     this.text(`WAVE ${S.wave}`, this.w - 46, 64, 13, CYAN_DIM, 'right');
     this.text(`SCORE ${S.score}`, this.w - 46, 88, 13, CYAN_DIM, 'right');
+    // wave multiplier badge: sits under the score readout, flashes for a beat
+    // whenever a new wave raises it (hidden in training — no waves there)
+    if (!S.training && S.waveMult !== undefined && S.waveMult > 1) {
+      const now = performance.now() / 1000;
+      if (S.waveMult > (this._wmPrev ?? 0)) this._wmFlashT = now;
+      this._wmPrev = S.waveMult;
+      // wall-clock decay: drawStatus carries no dt
+      const fl = this._wmFlashT ? Math.min(1, Math.max(0, 1.2 - (now - this._wmFlashT)) / 0.6) : 0;
+      const col = fl > 0 ? AMBER : 'rgba(255,200,102,0.55)';
+      c.save();
+      c.globalAlpha = 0.75 + fl * 0.25;
+      if (fl > 0) { c.shadowColor = AMBER; c.shadowBlur = 10 * fl; }
+      this.text(`MULT x${Math.round(S.waveMult * 10) / 10}`, this.w - 46, 104, 12, col, 'right', 6 + fl * 2);
+      c.restore();
+    }
     // mission clock + weather
     if (S.clock) this.text(`${S.clock} · ${S.weatherName || ''}`, this.w - 46, 112, 13, CYAN_DIM, 'right');
   }
@@ -1214,7 +1229,7 @@ export class HUD {
           c.restore();
         }
         const mult = `x${m.reward.mult}`;
-        const score = `+${m.reward.score * m.reward.mult}`;
+        const score = `+${Math.round(m.reward.score * m.reward.mult)}`;
         const rowY = lineY + 14;
         const drum = (str, x0, start) => {
           c.font = `800 17px "Saira ExtraCondensed", Consolas, monospace`;
