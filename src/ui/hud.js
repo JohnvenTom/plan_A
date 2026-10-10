@@ -7,11 +7,11 @@ import * as THREE from 'three';
 import { clamp, pad, machOf } from '../core/utils.js';
 import { cornerSpeedKMH } from '../units/flightmodel.js';
 import { MSL_WARM_TIME } from '../units/weapons.js';
+import { activeMap } from '../world/maps.js';
 
 const CYAN = '#9fe8ff';
 const CYAN_DIM = 'rgba(159,232,255,0.5)';
 const RED = '#ff5a4a';
-const COMBAT_RADIUS_M = 14000;    // keep in sync with player.js
 const AMBER = '#ffc866';
 const _hv = new THREE.Vector3();
 const _hv2 = new THREE.Vector3();
@@ -1056,8 +1056,11 @@ export class HUD {
       this.text('DAMAGE CRITICAL', cx, this.h / 2 + 180, 18, RED, 'center');
     }
     // approaching the map rim: amber heads-up BEFORE the batteries open up
-    // (the training range is free flight — no rim, no batteries)
-    if (!S.training && !S.player.outOfArea && S.player.edgeDist < COMBAT_RADIUS_M * 0.15) {
+    // (the training range is free flight — no rim, no batteries). Circle
+    // maps warn at 15% of the ring radius; whole-map (edge) maps at 3 km
+    // from the box rim
+    if (!S.training && !S.player.outOfArea
+      && S.player.edgeDist < (activeMap.combat.type === 'edge' ? 3000 : activeMap.combat.r * 0.15)) {
       const d = Math.max(0, S.player.edgeDist);
       if (blink) this.text('接近战区边界 — 建议转向', cx, 120, 17, AMBER, 'center', 8);
       this.text(`EDGE ${Math.round(d / 100) * 100}m`, cx, 146, 13, AMBER, 'center', 6);

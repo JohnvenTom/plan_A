@@ -201,6 +201,7 @@ export class Recorder {
       v: 1, app: 'sky-baroness',
       date: this.date,
       mslMode: this.mslMode || 'arcade',   // flight model the round was flown under
+      map: this.mapId || 'classic',        // war zone the round was flown on
       duration: Math.round(this.time * 100) / 100,
       result: this.result,
       tracks: this.tracks.map(tr => ({

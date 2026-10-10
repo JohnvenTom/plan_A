@@ -1,17 +1,21 @@
-// aasites.js — anti-air batteries on the sea along the combat-radius edge.
-// The map-boundary enforcers: while the player is outside the combat area
-// the nearest battery fires groups of five missiles (one per second) with an
-// endless motor and a seeker nothing can spoof — leaving the battle is not
-// an escape option. Batteries themselves are indestructible part of the map.
+// aasites.js — anti-air batteries: the map-boundary enforcers.
+// While the player is outside the combat area the nearest battery fires
+// groups of five missiles (one per second) with an endless motor and a
+// seeker nothing can spoof — leaving the battle is not an escape option.
+// Batteries themselves are indestructible part of the map.
 //
-// Six batteries, each randomly one of four styles: Aegis arsenal ship,
-// drilling-platform fortress, domed monster turret, coastal SAM sea-fort.
+// Circle maps (classic 24 km): six platforms ride the combat ring, random
+// style each. Edge maps (80 km continent): the whole map is the combat area
+// and EIGHT distinct fortresses — one of every style — stand on the rim,
+// guarding the world's edge. Styles: Aegis arsenal ship, drilling-platform
+// fortress, domed monster turret, coastal SAM sea-fort, twin-tower base,
+// flat-deck barge, stepped pyramid bunker, ring sea-fort.
 // Every launch is staged: the cell hatch opens, a round rises from the cell,
 // then it ignites with a flash and a smoke column.
 import * as THREE from 'three';
 import { terrainSurfaceAt, SEA_LEVEL } from '../world/terrain.js';
+import { activeMap } from '../world/maps.js';
 
-const COMBAT_RADIUS = 14000;          // keep in sync with player.js
 const FIRE_MARGIN = 800;              // leniency: batteries hold fire until
                                       // the intruder is THIS deep past the rim
 const RWR_SITE_R = 6000;              // RWR new-contact ring around a battery
@@ -215,26 +219,130 @@ function buildFort() {
   return { group: g, spinners: [{ obj: lampPivot, speed: 0.9 }], hatches, liveHatch, muzzle, round, lights, tracked: null };
 }
 
-const BUILDERS = [buildAegis, buildRig, buildDome, buildFort];
+// ---- style E: twin-tower missile base (two lattice towers, bridge launcher) ----
+function buildTwin() {
+  const g = new THREE.Group();
+  bx(g, 78, 6, 34, MAT.concrete, 0, 3, 0);          // shared base slab
+  for (const x of [-26, 26]) {
+    for (const [dx, dz] of [[-9, -9], [9, -9], [-9, 9], [9, 9]])
+      cyl(g, 0.8, 0.8, 40, 6, MAT.dark, x + dx, 23, dz);   // lattice legs
+    bx(g, 16, 3, 22, MAT.deck, x, 43, 0);           // tower caps
+    bx(g, 4, 10, 4, MAT.hull, x, 49, -6);
+    blinker(g, x, 55, -6, 0.7);
+  }
+  // launch bridge slung between the towers; three cells, centre one live
+  bx(g, 52, 4, 14, MAT.hull, 0, 40, 0);
+  const hatches = [];
+  for (let i = 0; i < 3; i++) hatches.push(bx(g, 8, 1.5, 6, MAT.deck, -16 + i * 16, 42.7, 0));
+  const liveHatch = bx(g, 3.2, 0.6, 3.2, MAT.accent, 0, 43.4, 0);
+  const dish = cyl(g, 4.5, 0.6, 1.2, 10, MAT.array, 0, 47, 8);
+  const muzzle = new THREE.Vector3(0, 44.2, 0);
+  const round = decoyRound(g, muzzle);
+  const lights = [blinker(g, -26, 45, 12), blinker(g, 26, 45, 12)];
+  return { group: g, spinners: [{ obj: dish, speed: 1.1 }], hatches, liveHatch, muzzle, round, lights, tracked: null };
+}
+
+// ---- style F: flat-deck arsenal barge (~170 m, carrier silhouette) ----
+function buildBarge() {
+  const g = new THREE.Group();
+  bx(g, 30, 10, 160, MAT.hull, 0, 3, 0);
+  const bow = new THREE.Mesh(new THREE.ConeGeometry(14, 34, 4), MAT.hull);
+  bow.rotation.x = -Math.PI / 2; bow.rotation.y = Math.PI / 4;
+  bow.position.set(0, 3, -95);
+  g.add(bow);
+  bx(g, 28, 1.4, 150, MAT.deck, 0, 8.7, 0);
+  bx(g, 7, 12, 26, MAT.hull, 9, 15, 26);            // island superstructure
+  bx(g, 5, 4, 5, MAT.array, 9, 23, 26);             // radar slab
+  bx(g, 0.6, 14, 0.6, MAT.dark, 9, 27, 20);         // mast
+  // deck launch cells in two rows; port-forward one is live
+  const hatches = [];
+  for (let i = 0; i < 6; i++)
+    hatches.push(bx(g, 5, 0.8, 5, MAT.deck, -8, 9.5, -52 + (i % 3) * 14 + Math.floor(i / 3) * 4));
+  const liveHatch = bx(g, 3, 0.6, 3, MAT.accent, -8, 10, -48);
+  const muzzle = new THREE.Vector3(-8, 10.8, -48);
+  const round = decoyRound(g, muzzle);
+  const lights = [blinker(g, -14, 10, 70), blinker(g, 9, 24, 34, 0.6)];
+  return { group: g, spinners: [], hatches, liveHatch, muzzle, round, lights, tracked: null };
+}
+
+// ---- style G: stepped pyramid bunker (~90 m base) ----
+function buildPyramid() {
+  const g = new THREE.Group();
+  for (let i = 0; i < 5; i++)
+    bx(g, 88 - i * 16, 9, 88 - i * 16, MAT.concrete, 0, 4.5 + i * 9, 0);
+  // launch cells cut into the top step; one live hatch
+  const hatches = [];
+  for (let i = 0; i < 4; i++)
+    hatches.push(bx(g, 6, 1.2, 6, MAT.deck, -10 + (i % 2) * 20, 45.6, -10 + Math.floor(i / 2) * 20));
+  const liveHatch = bx(g, 3.2, 0.6, 3.2, MAT.accent, 0, 46.2, 0);
+  // crown: rotating seeker head on a short column
+  const column = cyl(g, 2.2, 3, 8, 8, MAT.hull, 0, 50, 0);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(4.2, 10, 8), MAT.array);
+  head.position.y = 56;
+  g.add(head);
+  const muzzle = new THREE.Vector3(0, 47, 0);
+  const round = decoyRound(g, muzzle);
+  const lights = [blinker(g, -34, 42, 34), blinker(g, 34, 42, -34)];
+  return { group: g, spinners: [{ obj: head, speed: 0.7 }, { obj: column, speed: 0.7 }], hatches, liveHatch, muzzle, round, lights, tracked: null };
+}
+
+// ---- style H: ring sea-fort (circular wall, keep in the middle) ----
+function buildRing() {
+  const g = new THREE.Group();
+  const wall = new THREE.Mesh(new THREE.TorusGeometry(38, 6, 8, 28), MAT.concrete);
+  wall.rotation.x = Math.PI / 2;
+  wall.position.y = 4;
+  g.add(wall);
+  cyl(g, 30, 34, 8, 24, MAT.concrete, 0, 10, 0);    // courtyard deck
+  bx(g, 18, 14, 18, MAT.hull, 0, 21, 0);            // central keep
+  bx(g, 10, 5, 10, MAT.deck, 0, 30.5, 0);
+  for (const a of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+    bx(g, 6, 7, 12, MAT.hull, Math.sin(a) * 22, 17.5, Math.cos(a) * 22, a);
+    blinker(g, Math.sin(a) * 30, 12, Math.cos(a) * 30, 0.55);
+  }
+  const hatches = [bx(g, 6, 0.9, 6, MAT.deck, -4, 28.5, 0), bx(g, 6, 0.9, 6, MAT.deck, 4, 28.5, 0)];
+  const liveHatch = bx(g, 3.2, 0.6, 3.2, MAT.accent, 0, 33.4, 0);
+  const dish = cyl(g, 3.8, 0.5, 1, 10, MAT.array, 7, 34.5, 7);
+  const muzzle = new THREE.Vector3(0, 34, 0);
+  const round = decoyRound(g, muzzle);
+  const lights = [blinker(g, -9, 28, 9, 0.6), blinker(g, 9, 34, -9, 0.6)];
+  return { group: g, spinners: [{ obj: dish, speed: 1.3 }], hatches, liveHatch, muzzle, round, lights, tracked: null };
+}
+
+const BUILDERS = [buildAegis, buildRig, buildDome, buildFort, buildTwin, buildBarge, buildPyramid, buildRing];
 
 export class AASites {
   constructor(scene) {
+    this.scene = scene;
     this.sites = [];
     this.t = 0;
-    // six batteries evenly spaced on the combat-radius circle, each nudged
-    // along the circle until it floats on open water past the islands
-    for (let k = 0; k < 6; k++) {
-      let ang = k * Math.PI / 3;
+    this._place();
+  }
+
+  // (re)build the batteries for the ACTIVE map — called on boot and on every
+  // war-zone switch. Circle maps (classic): six naval platforms on the combat
+  // ring. Edge maps (80 km): EIGHT distinct fortresses spaced around the map
+  // rim — the whole interior is free combat airspace, the rim is the wall.
+  _place() {
+    const scene = this.scene;
+    const combat = activeMap.combat;
+    const edge = combat.type === 'edge';
+    const count = edge ? 8 : 6;
+    const ringR = edge ? combat.half - 1200 : combat.r;
+    const cx = edge ? 0 : combat.x, cz = edge ? 0 : combat.z;
+    for (let k = 0; k < count; k++) {
+      let ang = (k + 0.5) * Math.PI * 2 / count;   // offset so no platform sits dead on an axis
       for (let t = 0; t < 12; t++) {
-        const x = Math.cos(ang) * COMBAT_RADIUS, z = Math.sin(ang) * COMBAT_RADIUS;
+        const x = cx + Math.cos(ang) * ringR, z = cz + Math.sin(ang) * ringR;
         if (terrainSurfaceAt(x, z) < SEA_LEVEL + 1) break;
         ang += Math.PI / 36;   // nudge ~5° until sea
       }
-      const x = Math.cos(ang) * COMBAT_RADIUS, z = Math.sin(ang) * COMBAT_RADIUS;
+      const x = cx + Math.cos(ang) * ringR, z = cz + Math.sin(ang) * ringR;
       const y = Math.max(terrainSurfaceAt(x, z), SEA_LEVEL);
-      const parts = BUILDERS[Math.floor(Math.random() * BUILDERS.length)]();
+      // edge maps give every fortress its own silhouette; circle maps roll
+      const parts = (edge ? BUILDERS[k % BUILDERS.length] : BUILDERS[Math.floor(Math.random() * BUILDERS.length)])();
       parts.group.position.set(x, y, z);
-      parts.group.rotation.y = Math.atan2(x, z);   // face the map center
+      parts.group.rotation.y = Math.atan2(x - cx, z - cz);   // face the map centre
       scene.add(parts.group);
       const pos = new THREE.Vector3(x, y, z);
       const muzzleWorld = new THREE.Vector3();
@@ -253,13 +361,26 @@ export class AASites {
     }
   }
 
+  // war-zone switch: drop the old batteries, place fresh ones for this map
+  rebuild() {
+    for (const s of this.sites) this.scene.remove(s.parts.group);
+    this.sites = [];
+    this.t = 0;
+    this._place();
+    this.reset();
+  }
+
   update(dt, player, weapons, effects) {
     this.t += dt;
     // the battery nearest the intruder engages; already-launched rounds keep
     // chasing even if the player ducks back inside
     let near = null;
-    const rr = Math.hypot(player.position.x, player.position.z);
-    if (player.alive && rr > COMBAT_RADIUS + FIRE_MARGIN) {
+    const cb = activeMap.combat;
+    // circle maps: outside the ring. edge maps: past the map box rim
+    const outside = cb.type === 'edge'
+      ? Math.abs(player.position.x) > cb.half + FIRE_MARGIN || Math.abs(player.position.z) > cb.half + FIRE_MARGIN
+      : Math.hypot(player.position.x - cb.x, player.position.z - cb.z) > cb.r + FIRE_MARGIN;
+    if (player.alive && outside) {
       near = this.sites[0];
       for (const s of this.sites) {
         if (s.pos.distanceToSquared(player.position) < near.pos.distanceToSquared(player.position)) near = s;

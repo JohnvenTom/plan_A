@@ -8,8 +8,11 @@
 // Pure data helpers (defaultScenario / validateScenario / scenarioToCourse)
 // are exported headless-testable; the RangeEditor class owns the DOM.
 import { terrainHeightAt, SEA_LEVEL } from '../world/terrain.js';
+import { activeMap } from '../world/maps.js';
 
-const WORLD = 16000;          // map half-extent, metres
+// map half-extent, metres — follows the ACTIVE war zone (24 km classic vs
+// 80 km continental), so the tactical canvas always frames the live world
+const WORLD = () => activeMap.editorHalf;
 export const MAX_TARGETS = 8;
 const MAX_SCENARIOS = 12;
 const STORE_KEY = 'sb_custom_ranges';
@@ -24,9 +27,16 @@ function underground(x, z, alt) { return alt < groundAt(x, z) + WARN_AGL; }
 export function defaultScenario() {
   return {
     name: '新方案',
+    map: activeMap.id,   // scenarios are terrain-bound: coords assume this map
     player: { x: 0, z: 8000, alt: 900, speed: 300, heading: 0 },
     targets: [],
   };
+}
+
+// human label for a scenario's home map (legacy saves predate the tag ->
+// they were all built on the classic 24 km island chain)
+export function scenarioMapId(sc) {
+  return sc?.map === 'large' ? 'large' : 'classic';
 }
 
 // structural sanity for launch: numbers finite, caps respected. Returns a
@@ -235,6 +245,8 @@ export class RangeEditor {
   _launch() {
     const errs = validateScenario(this.sc);
     if (errs.length) { this.hint.textContent = '✕ ' + errs[0]; return; }
+    if (scenarioMapId(this.sc) !== activeMap.id)
+      this.hint.textContent = '⚠ 方案坐标来自另一张战区 — 地形不符，建议切换战区';
     this._saveScenario();          // flying it saves the layout
     this.close();
     this.onStart(JSON.parse(JSON.stringify(this.sc)));
@@ -251,7 +263,12 @@ export class RangeEditor {
     this.listSel.innerHTML = '';
     for (let i = 0; i < this._list.length; i++) {
       const o = el('option');
-      o.value = i; o.textContent = this._list[i].name;
+      const it = this._list[i];
+      o.value = i;
+      // tag scenarios that live on the other war zone so nobody loads an
+      // island-chain layout onto the continent blindly
+      o.textContent = it.name + (scenarioMapId(it.data) !== activeMap.id
+        ? (scenarioMapId(it.data) === 'large' ? ' ·80km图' : ' ·经典图') : '');
       this.listSel.appendChild(o);
     }
     const o = el('option');
@@ -275,7 +292,8 @@ export class RangeEditor {
     this.sc.name = item.name;
     this._slot = i; this._sel = null;
     this.nameInput.value = this.sc.name;
-    this.hint.textContent = `已载入「${item.name}」`;
+    this.hint.textContent = `已载入「${item.name}」`
+      + (scenarioMapId(this.sc) !== activeMap.id ? ' — ⚠ 来自另一张战区' : '');
     this._render();
   }
   _saveScenario(asCopy) {
@@ -329,6 +347,7 @@ export class RangeEditor {
       Object.assign(clean.player, sc.player || {});
       clean.targets = (sc.targets || []).slice(0, MAX_TARGETS);
       clean.name = sc.name || f.name.replace(/\.json$/i, '');
+      clean.map = scenarioMapId(sc);   // trust a known home map, else this one
       this.sc = clean;
       this._slot = null; this._sel = null;
       this.nameInput.value = clean.name;
@@ -348,8 +367,8 @@ export class RangeEditor {
     const img = ctx.createImageData(N, N);
     for (let j = 0; j < N; j++) {
       for (let i = 0; i < N; i++) {
-        const wx = (i / (N - 1)) * 2 * WORLD - WORLD;
-        const wz = (j / (N - 1)) * 2 * WORLD - WORLD;
+        const wx = (i / (N - 1)) * 2 * WORLD() - WORLD();
+        const wz = (j / (N - 1)) * 2 * WORLD() - WORLD();
         const h = terrainHeightAt(wx, wz);
         const k = (j * N + i) * 4;
         let r, g, b;
@@ -365,8 +384,8 @@ export class RangeEditor {
     return off;
   }
 
-  _w2p(v) { return (v + WORLD) / (2 * WORLD) * this.SZ; }
-  _p2w(p) { return p / this.SZ * 2 * WORLD - WORLD; }
+  _w2p(v) { return (v + WORLD()) / (2 * WORLD()) * this.SZ; }
+  _p2w(p) { return p / this.SZ * 2 * WORLD() - WORLD(); }
 
   _render() {
     const c = this.canvas.getContext('2d');
@@ -438,7 +457,7 @@ export class RangeEditor {
         });
       } else if (t.type !== 'fighter') {
         // bare target: it orbits in place — show the ring
-        const r = Math.min(1600, Math.max(800, t.speed * 4)) / (2 * WORLD) * this.SZ;
+        const r = Math.min(1600, Math.max(800, t.speed * 4)) / (2 * WORLD()) * this.SZ;
         c.strokeStyle = meta.color + '44';
         c.setLineDash([3, 4]);
         c.beginPath(); c.arc(this._w2p(t.x), this._w2p(t.z), r, 0, Math.PI * 2); c.stroke();

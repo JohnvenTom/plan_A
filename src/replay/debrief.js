@@ -9,6 +9,7 @@
 // show()/frame() additionally bind the #debrief DOM overlay.
 import * as THREE from 'three';
 import { terrainSurfaceAt, SEA_LEVEL } from '../world/terrain.js';
+import { activeMap } from '../world/maps.js';
 import { PLAYER_COLOR, ACE_COLOR, MSL_COLOR_P, MSL_COLOR_E, ENEMY_PALETTE } from './recorder.js';
 
 const COMBAT_R = 14000;
@@ -335,6 +336,10 @@ export class Debrief {
     d.sub.textContent = res.outcome === 'failed'
       ? (res.crashed ? '机体触地坠毁' : '机体损毁')
       : '任务记录 · 手动结束';
+    // replay terrain comes from the ACTIVE war zone; a foreign-map record
+    // still plays, but the ground under it won't match what was flown
+    if (rec.map && rec.map !== activeMap.id)
+      d.sub.textContent += ` — ⚠ ${rec.map === 'large' ? '超大 80km' : '经典 24km'} 图记录，请先在标题屏切换战区`;
     d.rank.textContent = res.grade || '—';
     d.rank.style.color = RANK_COLOR[res.grade] || '#c9d6e8';
     d.rank.style.textShadow = `0 0 26px ${(RANK_COLOR[res.grade] || '#c9d6e8') + '66'}`;

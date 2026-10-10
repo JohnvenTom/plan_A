@@ -3,7 +3,8 @@ import * as THREE from 'three';
 import { Input, DEFAULT_BINDINGS, ACTION_LABELS, codeLabel } from './core/input.js';
 import { Sky } from './world/sky.js';
 import { Weather } from './world/weather.js';
-import { buildTerrain, buildOcean, terrainHeightAt } from './world/terrain.js';
+import { initTerrain, buildOcean, terrainHeightAt } from './world/terrain.js';
+import { MAPS, setActiveMap, activeMap } from './world/maps.js';
 import { Player } from './units/player.js';
 import { loadF14 } from './units/f14.js';
 import { EnemyManager } from './units/enemies.js';
@@ -37,7 +38,9 @@ const camera = new THREE.PerspectiveCamera(66, innerWidth / innerHeight, 2.5, 72
 
 const sky = new Sky(scene);
 const weather = new Weather(scene, sky, renderer);
-const terrain = buildTerrain(scene);
+// war-zone selection persists across sessions (title-screen 战区 strip)
+try { setActiveMap(localStorage.getItem('sb_map')); } catch { /* fresh start */ }
+const terrain = initTerrain(scene);
 const ocean = buildOcean(scene);
 const effects = new Effects(scene);
 const player = new Player(scene, camera);
@@ -53,6 +56,7 @@ const hud = new HUD(document.getElementById('hud'));
 const recorder = new Recorder();
 const debrief = new Debrief();
 window.__hud = hud;   // debug hook
+window.__terrain = terrain;   // debug hook (clipmap streaming stats)
 window.__weapons = weapons;   // debug hook
 window.__player = player;     // debug hook
 window.__enemies = enemies;   // debug hook
@@ -153,6 +157,7 @@ function resetAll() {
   weapons.setMode(settings.mslRealistic ? 'real' : 'arcade');
   G.mslRealistic = !!settings.mslRealistic;
   recorder.mslMode = G.mslRealistic ? 'real' : 'arcade';
+  recorder.mapId = activeMap.id;   // replay terrain follows the war zone
   player.reset();
   enemies.reset();
   weapons.reset();
@@ -239,10 +244,11 @@ const TRAINING_MODES = {
 // ocean beyond it (the terrain mask sinks to pure sea out there).
 function findSeaRange(cfg) {
   const rings = (cfg?.drones || []).map(d => ({ R: d.radius, floor: d.alt }));
+  const scan = activeMap.seaScan;   // per-map open-water window
   for (const clear of [70, 40, 10]) {
-    for (let r = 12500; r <= 15000; r += 250)
+    for (let r = scan.rMin; r <= scan.rMax; r += 250)
       for (let a = 0; a < Math.PI * 2; a += Math.PI / 24) {
-        const x = Math.cos(a) * r, z = Math.sin(a) * r;
+        const x = scan.x + Math.cos(a) * r, z = scan.z + Math.sin(a) * r;
         let ok = true;
         for (const g of rings) {
           for (let t = 0; t < Math.PI * 2; t += Math.PI / 48) {
@@ -256,7 +262,7 @@ function findSeaRange(cfg) {
         if (ok && terrainHeightAt(x - 4200, z + 2600) < 5) return { x, z };
       }
   }
-  return { x: 0, z: 13500 };   // last-ditch: dead ahead into open ocean
+  return { x: scan.x, z: scan.z + scan.rMin + 500 };   // last-ditch: dead ahead into open ocean
 }
 function startTraining(mode = 'multipath', cfgOverride) {
   const cfg = cfgOverride || TRAINING_MODES[mode] || TRAINING_MODES.multipath;
@@ -424,6 +430,16 @@ function update(dt) {
 
     // out-of-area enforcement (the training range is free flight)
     if (!G.training && player.outOfAreaTime > 15) player.applyDamage(999);
+
+    // past the map edge: campaign shows the out-of-area countdown; the
+    // training range stays free flight, so there it's just a gentle nudge
+    if (G.training) {
+      const pp = player.body.pos, half = activeMap.worldHalf;
+      if ((Math.abs(pp.x) > half || Math.abs(pp.z) > half) && G.time - (G._edgeHintT || -99) > 12) {
+        G._edgeHintT = G.time;
+        hud.hint('已离开战区 — 海面无限延伸，任意方向均可返回');
+      }
+    }
 
     // FBW limiter toggle feedback (F) + spin entry on the flight record
     if (player._fbwToggled) {
@@ -624,7 +640,7 @@ function update(dt) {
   ocean.mat.uniforms.uSunDir.value.copy(sky.sunDir);
   ocean.mat.uniforms.uFogColor.value.copy(scene.fog.color);
   ocean.mat.uniforms.uFogDensity.value = scene.fog.density;
-  terrain.userData.fogTime.value = G.time;   // drifting valley-mist band
+  terrain.fogTime.value = G.time;   // drifting valley-mist band
   ocean.mat.uniforms.uStorm.value = weather.seaT ?? 0;
   ocean.mat.uniforms.uRain.value = weather.cur.rain;
   // lightning lights the cloud decks from the strike column
@@ -985,6 +1001,11 @@ const clock = new THREE.Clock();
 function frame() {
   const dt = Math.min(clock.getDelta(), 0.05);
 
+  // clipmap streaming: follows the camera (chase view ≈ player, title/debrief
+  // orbit their own centre); generous budget while not dogfighting
+  terrain.update(camera.position.x, camera.position.z,
+    (G.state === 'title' || G.state === 'debrief' || G.state === 'intro') ? 8 : 3);
+
   try {
   if (G.state === 'title') {
     // any overlay that owns the screen (settings menu, range editor) must
@@ -1294,6 +1315,29 @@ for (const ch of modeChips) {
   });
 }
 refreshModeUI();
+// war-zone strip (标题屏「战区」): swap the whole world — clipmap levels,
+// AA batteries and the parked backdrop jet rebuild for the new map. Only
+// from the title screen: mid-mission swaps would tear the session apart.
+const mapChips = document.querySelectorAll('#map-strip .mode-chip');
+const refreshMapUI = () => {
+  for (const ch of mapChips) ch.classList.toggle('sel', ch.dataset.map === activeMap.id);
+};
+const switchMap = (id) => {
+  if (G.state !== 'title' || !MAPS[id] || id === activeMap.id) return;
+  setActiveMap(id);
+  try { localStorage.setItem('sb_map', id); } catch { /* private mode */ }
+  terrain.setMap();
+  aaSites.rebuild();
+  resetAll();          // park the backdrop jet at the new spawn, clear waves
+  refreshMapUI();
+};
+for (const ch of mapChips) {
+  for (const type of ['mousedown', 'mouseup', 'click']) {
+    ch.addEventListener(type, e => e.stopPropagation());
+  }
+  ch.addEventListener('click', () => switchMap(ch.dataset.map));
+}
+refreshMapUI();
 // briefing fold: the controls grid lives behind the BRIEFING toggle (same
 // swallow-the-click dance — a leaked mousedown would start the mission)
 const briefingToggle = document.getElementById('briefing-toggle');

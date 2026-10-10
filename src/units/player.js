@@ -9,8 +9,8 @@ import { cornerSpeedKMH } from './flightmodel.js';
 import { buildJet } from './jet.js';
 import { FlightBody } from './flightmodel.js';
 import { terrainSurfaceAt, SEA_LEVEL } from '../world/terrain.js';
+import { activeMap } from '../world/maps.js';
 
-const COMBAT_RADIUS = 14000;   // meters from world center
 const AIM_DIST = 4000;         // draw/projection distance for the aim point
 const AIM_SENS = 0.0013;       // rad per mouse px
 
@@ -64,7 +64,8 @@ export class Player {
     this.outOfAreaTime = 0;
     this.hitFlash = 0;
     this.boosting = false;
-    this.body.setState(new THREE.Vector3(0, 2600, 9000), Math.PI, 240);
+    const sp = activeMap.spawn;   // campaign pose is per-war-zone
+    this.body.setState(new THREE.Vector3(sp.x, sp.y, sp.z), sp.heading, sp.speed);
     this.body.throttle = 0.65;
     this.forward(this.aimDir);
     this.model.group.visible = true;
@@ -151,7 +152,10 @@ export class Player {
 
   // meters from the combat-area rim (negative = already outside)
   get edgeDist() {
-    return COMBAT_RADIUS - Math.hypot(this.body.pos.x, this.body.pos.z);
+    const c = activeMap.combat;
+    if (c.type === 'edge')   // whole-map combat area: rim = the box edge
+      return Math.min(c.half - Math.abs(this.body.pos.x), c.half - Math.abs(this.body.pos.z));
+    return c.r - Math.hypot(this.body.pos.x - c.x, this.body.pos.z - c.z);
   }
 
   get aimPoint() {
@@ -258,8 +262,10 @@ export class Player {
     }
 
     // ---- combat area warning ----
-    const r = Math.hypot(b.pos.x, b.pos.z);
-    this.outOfArea = r > COMBAT_RADIUS;
+    const c = activeMap.combat;
+    this.outOfArea = c.type === 'edge'
+      ? (Math.abs(b.pos.x) > c.half || Math.abs(b.pos.z) > c.half)
+      : Math.hypot(b.pos.x - c.x, b.pos.z - c.z) > c.r;
     this.outOfAreaTime = this.outOfArea ? this.outOfAreaTime + dt : 0;
 
     // ---- AC-style pilot body feedback ----
