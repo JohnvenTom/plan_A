@@ -714,8 +714,7 @@ export class Weapons {
         ? true
         : (target ? origin.distanceTo(target.position ?? target.pos) <= SEEKER_ACT_R : true),
       notchT: 0,           // sustained beam/terrain time (radar only)
-      mpF: 0,              // multipath strength 0..1 (target hugging the deck)
-      mpT: 0,              // multipath lock-decay accumulator (radar only)
+      mpF: 0,              // multipath mirror flag: real=1 inside the 120 m band, arcade=graded sink
       owner: owner || null,          // launcher: immune to its own missile
       armT: 0.35,                    // fuse arming time (s) after launch
       mem: null,            // real IR ghost snapshot {pos, vel, t}
@@ -825,10 +824,17 @@ export class Weapons {
         guiding = true;
       }
       if (guiding) {
-        // radar multipath: the seeker centroid sinks toward the mirror image
+        // radar multipath: inside the 120 m band the seeker rides the MIRROR
+        // image — the aim goes straight to the reflection under the surface,
+        // which flies the round into the deck. Arcade keeps the partial sink.
         if (ms.kind === 'radar' && ms.mpF > 0) {
-          const d = ms.pos.distanceTo(_tp);
-          _tp.y -= ms.mpF * (30 + Math.min(60, 800 / Math.max(d, 1)) * 14);
+          if (ms.real) {
+            const g = Math.max(terrainSurfaceAt(_tp.x, _tp.z), SEA_LEVEL);
+            _tp.y = 2 * g - _tp.y;
+          } else {
+            const d = ms.pos.distanceTo(_tp);
+            _tp.y -= ms.mpF * (30 + Math.min(60, 800 / Math.max(d, 1)) * 14);
+          }
         }
         _r.copy(_tp).sub(ms.pos);
         const rl = _r.length();
@@ -1103,25 +1109,24 @@ export class Weapons {
         const beamLimit = chaffNear ? 0.6 : 0.3;
         const needTime = chaffNear ? 0.7 : 0.9;
         if (beam < beamLimit || masked) ms.notchT += dt; else ms.notchT = 0;
-        // multipath: a target hugging the deck (<120 m AGL) ghosts its mirror
-        // image below the surface — the seeker chases the reflection down and
-        // slowly loses the true track. Symmetric: works on the player's radar
-        // missiles against low enemies exactly as it does on theirs. Own
-        // accumulator: pure low flight must accumulate WITHOUT the notch
-        // reset wiping it, and it bleeds off when the target pops back up.
+        // multipath: a target inside 120 m AGL becomes TWO blips the seeker
+        // cannot resolve — it locks the MIRROR image below the surface and
+        // faithfully chases the reflection into the ground (贴地=硬反制雷达弹).
+        // No lock-break accumulator anymore: the track HOLDS, the aim simply
+        // rides the mirror until the round fuses on the deck. Symmetric —
+        // works on the player's radar missiles against low enemies exactly
+        // as it does on theirs. mpF is the binary mirror flag for real
+        // rounds; arcade keeps the graded partial-sink value (sealed as-is)
         const tAGL = ntp.y - Math.max(terrainSurfaceAt(ntp.x, ntp.z), SEA_LEVEL);
-        ms.mpF = tAGL < 120 ? clamp(1 - tAGL / 120, 0, 1) : 0;
-        ms.mpT = ms.mpF > 0
-          ? (ms.mpT || 0) + dt * 0.6 * ms.mpF
-          : Math.max(0, (ms.mpT || 0) - dt * 1.5);   // pop-up: seeker recovers
-        if (ms.notchT > needTime || ms.mpT > 1.0) {
+        ms.mpF = tAGL < 120 ? (ms.real ? 1 : clamp(1 - tAGL / 120, 0, 1)) : 0;
+        if (ms.notchT > needTime) {
           ms.target = null;
           // chaff SEALS the break — the cloud keeps the seeker confused for
-          // good. A pure beam/mask/multipath break only blinds the active
-          // seeker briefly: it re-opens and keeps re-scanning, so the beam
-          // must be held or the geometry escaped (不一直三九就会被复锁)
+          // good. A pure beam/mask break only blinds the active seeker
+          // briefly: it re-opens and keeps re-scanning, so the beam must be
+          // held or the geometry escaped (不一直三九就会被复锁)
           ms.blind = chaffNear ? 1e9 : 2.5;
-          ms.notchT = 0; ms.mpT = 0;
+          ms.notchT = 0;
         }
       }
       ms.prev.copy(ms.pos);
@@ -1156,6 +1161,11 @@ export class Weapons {
         if (!liveTarget(t) || t._dead || t === ms) return;
         if (t === ms.owner) return;               // launcher immunity
         if (ms.fromPlayer && t === player) return;
+        // a REAL radar round riding the multipath mirror is chasing the
+        // REFLECTION under the deck — seeker AND fuse both see the mirror,
+        // so it never fuses on the true body: it detonates on the surface
+        // instead (贴地 <120 m AGL = 硬反制, symmetric on both sides)
+        if (ms.real && ms.kind === 'radar' && ms.mpF > 0 && t === ms.target) return;
         if (!armed) return;
         const tp = t.position ?? t.pos;
         const fr = t.kind ? 12 : MISSILE_FUSE_R;  // vs a missile: tight 12 m fuse (hard intercept)
@@ -1202,8 +1212,11 @@ export class Weapons {
       fuseHit(player);
       for (const e of enemies) fuseHit(e);
       // anti-missile intercept: only the PLAYER's rounds fuse on hostile
-      // missiles (snapshot the list — intercept kills mark targets _dead)
-      if (ms.fromPlayer) for (const t of this.missiles.slice()) fuseHit(t);
+      // missiles — and ONLY on hostile ones: two of our own rounds chasing
+      // the same target converge right at it and used to fratricide inside
+      // the 12 m missile fuse, vanishing as a bogus "intercept" just short
+      // of the kill (snapshot the list — intercept kills mark targets _dead)
+      if (ms.fromPlayer) for (const t of this.missiles.slice()) { if (!t.fromPlayer) fuseHit(t); }
       const ground = Math.max(terrainSurfaceAt(ms.pos.x, ms.pos.z), SEA_LEVEL);
       if (!boom && ms.pos.y < ground) boom = true;
       if (!boom && ms.life > ms.ttl) boom = true;
