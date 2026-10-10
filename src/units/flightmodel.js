@@ -57,6 +57,7 @@ const _aim = new THREE.Vector3();
 const _dErr = new THREE.Vector3();   // aimAt: aim error ⊥ nose (world)
 const _wRight = new THREE.Vector3(); // aimAt: world-horizontal right of nose
 const _wUpD = new THREE.Vector3();   // aimAt: world-up projected ⊥ nose
+const _upLift = new THREE.Vector3(); // aimAt: body-up axis (lift-plane sign)
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 
 export class FlightBody {
@@ -205,6 +206,17 @@ export class FlightBody {
     // damping — a small step's V left un-led keeps mid-size arrivals quick
     const offVL = vErrW + this._vDotF * 0.3 * smoothstep(0.04, 0.10, Math.abs(vErrW));
 
+    // lift-plane sign: every PITCH command driven by the world-V error must
+    // be read THROUGH the lift plane. Upright (body-up ≈ world-up) it is the
+    // identity; inverted (body-up pointing at the ground) it FLIPS — an aim
+    // below the world from inverted needs a hard pull (nose rolls under),
+    // an aim above the world needs a push. tanh keeps the sign flip SMOOTH
+    // through knife-edge (no stick jump rolling through 90° bank) while
+    // staying ±1 outside a ~±20° band around it, so every upright-regime
+    // gain is untouched.
+    const liftSign = Math.tanh(this.upVec(_upLift).y * 3);
+    const pullVL = offVL * liftSign;
+
     // wings-level gate: leveling must wait until the LATERAL error is gone.
     // Without it the leveler fires on total-magnitude alone and chops the
     // turn a few degrees short — wings level, pause, then small corrections
@@ -237,7 +249,7 @@ export class FlightBody {
       // zero rudder left this branch a lateral dead zone) — the aim DOES
       // park below the nose whenever the player dips the sight.
       roll = clamp(-offHL * 5 * rW - bankErr * 1.5 * levelGate, -0.7, 0.7);
-      pitch = clamp(offVL * 1.8, -0.5, 0);
+      pitch = clamp(pullVL * 1.8, -0.5, 0);   // lift-signed: from inverted, below-BODY is a push
       yaw = clamp(-offHL * (2.0 + 16.0 * (1 - rW)) - this.beta * (2.0 - 1.5 * (1 - rW)), -0.3, 0.3);
     } else {
       // unified continuous law: near center the rudder points the nose
@@ -286,8 +298,16 @@ export class FlightBody {
       const slice = (hErrW * bankErr < 0)
         ? clamp(Math.abs(hErrW) * 1.2, 0, 0.35) * smoothstep(0.008, 0.09, Math.abs(hErrW))
           * Math.abs(bankErr) * t : 0;
-      pitch = clamp(offVL * 2.5, -0.3, 0.3) * (1 - t)
-            + clamp(Math.max(0, offVL) * 1.7, 0.08, 1) * t + slice;
+      // lift-plane sign: the pull motor only sees the world-V error THROUGH
+      // the lift plane. Inverted flight (body-up pointing at the ground)
+      // flips which sign of world-V means "pull" — a below-world aim from
+      // inverted needs a hard PULL (nose rolls under toward the aim), but
+      // the raw max(0, offVL) gated it to the 0.08 floor, so the nose
+      // barely chased the sight and the reticle drifted off-axis. At
+      // knife-edge (body-up horizontal) the factor fades through zero
+      // exactly where the slice assist takes over the turn motor.
+      pitch = clamp(pullVL * 2.5, -0.3, 0.3) * (1 - t)
+            + clamp(Math.max(0, pullVL) * 1.7, 0.08, 1) * t + slice;
       // fine-band rudder: pointing gain 18 (a 0.5° step closes in ~0.3 s at
       // ~0.6° peak sideslip). The β term is DAMPING here, not coordination —
       // at the bank law's 2.0 it over-damped and backed the rudder off,
