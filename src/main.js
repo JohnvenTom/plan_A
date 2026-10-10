@@ -496,7 +496,7 @@ function update(dt) {
       weapons.cancelWarm();
       hud.announce(weapons.mslKind === 'radar' ? 'RADAR MISSILE' : 'IR MISSILE',
         weapons.mslKind === 'radar'
-          ? (G.mslRealistic ? '雷达扫描→X锁定STT · 任意距离发射 · 30KM弹载雷达开机' : '20KM INSTANT LOCK · PRE-HEAT TO FIRE · DEFEATABLE BY CHAFF')
+          ? (G.mslRealistic ? '雷达扫描→X锁定STT · 任意距离发射 · 20KM弹载雷达开机' : '20KM INSTANT LOCK · PRE-HEAT TO FIRE · DEFEATABLE BY CHAFF')
           : 'HEAT SEEKING · PRE-HEAT TO FIRE · DEFEATABLE BY FLARE', 1.2, 'info');
     }
     if (input.pressed('cycleTarget')) weapons.headLockAttempt(player, enemies.enemies);

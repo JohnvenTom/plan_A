@@ -52,7 +52,7 @@ const BASKET_DOT = Math.cos(8 * Math.PI / 180);   // head-sight basket ±8°
 // lockable, and the hold range opens to the radar's 100 km instrumented
 // range (a locked radar round may leave the rail at any distance)
 const LOCK_RANGE = 20000;
-const SEEKER_ACT_R = 30000;                        // real AR round: own antenna goes ACTIVE at 30 km
+const SEEKER_ACT_R = 20000;                        // real AR round: own antenna goes ACTIVE at 20 km
 export { SEEKER_ACT_R };
 const SEEKER_RANGE = 5200;                        // IR seeker heat detection
 const AMMO_REGEN = { ir: 5.5, radar: 8 };         // s per missile, per pool
@@ -357,11 +357,14 @@ export class Weapons {
   // missile's range — no acquisition delay, 锁得上就是锁上了. With a lock:
   // drops it (and kills a warming radar seeker — 断锁即熄火). No passive
   // auto-lock: nothing locks without the explicit command.
-  // REALISTIC mode: the search radar does the acquiring — X rails STT onto
-  // the radar-PAINTED contact nearest the nose (the ±8° basket is meaningless
-  // to an antenna that paints the whole scan volume; what matters is that the
-  // target has been swept). Hostile rounds stay basket-lockable for the gun
-  // intercept either way.
+  // REALISTIC mode, two channels (War Thunder): (1) VISUAL — anything the
+  // sight basket holds inside 20 km locks outright, radar paint or not
+  // (把准星套过去就相当于头瞄锁定); the lock then slaves the radar into
+  // STT. (2) RADAR — with an empty basket, X rails STT onto the radar-PAINTED
+  // contact nearest the nose (the basket is meaningless to an antenna that
+  // paints the whole scan volume; what matters is that the target has been
+  // swept). Hostile rounds stay basket-lockable for the gun intercept either
+  // way.
   headLockAttempt(player, enemies) {
     if (this.manualTarget) {
       this.manualTarget = null;
@@ -371,6 +374,8 @@ export class Weapons {
       return;
     }
     if (this.mode === 'real' && this.radar) {
+      const vis = this._basketPick(player, enemies, false);   // sight-on = visual lock, 20 km
+      if (vis) { this._sttLock(vis); return; }
       const list = this._acqList(player, enemies);
       if (list.length) { this._sttLock(list[0]); return; }
       const m = this._basketPick(player, [], true);   // intercept fallback: hostile rounds only
@@ -480,7 +485,7 @@ export class Weapons {
       if (ms.fromPlayer && t === player) return;   // no self-hits
       _v2.copy(t.position).sub(ms.pos);
       const d = _v2.length();
-      // a real AR round re-scans with its full 30 km active antenna; arcade
+      // a real AR round re-scans with its full 20 km active antenna; arcade
       // rounds keep the classic 9 km radar / 2.6 km IR cones
       if (d > (radar ? (ms.real ? SEEKER_ACT_R : 9000) : 2600) || d < 60) return;
       const dot = _v2.divideScalar(d).dot(_v);

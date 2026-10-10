@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import { clamp, pad, machOf } from '../core/utils.js';
 import { cornerSpeedKMH } from '../units/flightmodel.js';
-import { MSL_WARM_TIME } from '../units/weapons.js';
+import { MSL_WARM_TIME, SEEKER_ACT_R } from '../units/weapons.js';
 import { RADAR_FADE } from '../units/radar.js';
 import { activeMap } from '../world/maps.js';
 
@@ -1089,7 +1089,7 @@ export class HUD {
       }
     }
     // realistic mode: our newest in-flight AR round — midcourse countdown to
-    // its own antenna lighting up at 30 km, then PITBULL (leave-alone time)
+    // its own antenna lighting up at SEEKER_ACT_R, then PITBULL (leave-alone)
     if (S.mslReal) {
       let m0 = null;
       for (let i = S.weapons.missiles.length - 1; i >= 0; i--) {
@@ -1099,7 +1099,7 @@ export class HUD {
       if (m0 && m0.seekerOn) {
         this.text('PITBULL · 弹载雷达开机', cx, this.h / 2 + 158, 13, CYAN, 'center', 6);
       } else if (m0 && m0.target && !(m0.blind > 0)) {
-        const dAct = Math.max(0, (m0.pos.distanceTo(m0.target.position ?? m0.target.pos) - 30000) / 1000);
+        const dAct = Math.max(0, (m0.pos.distanceTo(m0.target.position ?? m0.target.pos) - SEEKER_ACT_R) / 1000);
         this.text(`弹载雷达 ${dAct.toFixed(1)} km 后开机`, cx, this.h / 2 + 158, 13, AMBER, 'center', 6);
       }
     }
