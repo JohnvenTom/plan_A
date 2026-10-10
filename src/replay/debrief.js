@@ -10,11 +10,8 @@
 import * as THREE from 'three';
 import { terrainSurfaceAt, SEA_LEVEL } from '../world/terrain.js';
 import { activeMap } from '../world/maps.js';
-import { PLAYER_COLOR, ACE_COLOR, MSL_COLOR_P, MSL_COLOR_E, ENEMY_PALETTE } from './recorder.js';
+import { PLAYER_COLOR, ACE_COLOR, MSL_COLOR_P, MSL_COLOR_E, ENEMY_PALETTE, recordMapId } from './recorder.js';
 
-const COMBAT_R = 14000;
-const GRID_EXT = 16000;
-const GRID_STEP = 1000;
 
 // ---- event visual language (glyph + size + tint; drawn white, tinted per
 // instance) ----
@@ -148,7 +145,7 @@ export class Debrief {
     this._camLook = new THREE.Vector3();
     this._scoreShown = 0;
 
-    // ---- persistent scene shell (terrain wireframe never changes) ----
+    // ---- scene shell (terrain wireframe rebuilt on map switches) ----
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x05070f);
     this.scene.fog = new THREE.FogExp2(0x05070f, 0.000012);
@@ -184,41 +181,64 @@ export class Debrief {
   }
 
   _buildShell() {
-    // terrain wireframe over the combat area; sea clamps to the y=0 grid so
-    // the floor reads as one continuous reference plane
+    // terrain wireframe spanning the WHOLE active war zone (classic ±16 km,
+    // continent ±40 km); sea clamps to the y=0 grid so the floor reads as
+    // one continuous reference plane. Rebuilt whenever the active map
+    // changes — imported records auto-switch the world, and the shell must
+    // follow. Cell size scales with the extent so line count stays constant.
+    if (this._shellLines) {
+      this.scene.remove(this._shellLines); this._shellLines.geometry.dispose();
+      this.scene.remove(this._shellRing); this._shellRing.geometry.dispose();
+    }
+    const ext = activeMap.editorHalf;
+    const step = ext / 16;
     const pts = [];
     const hy = (x, z) => Math.max(terrainSurfaceAt(x, z), SEA_LEVEL);
-    for (let x = -GRID_EXT; x <= GRID_EXT; x += GRID_STEP) {
-      for (let z = -GRID_EXT; z < GRID_EXT; z += GRID_STEP) {
-        pts.push(x, hy(x, z), z, x, hy(x, z + GRID_STEP), z + GRID_STEP);
+    for (let x = -ext; x <= ext; x += step) {
+      for (let z = -ext; z < ext; z += step) {
+        pts.push(x, hy(x, z), z, x, hy(x, z + step), z + step);
       }
     }
-    for (let z = -GRID_EXT; z <= GRID_EXT; z += GRID_STEP) {
-      for (let x = -GRID_EXT; x < GRID_EXT; x += GRID_STEP) {
-        pts.push(x, hy(x, z), z, x + GRID_STEP, hy(x + GRID_STEP, z), z);
+    for (let z = -ext; z <= ext; z += step) {
+      for (let x = -ext; x < ext; x += step) {
+        pts.push(x, hy(x, z), z, x + step, hy(x + step, z), z);
       }
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-    const lines = new THREE.LineSegments(geo,
+    this._shellLines = new THREE.LineSegments(geo,
       new THREE.LineBasicMaterial({ color: 0x233655, transparent: true, opacity: 0.5 }));
-    lines.frustumCulled = false;
-    this.scene.add(lines);
-    // combat-area boundary ring
+    this._shellLines.frustumCulled = false;
+    this.scene.add(this._shellLines);
+    // combat-area boundary: circle maps draw their ring, whole-map (edge)
+    // zones draw the box rim — the line the 15 s countdown enforces
     const ring = [];
-    for (let i = 0; i < 128; i++) {
-      const a0 = i / 128 * Math.PI * 2, a1 = (i + 1) / 128 * Math.PI * 2;
-      ring.push(Math.cos(a0) * COMBAT_R, 0, Math.sin(a0) * COMBAT_R,
-        Math.cos(a1) * COMBAT_R, 0, Math.sin(a1) * COMBAT_R);
+    const cb = activeMap.combat;
+    if (cb.type === 'edge') {
+      const h = cb.half;
+      ring.push(-h, 0, -h, -h, 0, h);   // west side
+      ring.push(h, 0, -h, h, 0, h);     // east side
+      ring.push(-h, 0, h, h, 0, h);     // south side
+      ring.push(-h, 0, -h, h, 0, -h);   // north side
+    } else {
+      for (let i = 0; i < 128; i++) {
+        const a0 = i / 128 * Math.PI * 2, a1 = (i + 1) / 128 * Math.PI * 2;
+        ring.push(Math.cos(a0) * cb.r, 0, Math.sin(a0) * cb.r,
+                  Math.cos(a1) * cb.r, 0, Math.sin(a1) * cb.r);
+      }
+      ring.push(cb.x - cb.r, 0, 0, cb.x + cb.r, 0, 0);   // axis ticks keep the circle's scale readable
     }
     const rgeo = new THREE.BufferGeometry();
     rgeo.setAttribute('position', new THREE.Float32BufferAttribute(ring, 3));
-    const ringMesh = new THREE.LineSegments(rgeo,
+    this._shellRing = new THREE.LineSegments(rgeo,
       new THREE.LineBasicMaterial({ color: 0x8a6a3a, transparent: true, opacity: 0.4 }));
-    ringMesh.frustumCulled = false;
-    this.scene.add(ringMesh);
-    this._coneMat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.95 });
-    this._raycaster = new THREE.Raycaster();
+    this._shellRing.frustumCulled = false;
+    this.scene.add(this._shellRing);
+    this._shellMap = activeMap.id;
+    if (!this._coneMat) {
+      this._coneMat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.95 });
+      this._raycaster = new THREE.Raycaster();
+    }
   }
 
   // ---------- per-record 3D build (headless-safe: no DOM) ----------
@@ -320,6 +340,7 @@ export class Debrief {
   // ---------- lifecycle ----------
   show(rec, hooks = {}) {
     this.hooks = hooks;
+    if (this._shellMap !== activeMap.id) this._buildShell();   // map switched under us
     this.buildRecord(rec);
     this._bindDOM();
     const d = this._dom;
@@ -336,10 +357,9 @@ export class Debrief {
     d.sub.textContent = res.outcome === 'failed'
       ? (res.crashed ? '机体触地坠毁' : '机体损毁')
       : '任务记录 · 手动结束';
-    // replay terrain comes from the ACTIVE war zone; a foreign-map record
-    // still plays, but the ground under it won't match what was flown
-    if (rec.map && rec.map !== activeMap.id)
-      d.sub.textContent += ` — ⚠ ${rec.map === 'large' ? '超大 80km' : '经典 24km'} 图记录，请先在标题屏切换战区`;
+    // imports AUTO-SWITCH the world to the record's war zone (main.js), so by
+    // now the terrain always matches — label which zone this fight happened on
+    d.sub.textContent += ` · 战区 ${recordMapId(rec) === 'large' ? '超大 80km' : '经典 24km'}`;
     d.rank.textContent = res.grade || '—';
     d.rank.style.color = RANK_COLOR[res.grade] || '#c9d6e8';
     d.rank.style.textShadow = `0 0 26px ${(RANK_COLOR[res.grade] || '#c9d6e8') + '66'}`;

@@ -17,11 +17,13 @@ export const DEFAULT_BINDINGS = {
   flares: 'Mouse1',        // 干扰弹(热诱弹/箔条自动识别)默认鼠标中键
   cycleMissile: 'KeyR',    // 切换红外弹/雷达弹
   cycleTarget: 'KeyX',     // 头瞄锁定(即时) — 再按一次取消锁定
+  switchTarget: 'KeyF',    // 切换目标(F循环已探测目标,拟真=雷达接触)
   freeLook: 'KeyC',        // 长按自由视角(鼠标环视)
   camera: 'KeyV',          // 切换视角档位
   zoom: 'KeyZ',            // 放大
-  limiter: 'KeyF',         // FBW迎角限制开/关(关闭后可拉进真失速/尾旋)
-  radarRange: 'KeyM',      // 雷达量程 5/10/20 km 循环
+  limiter: 'KeyL',         // FBW迎角限制开/关(关闭后可拉进真失速/尾旋)
+  radarScan: 'KeyN',       // 雷达扫描图 宽±60°/窄±20°(拟真)
+  radarRange: 'KeyM',      // 雷达量程 5/10/20/40 km 循环
   pause: 'KeyP',
   debugWeather: 'KeyK',   // 调试:循环切换天气
 };
@@ -34,9 +36,11 @@ export const ACTION_LABELS = {
   fireGun: '机炮', fireMissile: '发射导弹/发起预热', mslWarmup: '导弹预热(开/关)',
   flares: '干扰弹(诱弹/箔条)',
   cycleMissile: '切换弹种(红外/雷达)', cycleTarget: '头瞄锁定/取消',
+  switchTarget: '切换目标(F循环)',
   freeLook: '自由视角(长按)', camera: '切换视角档位', zoom: '放大',
   limiter: 'FBW迎角限制(开/关)',
-  radarRange: '雷达量程(5/10/20km)',
+  radarScan: '雷达扫描图(宽/窄)',
+  radarRange: '雷达量程(5/10/20/40km)',
   pause: '暂停', debugWeather: '切换天气(调试)',
 };
 
@@ -136,6 +140,13 @@ export class Input {
       // profiles saved before that still carry the old default and would
       // never see the new key unless upgraded in place
       if (this.bindings.fireMissile === 'Mouse2') this.bindings.fireMissile = 'Space';
+      // migration: F was the FBW limiter until target cycling took it over —
+      // saved profiles holding the old default move to L (rebinder is free
+      // to move it again; a NULLed limiter stays null)
+      if (this.bindings.limiter === 'KeyF' && !this.bindings.switchTarget) {
+        this.bindings.limiter = 'KeyL';
+        this.save();
+      }
     } catch (_) { /* fresh profile */ }
   }
 

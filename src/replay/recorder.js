@@ -256,6 +256,12 @@ export function gradeOf(r) {
   return g;
 }
 
+// which war zone a record belongs to; files from before the map tag are
+// classic-era by construction (the only map that existed)
+export function recordMapId(rec) {
+  return rec?.map === 'large' ? 'large' : 'classic';
+}
+
 // ---- import: accept a JSON string or an already-parsed object; returns a
 // normalized record or null when the shape is not one of ours ----
 export function parseRecord(input) {

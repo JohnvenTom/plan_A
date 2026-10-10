@@ -9,13 +9,14 @@ import { Player } from './units/player.js';
 import { loadF14 } from './units/f14.js';
 import { EnemyManager } from './units/enemies.js';
 import { Weapons } from './units/weapons.js';
+import { RadarSensor } from './units/radar.js';
 import { AASites } from './units/aasites.js';
 import { Effects } from './world/effects.js';
 import { HUD } from './ui/hud.js';
 import { PostFX } from './world/postfx.js';
 import { GameAudio } from './core/audio.js';
 import { clamp, smoothstep, machOf } from './core/utils.js';
-import { Recorder, parseRecord } from './replay/recorder.js';
+import { Recorder, parseRecord, recordMapId } from './replay/recorder.js';
 import { Debrief } from './replay/debrief.js';
 import { RangeEditor, scenarioToCourse } from './ui/editor.js';
 
@@ -57,6 +58,7 @@ const recorder = new Recorder();
 const debrief = new Debrief();
 window.__hud = hud;   // debug hook
 window.__terrain = terrain;   // debug hook (clipmap streaming stats)
+window.__importRecord = showImportedRecord;   // debug hook (replay import pipeline)
 window.__weapons = weapons;   // debug hook
 window.__player = player;     // debug hook
 window.__enemies = enemies;   // debug hook
@@ -79,9 +81,14 @@ window.__postfx = postfx;   // debug hook
 const WX_EN = { '晴': 'CLEAR', '多云': 'CLOUDY', '阴': 'OVERCAST', '毛毛雨': 'DRIZZLE', '雨': 'RAIN', '雷暴': 'THUNDERSTORM', '浓雾': 'FOG', '狂风': 'GALE' };
 weather.onChange = (name) => hud.announce('WEATHER CHANGE', WX_EN[name] || name, 1.6, 'info');
 const input = new Input();
+// realistic-mode search radar: gates the whole HUD (scope paints, target
+// frames, X/F locks); the instance lives here so the HUD reads it directly
+const radar = new RadarSensor();
 weapons.playerRef = player;
+weapons.setRadar(radar);
 weapons.audio = audio;
 weapons.hud = hud;
+window.__radar = radar;   // debug hook
 
 const flashEl = document.getElementById('flash');
 const titleEl = document.getElementById('title');
@@ -103,7 +110,7 @@ const G = {
   pipZoom: 1,               // missile-cam impact zoom
   pipFov: 58,               // missile-cam live FOV (target-framing zoom)
   pipMsl: null,             // missile the PIP rides
-  radarRange: 10000,        // bottom-right radar range: 5/10/20 km (M cycles)
+  radarRange: 10000,        // bottom-right radar range: 5/10/20/40 km (M cycles)
   exposure: 1,              // smoothed auto-exposure
   introT: 0, introFrom: null,
   _mach: false,
@@ -161,6 +168,7 @@ function resetAll() {
   player.reset();
   enemies.reset();
   weapons.reset();
+  radar.reset();
   aaSites.reset();
   recorder.reset();
   hud.msgQueue.length = 0;
@@ -348,6 +356,17 @@ function enterDebrief(outcome) {
 
 // an imported record file (title-page entry) skips the live recorder entirely
 function showImportedRecord(rec) {
+  // the replay's terrain must match the war zone it was flown on: switch the
+  // SESSION to the record's map (old tag-less files are classic-era). Not
+  // persisted — the title strip reflects the live choice, sb_map keeps the
+  // player's own default for the next boot.
+  const recMap = recordMapId(rec);
+  if (recMap !== activeMap.id) {
+    setActiveMap(recMap);
+    terrain.setMap();
+    aaSites.rebuild();
+    refreshMapUI();
+  }
   G.state = 'debrief';
   titleEl.classList.add('hidden');
   goEl.classList.add('hidden');
@@ -441,7 +460,7 @@ function update(dt) {
       }
     }
 
-    // FBW limiter toggle feedback (F) + spin entry on the flight record
+    // FBW limiter toggle feedback (L) + spin entry on the flight record
     if (player._fbwToggled) {
       player._fbwToggled = false;
       const on = player.body.fbwOn;
@@ -476,11 +495,18 @@ function update(dt) {
       // an IR shot may ride the same radar designation (and re-warm applies)
       weapons.cancelWarm();
       hud.announce(weapons.mslKind === 'radar' ? 'RADAR MISSILE' : 'IR MISSILE',
-        weapons.mslKind === 'radar' ? '20KM INSTANT LOCK · PRE-HEAT TO FIRE · DEFEATABLE BY CHAFF' : 'HEAT SEEKING · PRE-HEAT TO FIRE · DEFEATABLE BY FLARE', 1.2, 'info');
+        weapons.mslKind === 'radar'
+          ? (G.mslRealistic ? '雷达扫描→X锁定STT · 任意距离发射 · 30KM弹载雷达开机' : '20KM INSTANT LOCK · PRE-HEAT TO FIRE · DEFEATABLE BY CHAFF')
+          : 'HEAT SEEKING · PRE-HEAT TO FIRE · DEFEATABLE BY FLARE', 1.2, 'info');
     }
     if (input.pressed('cycleTarget')) weapons.headLockAttempt(player, enemies.enemies);
+    if (input.pressed('switchTarget')) weapons.cycleDetectedTarget(player, enemies.enemies);
+    if (input.pressed('radarScan')) {
+      const p = radar.togglePattern();
+      if (G.mslRealistic) hud.announce('RADAR SCAN', p === 'wide' ? '宽扇区 ±60°' : '窄扇区 ±20° · 刷新更快', 1.2, 'info');
+    }
     if (input.pressed('radarRange')) {
-      const steps = [5000, 10000, 20000];
+      const steps = [5000, 10000, 20000, 40000];
       G.radarRange = steps[(steps.indexOf(G.radarRange ?? 10000) + 1) % steps.length];
       hud.announce('RADAR RANGE', `RNG ${G.radarRange / 1000} KM`, 1.2, 'info');
     }
@@ -492,6 +518,9 @@ function update(dt) {
       hud.announce('WEATHER CHANGE', `${(WX_EN[names[G._wxIdx]] || names[G._wxIdx])} (DEBUG)`, 1.2, 'info');
     }
     weapons.updateFireControl(dt, player, enemies.enemies);
+    // realistic search radar: sweep/paint the sector (STT freezes the antenna
+    // on the locked track — weapons.lockState.target is read fresh each frame)
+    if (G.mslRealistic) radar.update(dt, player, enemies.enemies, weapons.lockState.target);
 
     // world
     G._egunNow = new Set();          // who is firing guns this frame (filled by killCtx)
@@ -539,6 +568,10 @@ function update(dt) {
         G.score += 100;
         hud.announce('MISSILE INTERCEPTED', '', 2.0, 'kill', false, { mult: 1, score: 100 });
         audio.kill();
+      } else if (ev.type === 'seekerAct') {
+        // our AR round's own antenna lit up: the shot is truly leave-alone now
+        hud.announce('PITBULL', '弹载雷达开机 · 发射后不管', 1.6, 'info');
+        audio.lock();
       }
     }
     weapons.events.length = 0;
@@ -910,6 +943,7 @@ function renderHUD(pipRect) {
     player, camera,
     enemies: enemies.enemies,
     weapons,
+    radar: G.mslRealistic ? radar : null,
     kills: G.kills, score: G.score, wave: enemies.wave,
     time: G.time,
     clock, weatherName: weather.name,

@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { clamp, pad, machOf } from '../core/utils.js';
 import { cornerSpeedKMH } from '../units/flightmodel.js';
 import { MSL_WARM_TIME } from '../units/weapons.js';
+import { RADAR_FADE } from '../units/radar.js';
 import { activeMap } from '../world/maps.js';
 
 const CYAN = '#9fe8ff';
@@ -408,7 +409,7 @@ export class HUD {
     this.text(`α ${(p.alpha * 57.3).toFixed(1)}°`, xL - 34, cy + H / 2 + 72, 12,
       b.buffet > 0.5 ? RED : b.buffet > 0.1 || Math.abs(p.alpha) > 0.24 ? AMBER : CYAN_DIM);
     // FBW AoA-limiter status: amber (and blinking in the stall) when OFF —
-    // departure physics are live, F restores it
+    // departure physics are live, L restores it
     const fbwOff = !b.fbwOn && (b.buffet < 0.3 || Math.floor(S.time * 4) % 2 === 0);
     this.text(fbwOff ? 'FBW OFF · F' : 'FBW ON', xL - 34, cy + H / 2 + 92, 11,
       b.fbwOn ? CYAN_DIM : AMBER);
@@ -663,12 +664,28 @@ export class HUD {
     const atEdge = hasCd && cd < CONE_CRIT;
     const blink = Math.floor(S.time * 6) % 2 === 0;
     const edgeCol = atEdge ? (blink ? RED : 'rgba(255,90,74,0.3)') : AMBER;
+    // realistic mode: the HUD is radar-gated — an unpainted aircraft gets NO
+    // frame, no range readout and no off-screen arrow (the eyes still have
+    // the 3D model, the scope has the blip)
+    const rad = S.mslReal ? S.radar : null;
     for (const e of S.enemies) {
       if (e.dying) continue;
+      const isLock = ls.target === e;
+      if (rad && !isLock) {
+        // painted but not locked: a small diamond + range, nothing more —
+        // full brackets are reserved for the STT track
+        if (!rad.detected(e)) continue;
+        const s2 = this.proj(e.position, S.camera);
+        if (!s2.behind && s2.x > 30 && s2.x < this.w - 30 && s2.y > 30 && s2.y < this.h - 30) {
+          const d2 = e.position.distanceTo(S.player.position);
+          this._diamond(s2.x, s2.y, 6, CYAN_DIM, false);
+          this.text(`RNG ${(d2 / 1000).toFixed(1)}`, s2.x + 12, s2.y + 4, 10, CYAN_DIM, 'left', 3);
+        }
+        continue;
+      }
       const s = this.proj(e.position, S.camera);
       const dist = e.position.distanceTo(S.player.position);
       const onScreen = !s.behind && s.x > 30 && s.x < this.w - 30 && s.y > 30 && s.y < this.h - 30;
-      const isLock = ls.target === e;
       const isGuide = isLock && nearEdge;   // this frame shows the edge state
       const col = isGuide ? edgeCol : (isLock ? RED : CYAN_DIM);
       if (onScreen) {
@@ -850,22 +867,49 @@ export class HUD {
   }
 
   drawRadar(S) {
-    // range is switchable 5/10/20 km (M cycles, default 10) — everything
-    // below scales with it, and riding-you missiles pin to the rim beyond it
+    // range is switchable 5/10/20/40 km (M cycles, default 10) — everything
+    // below scales with it, and riding-you missiles pin to the rim beyond it.
+    // REALISTIC (S.radar): the scope mirrors the search radar — sector antenna,
+    // sweep-gated paints that ride at their LAST-PAINT position and fade, and
+    // a live STT spoke while single-target-tracking
     const range = S.radarRange || 10000;
     const cx = this.w - 130, cy = this.h - 130, R = 88;
     const c = this.ctx;
+    const rad = S.mslReal ? S.radar : null;
     c.save();
     // dial
     this.circle(cx, cy, R, CYAN_DIM, 1.5);
     this.circle(cx, cy, R * 0.55, 'rgba(159,232,255,0.22)', 1);
     this.line(cx - R, cy, cx + R, cy, 'rgba(159,232,255,0.18)', 1);
     this.line(cx, cy - R, cx, cy + R, 'rgba(159,232,255,0.18)', 1);
-    // sweep
-    const sw = (S.time * 1.5) % (Math.PI * 2);
-    c.strokeStyle = 'rgba(159,232,255,0.5)'; c.lineWidth = 2;
-    c.beginPath(); c.moveTo(cx, cy);
-    c.lineTo(cx + Math.cos(sw - Math.PI / 2) * R, cy + Math.sin(sw - Math.PI / 2) * R); c.stroke();
+    if (rad) {
+      // sector antenna: rim lines at ±half + the arc between them (nose-up)
+      const h = rad.half;
+      const a0 = -h - Math.PI / 2, a1 = h - Math.PI / 2;
+      this.line(cx, cy, cx + Math.cos(a0) * R, cy + Math.sin(a0) * R, 'rgba(159,232,255,0.4)', 1);
+      this.line(cx, cy, cx + Math.cos(a1) * R, cy + Math.sin(a1) * R, 'rgba(159,232,255,0.4)', 1);
+      c.strokeStyle = 'rgba(159,232,255,0.4)'; c.lineWidth = 1;
+      c.beginPath(); c.arc(cx, cy, R, a0, a1); c.stroke();
+      // sweep line + afterglow trailing the antenna's motion (dim while the
+      // radar sits in STT — the antenna has stopped searching)
+      const base = rad.stt ? 0.25 : 1;
+      const th = rad.ant - Math.PI / 2;
+      for (let i = 4; i >= 1; i--) {
+        const t2 = th - rad.dir * i * 0.1;
+        c.strokeStyle = `rgba(159,232,255,${0.32 * base * (1 - i / 5)})`; c.lineWidth = 2;
+        c.beginPath(); c.moveTo(cx, cy);
+        c.lineTo(cx + Math.cos(t2) * R, cy + Math.sin(t2) * R); c.stroke();
+      }
+      c.strokeStyle = `rgba(159,232,255,${0.75 * base})`; c.lineWidth = 2;
+      c.beginPath(); c.moveTo(cx, cy);
+      c.lineTo(cx + Math.cos(th) * R, cy + Math.sin(th) * R); c.stroke();
+    } else {
+      // sweep
+      const sw = (S.time * 1.5) % (Math.PI * 2);
+      c.strokeStyle = 'rgba(159,232,255,0.5)'; c.lineWidth = 2;
+      c.beginPath(); c.moveTo(cx, cy);
+      c.lineTo(cx + Math.cos(sw - Math.PI / 2) * R, cy + Math.sin(sw - Math.PI / 2) * R); c.stroke();
+    }
     // player heading-up rotation
     const hdg = S.player.headingDeg * Math.PI / 180;
     const cosH = Math.cos(-hdg), sinH = Math.sin(-hdg);
@@ -884,7 +928,26 @@ export class HUD {
       c.shadowBlur = 0;
       return [px, py];
     };
-    for (const e of S.enemies) if (!e.dying) blip(e.position.x, e.position.z, RED, 3.2);
+    if (rad) {
+      // radar paints only: each blip sits at its LAST-PAINT position (a radar
+      // scope does not know where the contact went) and fades until the next
+      // sweep crosses it; rim-pinned so far contacts keep their bearing
+      for (const [e, ct] of rad.contacts) {
+        if (e === rad.stt) continue;            // drawn live below
+        const age = rad.t - ct.t;
+        if (age > RADAR_FADE) continue;
+        c.globalAlpha = 1 - age / RADAR_FADE;
+        blip(ct.x, ct.z, RED, 3.2, true);
+        c.globalAlpha = 1;
+      }
+      // STT: the locked track is live, brighter, and rides a spoke to center
+      if (rad.stt && !rad.stt.dying) {
+        const pos = blip(rad.stt.position.x, rad.stt.position.z, RED, 4, true);
+        if (pos) this.line(cx, cy, pos[0], pos[1], 'rgba(255,90,74,0.75)', 1.2);
+      }
+    } else {
+      for (const e of S.enemies) if (!e.dying) blip(e.position.x, e.position.z, RED, 3.2);
+    }
     const blinkOn = Math.floor(S.time * 5) % 2 === 0;
     for (const ms of S.weapons.missiles) {
       if (ms.fromPlayer) continue;
@@ -908,6 +971,10 @@ export class HUD {
     c.beginPath(); c.moveTo(cx, cy - 7); c.lineTo(cx - 5, cy + 5); c.lineTo(cx + 5, cy + 5); c.closePath(); c.fill();
     c.shadowBlur = 0;
     this.text(`RNG ${range / 1000}km`, cx, cy + R + 16, 11, CYAN_DIM, 'center', 4);
+    if (rad) {
+      this.text((rad.pattern === 'wide' ? 'SCAN ±60°' : 'SCAN ±20°') + (rad.stt ? ' · STT' : ''),
+        cx, cy + R + 30, 11, rad.stt ? RED : CYAN_DIM, 'center', 4);
+    }
     c.restore();
   }
 
@@ -1021,6 +1088,21 @@ export class HUD {
           cx, this.h / 2 - 124, 14, AMBER, 'center', 8);
       }
     }
+    // realistic mode: our newest in-flight AR round — midcourse countdown to
+    // its own antenna lighting up at 30 km, then PITBULL (leave-alone time)
+    if (S.mslReal) {
+      let m0 = null;
+      for (let i = S.weapons.missiles.length - 1; i >= 0; i--) {
+        const ms = S.weapons.missiles[i];
+        if (ms.fromPlayer && ms.kind === 'radar' && ms.real && !ms._dead) { m0 = ms; break; }
+      }
+      if (m0 && m0.seekerOn) {
+        this.text('PITBULL · 弹载雷达开机', cx, this.h / 2 + 158, 13, CYAN, 'center', 6);
+      } else if (m0 && m0.target && !(m0.blind > 0)) {
+        const dAct = Math.max(0, (m0.pos.distanceTo(m0.target.position ?? m0.target.pos) - 30000) / 1000);
+        this.text(`弹载雷达 ${dAct.toFixed(1)} km 后开机`, cx, this.h / 2 + 158, 13, AMBER, 'center', 6);
+      }
+    }
     // enemy fire-control phases (only when nothing of ours is inbound):
     // amber while the enemy builds the 1.15 s lock, red-ish while warming
     if (!S.weapons.inboundWarning && !S.weapons.radarInbound) {
@@ -1046,7 +1128,7 @@ export class HUD {
       this._spinBar(cx, this.h / 2 - 78, b.spinRec);
     } else if (S.player.stalling && blink) {
       this.text('⚠ 失速 STALL ⚠', cx, this.h / 2 - 118, 24, RED, 'center', 14);
-      this.text(b.fbwOn ? '推杆俯冲加速改出' : '推杆俯冲加速改出 · F 恢复限器',
+        this.text(b.fbwOn ? '推杆俯冲加速改出' : '推杆俯冲加速改出 · L 恢复限器',
         cx, this.h / 2 - 96, 14, AMBER, 'center', 8);
     } else if (b.buffet > 0.15 && Math.abs(b.alpha) > 0.19) {
       this.text(`AOA ${(b.alpha * 57.3).toFixed(0)}°`, cx, this.h / 2 - 118, 15, AMBER, 'center', 6);

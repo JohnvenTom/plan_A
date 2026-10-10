@@ -18,6 +18,7 @@ import * as THREE from 'three';
 import { clamp } from '../core/utils.js';
 import { AIRCRAFT_HIT_R, MISSILE_FUSE_R } from '../core/utils.js';
 import { terrainSurfaceAt, SEA_LEVEL } from '../world/terrain.js';
+import { RADAR_SCAN_RANGE } from './radar.js';
 
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
@@ -46,8 +47,13 @@ const CONE_GRACE = 2;                               // s outside the envelope be
 const BASKET_DOT = Math.cos(8 * Math.PI / 180);   // head-sight basket ±8°
 // the head-sight lock is a RADAR lock for BOTH kinds — 20 km acquire/hold;
 // for IR missiles the radar lock is nothing but a guidance source (the
-// seeker keeps its own shorter heat-source detection range)
+// seeker keeps its own shorter heat-source detection range). REALISTIC mode
+// replaces this gate with the search radar: only SWEPT contacts are
+// lockable, and the hold range opens to the radar's 100 km instrumented
+// range (a locked radar round may leave the rail at any distance)
 const LOCK_RANGE = 20000;
+const SEEKER_ACT_R = 30000;                        // real AR round: own antenna goes ACTIVE at 30 km
+export { SEEKER_ACT_R };
 const SEEKER_RANGE = 5200;                        // IR seeker heat detection
 const AMMO_REGEN = { ir: 5.5, radar: 8 };         // s per missile, per pool
 
@@ -126,6 +132,7 @@ export class Weapons {
     this.effects = effects;
     this.audio = null;               // wired by main
     this.mode = 'arcade';            // 'arcade' | 'real' — set by main at launch
+    this.radar = null;               // realistic search radar (wired by main; gates STT)
 
     // player state — split missile pools: 6 IR light AAMs, 4 radar rounds
     this.ammo = { ir: 6, radar: 4 };
@@ -210,6 +217,9 @@ export class Weapons {
   // flight-model switch, called once per mission start (main.js); live rounds
   // carry the flag they launched with
   setMode(m) { this.mode = m === 'real' ? 'real' : 'arcade'; }
+
+  // realistic search radar (main.js owns the instance — the HUD reads it too)
+  setRadar(r) { this.radar = r; }
 
   // ---------- guns ----------
   // Rounds inherit the FULL carrier velocity VECTOR plus muzzle speed along
@@ -347,6 +357,11 @@ export class Weapons {
   // missile's range — no acquisition delay, 锁得上就是锁上了. With a lock:
   // drops it (and kills a warming radar seeker — 断锁即熄火). No passive
   // auto-lock: nothing locks without the explicit command.
+  // REALISTIC mode: the search radar does the acquiring — X rails STT onto
+  // the radar-PAINTED contact nearest the nose (the ±8° basket is meaningless
+  // to an antenna that paints the whole scan volume; what matters is that the
+  // target has been swept). Hostile rounds stay basket-lockable for the gun
+  // intercept either way.
   headLockAttempt(player, enemies) {
     if (this.manualTarget) {
       this.manualTarget = null;
@@ -355,6 +370,31 @@ export class Weapons {
       if (this.mslKind === 'radar') this.cancelWarm();
       return;
     }
+    if (this.mode === 'real' && this.radar) {
+      const list = this._acqList(player, enemies);
+      if (list.length) { this._sttLock(list[0]); return; }
+      const m = this._basketPick(player, [], true);   // intercept fallback: hostile rounds only
+      if (m) this._sttLock(m);
+      else this._hint('未扫描到目标');
+      return;
+    }
+    const best = this._basketPick(player, enemies, true);
+    if (best) this._sttLock(best);
+    // X with nothing (new) in the basket is a no-op
+  }
+
+  // shared lock-commit side effects (instant STT, lock tone)
+  _sttLock(t) {
+    this.manualTarget = t;
+    this._lockOutT = 0;
+    this.lockState = { target: t, locked: true };
+    if (this.audio) this.audio.lock();
+  }
+
+  // the classic head-sight pick: live body closest to the SIGHT CENTER inside
+  // the ±8° basket, the 120° nose cone and LOCK_RANGE. Enemy aircraft come
+  // from `enemies`; withMissiles adds hostile rounds (the intercept path).
+  _basketPick(player, enemies, withMissiles) {
     const aim = player.aimDir;
     const range = LOCK_RANGE;
     let best = null, bestDot = BASKET_DOT;
@@ -372,19 +412,51 @@ export class Weapons {
       if (!liveTarget(e)) continue;
       consider(e);
     }
-    // anti-missile intercept: hostile rounds are lockable radar targets too
-    // (X picks whatever sits closest to the sight center — plane or missile)
-    for (const m of this.missiles) {
-      if (m.fromPlayer) continue;
-      consider(m);
+    if (withMissiles) {
+      // anti-missile intercept: hostile rounds are lockable radar targets too
+      // (the pick is whatever sits closest to the sight center — plane or missile)
+      for (const m of this.missiles) {
+        if (m.fromPlayer) continue;
+        consider(m);
+      }
     }
-    if (best) {
-      this.manualTarget = best;
-      this._lockOutT = 0;
-      this.lockState = { target: best, locked: true };
-      if (this.audio) this.audio.lock();
+    return best;
+  }
+
+  // STT acquisition ordering, nose-closest first: live aircraft inside the
+  // 120° cone and range — REALISTIC restricts the list to radar-painted
+  // contacts and opens the range to the 100 km instrumented gate; ARCADE
+  // keeps every cone+LOCK_RANGE aircraft (the F-cycle is a convenience there)
+  _acqList(player, enemies) {
+    const real = this.mode === 'real' && this.radar;
+    const range = real ? RADAR_SCAN_RANGE : LOCK_RANGE;
+    const fwd = player.forward(_v2);
+    const list = [];
+    for (const e of enemies) {
+      if (!liveTarget(e)) continue;
+      if (real && !this.radar.detected(e)) continue;
+      _v.copy(e.position).sub(player.position);
+      const dist = _v.length();
+      if (dist > range || dist < 90) continue;
+      const dot = _v.divideScalar(dist).dot(fwd);
+      if (dot < ENV_DOT) continue;
+      list.push({ e, dot });
     }
-    // X with nothing (new) in the basket is a no-op
+    list.sort((a, b) => b.dot - a.dot);
+    return list.map(x => x.e);
+  }
+
+  // F key: cycle the STT through the acquisition list (radar contacts in
+  // realistic mode, nose-closest first). A no-op when the list holds only
+  // the current target — F never DROPS a lock, that's X's job
+  cycleDetectedTarget(player, enemies) {
+    const list = this._acqList(player, enemies);
+    if (!list.length) {
+      this._hint(this.mode === 'real' && this.radar ? '未扫描到目标' : '无目标');
+      return;
+    }
+    const next = list[(list.indexOf(this.manualTarget) + 1) % list.length];
+    if (next !== this.manualTarget) this._sttLock(next);
   }
 
   // 120° front cone: is this world point inside ±60° of the NOSE
@@ -408,7 +480,9 @@ export class Weapons {
       if (ms.fromPlayer && t === player) return;   // no self-hits
       _v2.copy(t.position).sub(ms.pos);
       const d = _v2.length();
-      if (d > (radar ? 9000 : 2600) || d < 60) return;
+      // a real AR round re-scans with its full 30 km active antenna; arcade
+      // rounds keep the classic 9 km radar / 2.6 km IR cones
+      if (d > (radar ? (ms.real ? SEEKER_ACT_R : 9000) : 2600) || d < 60) return;
       const dot = _v2.divideScalar(d).dot(_v);
       if (dot > bestDot) { bestDot = dot; best = t; }
     };
@@ -431,7 +505,9 @@ export class Weapons {
       this.lockConeDot = null;
       return;
     }
-    const range = LOCK_RANGE;
+    // realistic mode: the hold range opens to the radar's 100 km gate — a
+    // swept-and-locked contact STAYS locked at any range on the battlefield
+    const range = (this.mode === 'real' && this.radar) ? RADAR_SCAN_RANGE : LOCK_RANGE;
     _v.copy(t.position ?? t.pos).sub(player.position);
     const d = _v.length() || 1;
     this.lockConeDot = _v.divideScalar(d).dot(player.forward(_v2));
@@ -625,6 +701,12 @@ export class Weapons {
       mesh,
       smokeT: 0,
       blind: 0,            // decoyed/notched, flying blind
+      // real AR rounds: the own antenna stays DARK through the midcourse
+      // (inertial/datalink — immune to beam/chaff games) and goes ACTIVE at
+      // SEEKER_ACT_R to the target; everything else is seeker-on from the rail
+      seekerOn: !real || kind !== 'radar'
+        ? true
+        : (target ? origin.distanceTo(target.position ?? target.pos) <= SEEKER_ACT_R : true),
       notchT: 0,           // sustained beam/terrain time (radar only)
       mpF: 0,              // multipath strength 0..1 (target hugging the deck)
       mpT: 0,              // multipath lock-decay accumulator (radar only)
@@ -975,12 +1057,23 @@ export class Weapons {
       } else if (ms.real && (!liveTarget(ms.target) || ms.target.isFlare)) {
         ms.inCone = false;
       }
+      // real AR rounds carry their own antenna: midcourse flight is a dark
+      // inertial/datalink ride — no beam, chaff or terrain games apply — until
+      // the range closes to SEEKER_ACT_R and the seeker lights up (PITBULL);
+      // from that tick the full radar-environment logic below owns it
+      if (ms.real && ms.kind === 'radar' && ms.seekerOn === false && liveTarget(ms.target)) {
+        const actP = ms.target.position ?? ms.target.pos;
+        if (ms.pos.distanceTo(actP) <= SEEKER_ACT_R) {
+          ms.seekerOn = true;
+          if (ms.fromPlayer) this.events.push({ type: 'seekerAct', pos: ms.pos.clone() });
+        }
+      }
       // radar guidance environment: the 三九 notch and terrain masking.
       // WITHOUT chaff the beam must be near-perfect (±17°); WITH a chaff
       // cloud from the target near the engagement, the window relaxes to a
       // lazy ±33° beam ("48 机动") and locks faster — chaff enables the
       // maneuver, it never decoys the seeker by itself.
-      if (ms.kind === 'radar' && liveTarget(ms.target)) {
+      if (ms.kind === 'radar' && liveTarget(ms.target) && ms.seekerOn !== false) {
         const ntp = ms.target.pos ?? ms.target.position;   // missile targets carry .pos
         _v.copy(ntp).sub(ms.pos);
         const losLen = _v.length() || 1;

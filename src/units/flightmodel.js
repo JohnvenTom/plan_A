@@ -6,7 +6,7 @@
 // Past the stall the model goes honest: lift collapses steeply, the airframe
 // buffets, one wing drops (asymmetric stall), and a deep departure charges
 // into a recoverable steep spin — or the near-unrecoverable flat spin. A
-// togglable FBW soft-AOA limiter (player: F key) keeps limiter-on flight
+// togglable FBW soft-AOA limiter (player: L key) keeps limiter-on flight
 // inside the envelope; there is no speed floor.
 //
 // Body frame: X right, Y up, Z backward (forward = -Z), matching the jet model.
@@ -506,7 +506,7 @@ export class FlightBody {
       // SYMMETRIC in AOA. Past ~13 deg the elevator drives back toward the
       // airflow with a guaranteed authority floor. NO speed floor — with
       // the limiter on this keeps hard pulls mushy but upright; switched
-      // off (player F key) the departure physics above take over.
+      // off (player L key) the departure physics above take over.
       let pitchCmd = this.ctl.pitch;
       if (this.fbwOn) {
         if (this.alpha > 0.19 && pitchCmd > 0.15) pitchCmd = 0.15;
