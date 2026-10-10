@@ -538,7 +538,11 @@ export class EnemyManager {
       if (origin === null) {   // rim-hugging player: send them from the far corner
         origin = [-Math.sign(player.position.x || 1) * rim, -Math.sign(player.position.z || 1) * rim];
       }
-      bearing = (Math.atan2(origin[0] - player.position.x, origin[1] - player.position.z) * 180 / Math.PI + 360) % 360;
+      // heading-tape bearing: SAME compass convention as player.headingDeg
+      // (atan2(dx, −dz): 0° = −Z/north, 90° = +X/east) — the old atan2(dx, dz)
+      // mirrored north/south, so "fly the announced heading" flew you away
+      // from every raid that wasn't dead east/west
+      bearing = (Math.atan2(origin[0] - player.position.x, -(origin[1] - player.position.z)) * 180 / Math.PI + 360) % 360;
       dist = Math.hypot(origin[0] - player.position.x, origin[1] - player.position.z) / 1000;
     }
 
