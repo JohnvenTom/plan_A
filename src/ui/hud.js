@@ -910,17 +910,16 @@ export class HUD {
       this.line(cx, cy, cx + Math.cos(a1) * R, cy + Math.sin(a1) * R, 'rgba(159,232,255,0.4)', 1);
       c.strokeStyle = 'rgba(159,232,255,0.4)'; c.lineWidth = 1;
       c.beginPath(); c.arc(cx, cy, R, a0, a1); c.stroke();
-      // sweep line + afterglow trailing the antenna's motion (dim while the
-      // radar sits in STT — the antenna has stopped searching)
-      const base = rad.stt ? 0.25 : 1;
+      // sweep line + afterglow trailing the antenna's motion (TWS: the sweep
+      // NEVER stops — the locked track rides live on top of it)
       const th = rad.ant - Math.PI / 2;
       for (let i = 4; i >= 1; i--) {
         const t2 = th - rad.dir * i * 0.1;
-        c.strokeStyle = `rgba(159,232,255,${0.32 * base * (1 - i / 5)})`; c.lineWidth = 2;
+        c.strokeStyle = `rgba(159,232,255,${0.32 * (1 - i / 5)})`; c.lineWidth = 2;
         c.beginPath(); c.moveTo(cx, cy);
         c.lineTo(cx + Math.cos(t2) * R, cy + Math.sin(t2) * R); c.stroke();
       }
-      c.strokeStyle = `rgba(159,232,255,${0.75 * base})`; c.lineWidth = 2;
+      c.strokeStyle = 'rgba(159,232,255,0.75)'; c.lineWidth = 2;
       c.beginPath(); c.moveTo(cx, cy);
       c.lineTo(cx + Math.cos(th) * R, cy + Math.sin(th) * R); c.stroke();
     } else {
@@ -953,16 +952,17 @@ export class HUD {
       // scope does not know where the contact went) and fades until the next
       // sweep crosses it; rim-pinned so far contacts keep their bearing
       for (const [e, ct] of rad.contacts) {
-        if (e === rad.stt) continue;            // drawn live below
+        if (e === rad.track) continue;         // drawn live below
         const age = rad.t - ct.t;
         if (age > RADAR_FADE) continue;
         c.globalAlpha = 1 - age / RADAR_FADE;
         blip(ct.x, ct.z, RED, 3.2, true);
         c.globalAlpha = 1;
       }
-      // STT: the locked track is live, brighter, and rides a spoke to center
-      if (rad.stt && !rad.stt.dying) {
-        const pos = blip(rad.stt.position.x, rad.stt.position.z, RED, 4, true);
+      // TWS priority track: the locked contact is live, brighter, and rides
+      // a spoke to center
+      if (rad.track && !rad.track.dying) {
+        const pos = blip(rad.track.position.x, rad.track.position.z, RED, 4, true);
         if (pos) this.line(cx, cy, pos[0], pos[1], 'rgba(255,90,74,0.75)', 1.2);
       }
     } else {
@@ -992,8 +992,8 @@ export class HUD {
     c.shadowBlur = 0;
     this.text(`RNG ${range / 1000}km`, cx, cy + R + 16, 11, CYAN_DIM, 'center', 4);
     if (rad) {
-      this.text((rad.pattern === 'wide' ? 'SCAN ±60°' : 'SCAN ±20°') + (rad.stt ? ' · STT' : ''),
-        cx, cy + R + 30, 11, rad.stt ? RED : CYAN_DIM, 'center', 4);
+      this.text((rad.pattern === 'wide' ? 'SCAN ±60°' : 'SCAN ±20°') + (rad.track ? ' · TWS' : ''),
+        cx, cy + R + 30, 11, rad.track ? RED : CYAN_DIM, 'center', 4);
     }
     c.restore();
   }

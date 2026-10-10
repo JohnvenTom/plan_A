@@ -496,7 +496,7 @@ function update(dt) {
       weapons.cancelWarm();
       hud.announce(weapons.mslKind === 'radar' ? 'RADAR MISSILE' : 'IR MISSILE',
         weapons.mslKind === 'radar'
-          ? (G.mslRealistic ? '雷达扫描→X锁定STT · 任意距离发射 · 20KM弹载雷达开机' : '20KM INSTANT LOCK · PRE-HEAT TO FIRE · DEFEATABLE BY CHAFF')
+          ? (G.mslRealistic ? '雷达扫描→X锁定TWS · 任意距离发射 · 20KM弹载雷达开机' : '20KM INSTANT LOCK · PRE-HEAT TO FIRE · DEFEATABLE BY CHAFF')
           : 'HEAT SEEKING · PRE-HEAT TO FIRE · DEFEATABLE BY FLARE', 1.2, 'info');
     }
     if (input.pressed('cycleTarget')) weapons.headLockAttempt(player, enemies.enemies);
@@ -518,8 +518,8 @@ function update(dt) {
       hud.announce('WEATHER CHANGE', `${(WX_EN[names[G._wxIdx]] || names[G._wxIdx])} (DEBUG)`, 1.2, 'info');
     }
     weapons.updateFireControl(dt, player, enemies.enemies);
-    // realistic search radar: sweep/paint the sector (STT freezes the antenna
-    // on the locked track — weapons.lockState.target is read fresh each frame)
+    // realistic search radar: sweep/paint the sector (a lock rides as a live
+    // TWS priority track while the antenna keeps sweeping the rest of the raid)
     if (G.mslRealistic) radar.update(dt, player, enemies.enemies, weapons.lockState.target);
 
     // world

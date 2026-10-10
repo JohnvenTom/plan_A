@@ -133,7 +133,7 @@ export class Weapons {
     this.effects = effects;
     this.audio = null;               // wired by main
     this.mode = 'arcade';            // 'arcade' | 'real' — set by main at launch
-    this.radar = null;               // realistic search radar (wired by main; gates STT)
+    this.radar = null;               // realistic search radar (wired by main; gates locks)
 
     // player state — split missile pools: 6 IR light AAMs, 4 radar rounds
     this.ammo = { ir: 6, radar: 4 };
@@ -361,7 +361,7 @@ export class Weapons {
   // REALISTIC mode, two channels (War Thunder): (1) VISUAL — anything the
   // sight basket holds inside 20 km locks outright, radar paint or not
   // (把准星套过去就相当于头瞄锁定); the lock then slaves the radar into
-  // STT. (2) RADAR — with an empty basket, X rails STT onto the radar-PAINTED
+  // a live TWS priority track. (2) RADAR — with an empty basket, X rails onto the radar-PAINTED
   // contact nearest the nose (the basket is meaningless to an antenna that
   // paints the whole scan volume; what matters is that the target has been
   // swept). Hostile rounds stay basket-lockable for the gun intercept either
@@ -376,21 +376,21 @@ export class Weapons {
     }
     if (this.mode === 'real' && this.radar) {
       const vis = this._basketPick(player, enemies, false);   // sight-on = visual lock, 20 km
-      if (vis) { this._sttLock(vis); return; }
+      if (vis) { this._commitLock(vis); return; }
       const list = this._acqList(player, enemies);
-      if (list.length) { this._sttLock(list[0]); return; }
+      if (list.length) { this._commitLock(list[0]); return; }
       const m = this._basketPick(player, [], true);   // intercept fallback: hostile rounds only
-      if (m) this._sttLock(m);
+      if (m) this._commitLock(m);
       else this._hint('未扫描到目标');
       return;
     }
     const best = this._basketPick(player, enemies, true);
-    if (best) this._sttLock(best);
+    if (best) this._commitLock(best);
     // X with nothing (new) in the basket is a no-op
   }
 
-  // shared lock-commit side effects (instant STT, lock tone)
-  _sttLock(t) {
+  // shared lock-commit side effects (instant track, lock tone)
+  _commitLock(t) {
     this.manualTarget = t;
     this._lockOutT = 0;
     this.lockState = { target: t, locked: true };
@@ -429,7 +429,7 @@ export class Weapons {
     return best;
   }
 
-  // STT acquisition ordering, nose-closest first: live aircraft inside the
+  // track acquisition ordering, nose-closest first: live aircraft inside the
   // 120° cone and range — REALISTIC restricts the list to radar-painted
   // contacts and opens the range to the 100 km instrumented gate; ARCADE
   // keeps every cone+LOCK_RANGE aircraft (the F-cycle is a convenience there)
@@ -452,7 +452,7 @@ export class Weapons {
     return list.map(x => x.e);
   }
 
-  // F key: cycle the STT through the acquisition list (radar contacts in
+  // F key: cycle the lock through the acquisition list (radar contacts in
   // realistic mode, nose-closest first). A no-op when the list holds only
   // the current target — F never DROPS a lock, that's X's job
   cycleDetectedTarget(player, enemies) {
@@ -462,7 +462,7 @@ export class Weapons {
       return;
     }
     const next = list[(list.indexOf(this.manualTarget) + 1) % list.length];
-    if (next !== this.manualTarget) this._sttLock(next);
+    if (next !== this.manualTarget) this._commitLock(next);
   }
 
   // 120° front cone: is this world point inside ±60° of the NOSE
