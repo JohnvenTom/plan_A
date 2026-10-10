@@ -62,8 +62,9 @@ const AMMO_REGEN = { ir: 5.5, radar: 8 };         // s per missile, per pool
 // in the SAME atmosphere the jets fly), rated G with the dynamic-pressure
 // reference speed (full authority at vRef, ~25% at half speed, floored),
 // rail-rigid dead time, hard ttl. Sea-level figures: an IR round launched hot
-// (M1.5 carrier) burns out near 1000 m/s; the radar round sustains ~900 m/s at
-// sea level and ~1200 m/s up high; the AA wall round equilibrates at ~1369.
+// (M1.5 carrier) burns out near 1000 m/s; the radar round (12.2 s motor)
+// burns out ~1120 m/s low / ~1360 m/s up high and coasts to a 43-61 km
+// kinematic range at the 90 s ttl; the AA wall round equilibrates at ~1369.
 const PN_N = 4;                                   // proportional navigation constant
 const G0 = 9.81;
 const CONE_DOT = Math.cos(35 * Math.PI / 180);    // IR seeker cone (+/-35 deg)
@@ -72,7 +73,7 @@ const RESCAN_T = 0.5;                             // searching re-open period
 const LOW_SPD = 140;                              // burnt-out brick threshold
 const REAL_BODIES = {
   ir:    { boost: 240, boostT: 2.4, sus: 0,   susT: 0,  k: 7.9e-5, gRate: 40, vRef: 300, gFloor: 0.12, rigid: 0.3, ttl: 15 },
-  radar: { boost: 220, boostT: 3.2, sus: 81,  susT: 6,  k: 1.0e-4, gRate: 30, vRef: 350, gFloor: 0.12, rigid: 0.6, ttl: 30 },
+  radar: { boost: 220, boostT: 3.2, sus: 81,  susT: 9,  k: 6.5e-5, gRate: 30, vRef: 350, gFloor: 0.12, rigid: 0.6, ttl: 90 },
   aa:    { boost: 320, boostT: 4.0, sus: 150, susT: 12, k: 8.0e-5, gRate: 70, vRef: 300, gFloor: 0.20, rigid: 0.5, ttl: 40 },
 };
 // enemy rounds fly the same bodies ~50 m/s slower at burnout and 15% less G

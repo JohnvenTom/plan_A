@@ -664,22 +664,42 @@ export class HUD {
     const atEdge = hasCd && cd < CONE_CRIT;
     const blink = Math.floor(S.time * 6) % 2 === 0;
     const edgeCol = atEdge ? (blink ? RED : 'rgba(255,90,74,0.3)') : AMBER;
-    // realistic mode: the HUD is radar-gated — an unpainted aircraft gets NO
-    // frame, no range readout and no off-screen arrow (the eyes still have
-    // the 3D model, the scope has the blip)
+    // realistic mode: the HUD is radar-gated — an aircraft neither painted
+    // nor inside the 3 km eyeball bubble (1.7 km dead-six) gets NO frame, no
+    // range readout and no off-screen arrow; the eyes still have the 3D model
     const rad = S.mslReal ? S.radar : null;
     for (const e of S.enemies) {
       if (e.dying) continue;
       const isLock = ls.target === e;
       if (rad && !isLock) {
-        // painted but not locked: a small diamond + range, nothing more —
-        // full brackets are reserved for the STT track
-        if (!rad.detected(e)) continue;
+        // painted by radar OR inside the eyeball bubble (3 km, tail cone
+        // 1.7 km — radar.detected vs rad.visualDetected): a small diamond +
+        // range on screen, a dim edge arrow off screen; full brackets are
+        // reserved for the STT track
+        if (!rad.detected(e) && !rad.visualDetected(e)) continue;
         const s2 = this.proj(e.position, S.camera);
         if (!s2.behind && s2.x > 30 && s2.x < this.w - 30 && s2.y > 30 && s2.y < this.h - 30) {
           const d2 = e.position.distanceTo(S.player.position);
           this._diamond(s2.x, s2.y, 6, CYAN_DIM, false);
           this.text(`RNG ${(d2 / 1000).toFixed(1)}`, s2.x + 12, s2.y + 4, 10, CYAN_DIM, 'left', 3);
+        } else {
+          // off-screen: dim edge arrow keeps the bearing of a contact the
+          // radar has painted or the eyes are holding
+          const dx = s2.behind ? this.w / 2 - s2.x : s2.x - this.w / 2;
+          const dy = s2.behind ? this.h / 2 - s2.y : s2.y - this.h / 2;
+          const ang = Math.atan2(dy, dx);
+          const rx = this.w / 2 - 70, ry = this.h / 2 - 90;
+          const t = 1 / Math.max(Math.abs(Math.cos(ang)) / rx, Math.abs(Math.sin(ang)) / ry);
+          const ax = this.w / 2 + Math.cos(ang) * t, ay = this.h / 2 + Math.sin(ang) * t;
+          const c2 = this.ctx;
+          c2.save();
+          c2.translate(ax, ay);
+          c2.rotate(ang);
+          c2.fillStyle = CYAN_DIM;
+          c2.shadowColor = c2.fillStyle; c2.shadowBlur = 4;
+          c2.beginPath(); c2.moveTo(9, 0); c2.lineTo(-5, -5.5); c2.lineTo(-5, 5.5); c2.closePath(); c2.fill();
+          c2.restore();
+          c2.shadowBlur = 0;
         }
         continue;
       }
