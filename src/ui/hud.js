@@ -1010,7 +1010,8 @@ export class HUD {
     const cosH = Math.cos(-hdg), sinH = Math.sin(-hdg);
     // threat bearing → canvas angle in the nose-up scope frame
     const threatAngle = (t) => {
-      const dx = t.position.x - S.player.position.x, dz = t.position.z - S.player.position.z;
+      const p = t.position ?? t.pos;   // enemies use .position, missiles .pos
+      const dx = p.x - S.player.position.x, dz = p.z - S.player.position.z;
       const rx = dx * cosH - dz * sinH, rz = dx * sinH + dz * cosH;
       return Math.atan2(rx, -rz) - Math.PI / 2;
     };
