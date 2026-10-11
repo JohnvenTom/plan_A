@@ -18,7 +18,6 @@ import * as THREE from 'three';
 import { clamp } from '../core/utils.js';
 import { AIRCRAFT_HIT_R, MISSILE_FUSE_R } from '../core/utils.js';
 import { terrainSurfaceAt, SEA_LEVEL } from '../world/terrain.js';
-import { RADAR_SCAN_RANGE } from './radar.js';
 
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
@@ -431,11 +430,11 @@ export class Weapons {
 
   // track acquisition ordering, nose-closest first: live aircraft inside the
   // 120° cone and range — REALISTIC restricts the list to radar-painted
-  // contacts and opens the range to the 100 km instrumented gate; ARCADE
+  // contacts and opens the range to the radar's search-distance gate; ARCADE
   // keeps every cone+LOCK_RANGE aircraft (the F-cycle is a convenience there)
   _acqList(player, enemies) {
     const real = this.mode === 'real' && this.radar;
-    const range = real ? RADAR_SCAN_RANGE : LOCK_RANGE;
+    const range = real ? this.radar.scanRange : LOCK_RANGE;
     const fwd = player.forward(_v2);
     const list = [];
     for (const e of enemies) {
@@ -511,9 +510,9 @@ export class Weapons {
       this.lockConeDot = null;
       return;
     }
-    // realistic mode: the hold range opens to the radar's 100 km gate — a
-    // swept-and-locked contact STAYS locked at any range on the battlefield
-    const range = (this.mode === 'real' && this.radar) ? RADAR_SCAN_RANGE : LOCK_RANGE;
+    // realistic mode: the hold range IS the radar's search distance — a
+    // contact that opens beyond it drops the lock (re-enter to re-lock)
+    const range = (this.mode === 'real' && this.radar) ? this.radar.scanRange : LOCK_RANGE;
     _v.copy(t.position ?? t.pos).sub(player.position);
     const d = _v.length() || 1;
     this.lockConeDot = _v.divideScalar(d).dot(player.forward(_v2));

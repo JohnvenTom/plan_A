@@ -9,7 +9,7 @@ import { Player } from './units/player.js';
 import { loadF14 } from './units/f14.js';
 import { EnemyManager } from './units/enemies.js';
 import { Weapons } from './units/weapons.js';
-import { RadarSensor } from './units/radar.js';
+import { RadarSensor, RADAR_SEARCH_STEPS } from './units/radar.js';
 import { AASites } from './units/aasites.js';
 import { Effects } from './world/effects.js';
 import { HUD } from './ui/hud.js';
@@ -110,7 +110,7 @@ const G = {
   pipZoom: 1,               // missile-cam impact zoom
   pipFov: 58,               // missile-cam live FOV (target-framing zoom)
   pipMsl: null,             // missile the PIP rides
-  radarRange: 10000,        // bottom-right radar range: 5/10/20/40 km (M cycles)
+  radarRange: 50000,        // scope zoom + search gate: 20/50/100 km (M cycles)
   exposure: 1,              // smoothed auto-exposure
   introT: 0, introFrom: null,
   _mach: false,
@@ -176,6 +176,8 @@ function resetAll() {
   enemies.reset();
   weapons.reset();
   radar.reset();
+  // one persisted value drives both the scope zoom and the search gate (M cycles)
+  G.radarRange = radar.scanRange = RADAR_SEARCH_STEPS.includes(settings.radarSearchRange) ? settings.radarSearchRange : RADAR_SEARCH_STEPS[1];
   aaSites.reset();
   recorder.reset();
   hud.msgQueue.length = 0;
@@ -513,8 +515,11 @@ function update(dt) {
       if (G.mslRealistic) hud.announce('RADAR SCAN', p === 'wide' ? '宽扇区 ±60°' : '窄扇区 ±20° · 刷新更快', 1.2, 'info');
     }
     if (input.pressed('radarRange')) {
-      const steps = [5000, 10000, 20000, 40000];
-      G.radarRange = steps[(steps.indexOf(G.radarRange ?? 10000) + 1) % steps.length];
+      // one value, two jobs: scope zoom AND the realistic-mode detection/lock gate
+      radar.scanRange = RADAR_SEARCH_STEPS[(RADAR_SEARCH_STEPS.indexOf(radar.scanRange) + 1) % RADAR_SEARCH_STEPS.length];
+      G.radarRange = radar.scanRange;
+      settings.radarSearchRange = radar.scanRange;   // key cycling persists, mirrors the menu
+      saveSettings();
       hud.announce('RADAR RANGE', `RNG ${G.radarRange / 1000} KM`, 1.2, 'info');
     }
     if (input.pressed('debugWeather')) {
@@ -1205,17 +1210,19 @@ const bindRows = document.getElementById('bind-rows');
 
 // ---------- gameplay options (settings section of the same panel) ----------
 // toggle: { key, label, on, off }  |  slider: { key, label, kind: 'slider', min, max, step, fmt }
+// |  cycle: { key, label, kind: 'cycle', choices, fmt } — click steps through choices
 const OPTIONS = [
   { key: 'flightPathMark', label: '航迹标记 — 运动方向指示线(速度矢量圈)', on: '开启', off: '关闭' },
   { key: 'nearMissWhip', label: '近失弹甩镜 — 导弹掠过时镜头甩动+黑边', on: '开启', off: '关闭' },
   { key: 'blastFlare', label: '变形光条 — 爆炸与己方导弹的横向光晕', on: '开启', off: '关闭' },
   { key: 'blastGhosts', label: '爆炸鬼像链 — 大爆炸的镜头彩圈反射', on: '开启', off: '关闭' },
+  { key: 'radarSearchRange', label: '雷达量程/搜索距离 — 显示缩放+拟真探测锁定门限(M键循环)', kind: 'cycle', choices: RADAR_SEARCH_STEPS, fmt: v => `${v / 1000}km` },
   { key: 'volMaster', label: '总音量', kind: 'slider', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
   { key: 'volSfx', label: '音效 — 武器/爆炸/警报', kind: 'slider', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
   { key: 'volRwr', label: 'RWR 告警音量', kind: 'slider', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
   { key: 'volEngine', label: '引擎与风声', kind: 'slider', min: 0, max: 1, step: 0.05, fmt: v => Math.round(v * 100) + '%' },
 ];
-const settings = { flightPathMark: false, nearMissWhip: true, blastFlare: true, blastGhosts: true, volMaster: 1, volSfx: 1, volRwr: 0.7, volEngine: 1, mslRealistic: false };      // defaults
+const settings = { flightPathMark: false, nearMissWhip: true, blastFlare: true, blastGhosts: true, volMaster: 1, volSfx: 1, volRwr: 0.7, volEngine: 1, mslRealistic: false, radarSearchRange: 50000 };      // defaults
 try { Object.assign(settings, JSON.parse(localStorage.getItem('sb_opts') || '{}')); } catch { /* fresh start */ }
 const saveSettings = () => { try { localStorage.setItem('sb_opts', JSON.stringify(settings)); } catch { /* private mode */ } };
 window.__settings = settings;                 // debug hook
@@ -1259,6 +1266,17 @@ function renderOptions() {
       };
       row.appendChild(sld);
       row.appendChild(val);
+    } else if (o.kind === 'cycle') {
+      const tog = document.createElement('span');
+      tog.className = 'tog';
+      tog.textContent = o.fmt(settings[o.key]);
+      tog.onclick = () => {
+        settings[o.key] = o.choices[(o.choices.indexOf(settings[o.key]) + 1) % o.choices.length];
+        if (o.key === 'radarSearchRange') G.radarRange = radar.scanRange = settings[o.key];   // live-apply mid-mission (zoom + gate)
+        saveSettings();
+        renderOptions();
+      };
+      row.appendChild(tog);
     } else {
       const tog = document.createElement('span');
       tog.className = 'tog' + (settings[o.key] ? '' : ' off');

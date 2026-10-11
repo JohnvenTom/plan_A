@@ -12,7 +12,7 @@
 // (±45° tail cone) the airframe blocks the view and the bubble shrinks.
 import * as THREE from 'three';
 
-export const RADAR_SCAN_RANGE = 100000;   // instrumented detection: 100 km, whole battlefield
+export const RADAR_SEARCH_STEPS = [20000, 50000, 100000];   // search distance (1 cycles, menu persists)
 export const RADAR_FADE = 5;              // s a paint survives without a re-sweep (must exceed
                                           // the 4 s wide-pattern turnaround so rim paints never blink)
 export const VIS_R = 3000;                // eyeball bubble: see-able without any radar
@@ -37,6 +37,7 @@ export class RadarSensor {
 
   reset() {
     this.pattern = 'wide';                // 'wide' | 'narrow' (N toggles)
+    this.scanRange = RADAR_SEARCH_STEPS[1];   // detection gate: main.js applies the persisted setting on mission start
     this.t = 0;                           // sensor clock (contact staleness)
     this.ant = -PATTERNS.wide.half;       // antenna bearing: 0 = nose, + = starboard
     this.dir = 1;                         // ping-pong direction
@@ -108,7 +109,7 @@ export class RadarSensor {
     };
     for (const e of enemies) {
       if (!live(e)) continue;
-      if (e.position.distanceTo(pp) > RADAR_SCAN_RANGE) continue;
+      if (e.position.distanceTo(pp) > this.scanRange) continue;
       const b = this.bearing(player, e.position);
       if (Math.abs(b) > h + RIM_SLOP) continue;
       if ((b >= lo && b <= hi)
